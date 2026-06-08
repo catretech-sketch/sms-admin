@@ -122,19 +122,47 @@ function SummaryCard({ group, tone, active, onClick }: {
 /* ============================================================
    Roster (Students / Teachers / Staff) — search + status filter
    ============================================================ */
+function clsParts(cls: string): [string, string] {
+  const i = cls.lastIndexOf('-')
+  return i < 0 ? [cls, ''] : [cls.slice(0, i), cls.slice(i + 1)]
+}
+
 function Roster({ group, editable }: { group: Person['group']; editable: boolean }) {
   const toast = useToast()
+  const isStudents = group === 'students'
   const [q, setQ] = useState('')
   const [filter, setFilter] = useState<'all' | AttStatus>('all')
+  const [grade, setGrade] = useState('all')
+  const [section, setSection] = useState('all')
 
   const all = useMemo(() => buildPeople(group), [group])
 
-  /* search first, so the status counts reflect the visible set */
+  /* class-wise / section-wise scope (students only; p.sub is the class) */
+  const scoped = useMemo(() => {
+    if (!isStudents) return all
+    return all.filter((p) => {
+      const [g, sec] = clsParts(p.sub)
+      if (grade !== 'all' && g !== grade) return false
+      if (section !== 'all' && sec !== section) return false
+      return true
+    })
+  }, [all, isStudents, grade, section])
+
+  /* search next, so the status counts reflect the visible set */
   const searched = useMemo(() => {
     const term = q.trim().toLowerCase()
-    if (!term) return all
-    return all.filter((p) => p.name.toLowerCase().includes(term) || p.id.toLowerCase().includes(term))
-  }, [all, q])
+    if (!term) return scoped
+    return scoped.filter((p) => p.name.toLowerCase().includes(term) || p.id.toLowerCase().includes(term))
+  }, [scoped, q])
+
+  const gradeOpts = useMemo(() => {
+    const present = [...new Set(students.map((s) => clsParts(s.cls)[0]))].sort((a, b) => grades.indexOf(a) - grades.indexOf(b))
+    return [{ value: 'all', label: 'All grades' }, ...present.map((g) => ({ value: g, label: `Grade ${g}` }))]
+  }, [])
+  const sectionOpts = useMemo(() => {
+    const present = [...new Set(students.map((s) => clsParts(s.cls)[1]))].filter(Boolean).sort((a, b) => sections.indexOf(a) - sections.indexOf(b))
+    return [{ value: 'all', label: 'All sections' }, ...present.map((s) => ({ value: s, label: `Section ${s}` }))]
+  }, [])
 
   const counts = useMemo(() => {
     const c = { present: 0, late: 0, absent: 0 }
@@ -184,11 +212,15 @@ function Roster({ group, editable }: { group: Person['group']; editable: boolean
     <Card pad={false}>
       <CardHead
         title={`${GROUP_NAME[group]} roster`}
-        sub={`${presentTotal} of ${all.length} present today`}
+        sub={isStudents
+          ? `${grade === 'all' ? 'All grades' : `Grade ${grade}`}${section === 'all' ? '' : ` · Sec ${section}`} · ${presentTotal} of ${scoped.length} present`
+          : `${presentTotal} of ${scoped.length} present today`}
         icon={GROUP_ICON[group]}
         action={
-          <div className="row ai-center gap8">
-            <Search value={q} onChange={setQ} placeholder={`Find ${group === 'students' ? 'student' : group === 'teachers' ? 'teacher' : 'staff'}…`} style={{ width: 220 }} />
+          <div className="row ai-center gap8 wrap">
+            {isStudents && <Select options={gradeOpts} value={grade} onChange={(e) => setGrade(e.target.value)} />}
+            {isStudents && <Select options={sectionOpts} value={section} onChange={(e) => setSection(e.target.value)} />}
+            <Search value={q} onChange={setQ} placeholder={`Find ${group === 'students' ? 'student' : group === 'teachers' ? 'teacher' : 'staff'}…`} style={{ width: 200 }} />
             <Select options={filterOpts} value={filter} onChange={(e) => setFilter(e.target.value as 'all' | AttStatus)} />
           </div>
         }
@@ -198,13 +230,13 @@ function Roster({ group, editable }: { group: Person['group']; editable: boolean
         rows={rows}
         pageSize={8}
         rowKey={(r) => r.id}
-        initialSort={{ key: 'name', dir: 'asc' }}
-        empty={<Empty icon="search" title="No matches" body="No one matches your search or status filter. Try clearing the filter." />}
+        initialSort={{ key: isStudents ? 'sub' : 'name', dir: 'asc' }}
+        empty={<Empty icon="search" title="No matches" body="No one matches your search, class/section or status filter." />}
       />
       <div className="row ai-center jc-between" style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
         <span className="t-sm muted">Marking is live — changes save automatically.</span>
         <Btn variant="primary" icon="check" disabled={!editable}
-          onClick={() => toast.success('Attendance submitted', `${GROUP_NAME[group]} · ${presentTotal}/${all.length} present`)}>
+          onClick={() => toast.success('Attendance submitted', `${GROUP_NAME[group]} · ${presentTotal}/${scoped.length} present`)}>
           Submit attendance
         </Btn>
       </div>
