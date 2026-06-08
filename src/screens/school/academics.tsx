@@ -13,7 +13,7 @@ import {
 } from '@/components/ui'
 import { teachers, subjects, grades, sections } from '@/data/mockDb'
 import type { Teacher } from '@/types'
-import { cellKey, clashingClass, pickTeacher, conflictsFor, teacherLoads, clashingTeachers, type Cell, type Grid } from '@/lib/timetable'
+import { cellKey, clashingClass, clashingClasses, pickTeacher, conflictsFor, teacherLoads, clashingTeachers, type Cell, type Grid } from '@/lib/timetable'
 
 /* ---------- shared helpers / constants ---------- */
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']
@@ -184,6 +184,8 @@ function TimetableTab({ editable }: { editable: boolean }) {
   /* per-cell teacher override (works on auto-generated routines too) */
   const [editCell, setEditCell] = useState<{ key: string; d: number; p: number; subject: string; current: string } | null>(null)
   const [editTid, setEditTid] = useState('')
+  /* clash confirmation popup when a manual placement would double-book a teacher */
+  const [clashPrompt, setClashPrompt] = useState<{ key: string; d: number; p: number; subject: string; tid: string; others: string[] } | null>(null)
 
   const g = grids[cls] ?? {}
   const conflicts = useMemo(() => conflictsFor(grids, cls), [grids, cls])
@@ -209,10 +211,15 @@ function TimetableTab({ editable }: { editable: boolean }) {
     const team = subjTeachers[brush] ?? []
     const c = placeCounts[brush] ?? 0
     const tid = team.length ? team[c % team.length] : ''
-    const clashWith = tid ? clashingClass(grids, tid, d, p, cls) : null
-    setGrids((prev) => ({ ...prev, [cls]: { ...(prev[cls] ?? {}), [key]: { subject: brush, teacherId: tid } } }))
-    setPlaceCounts((prev) => ({ ...prev, [brush]: (prev[brush] ?? 0) + 1 }))
-    if (clashWith) toast.danger('Teacher clash', `${teacherName(tid)} is also teaching ${clashWith} on ${DAYS[d]} P${p + 1}.`)
+    const others = tid ? clashingClasses(grids, tid, d, p, cls) : []
+    if (others.length) { setClashPrompt({ key, d, p, subject: brush, tid, others }); return }
+    doPlace(key, brush, tid)
+  }
+
+  /* commit a placement + advance the subject's teacher rotation */
+  const doPlace = (key: string, subject: string, tid: string) => {
+    setGrids((prev) => ({ ...prev, [cls]: { ...(prev[cls] ?? {}), [key]: { subject, teacherId: tid } } }))
+    setPlaceCounts((prev) => ({ ...prev, [subject]: (prev[subject] ?? 0) + 1 }))
   }
 
   const applyTeacher = () => {
@@ -471,6 +478,31 @@ function TimetableTab({ editable }: { editable: boolean }) {
                 </button>
               )
             })}
+          </div>
+        )}
+      </Modal>
+
+      {/* overlap popup — names the class(es) the teacher is already assigned to */}
+      <Modal open={!!clashPrompt} onClose={() => setClashPrompt(null)} size="sm" icon="alert"
+        title="Teacher already assigned"
+        sub={clashPrompt ? `${DAYS[clashPrompt.d]} P${clashPrompt.p + 1} · ${cls}` : ''}
+        footer={
+          <div className="row gap8 jc-end">
+            <Btn variant="ghost" onClick={() => setClashPrompt(null)}>Cancel</Btn>
+            <Btn variant="danger" icon="alert" onClick={() => { if (clashPrompt) doPlace(clashPrompt.key, clashPrompt.subject, clashPrompt.tid); setClashPrompt(null) }}>Place anyway</Btn>
+          </div>
+        }>
+        {clashPrompt && (
+          <div className="col gap12">
+            <div className="sm-card pad row ai-center gap10" style={{ background: 'var(--danger-bg)' }}>
+              <Icon name="alert" size={18} style={{ color: 'var(--danger)', flex: '0 0 auto' }} />
+              <div className="t-sm">
+                <span className="fw7">{teacherName(clashPrompt.tid)}</span> is already teaching{' '}
+                <span className="fw7">{clashPrompt.others.join(', ')}</span> on{' '}
+                <span className="fw6">{DAYS[clashPrompt.d]} P{clashPrompt.p + 1}</span>.
+              </div>
+            </div>
+            <div className="t-sm muted">Placing {clashPrompt.subject} here will double-book this teacher at the same time. Cancel and pick another slot/teacher, or place anyway (it will be flagged as a clash).</div>
           </div>
         )}
       </Modal>

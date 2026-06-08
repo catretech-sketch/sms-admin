@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  cellKey, clashingClass, teacherBusyElsewhere, pickTeacher, conflictsFor,
+  cellKey, clashingClass, clashingClasses, teacherBusyElsewhere, pickTeacher, conflictsFor,
   teacherLoads, clashingTeachers, type Grids,
 } from './timetable'
 
@@ -38,5 +38,10 @@ describe('timetable clash detection', () => {
   })
   it('clashingTeachers returns teachers double-booked somewhere', () => {
     expect(clashingTeachers(grids)).toEqual(new Set(['t1']))
+  })
+  it('clashingClasses lists every other class booking the teacher at that slot', () => {
+    expect(clashingClasses(grids, 't1', 0, 0, 'IX-A')).toEqual(['IX-B'])
+    expect(clashingClasses(grids, 't1', 0, 0, 'IX-C')).toEqual(['IX-A', 'IX-B'])
+    expect(clashingClasses(grids, 't3', 0, 0, 'IX-A')).toEqual([])
   })
 })

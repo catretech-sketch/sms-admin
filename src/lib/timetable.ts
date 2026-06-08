@@ -12,20 +12,31 @@ export type Grids = Record<string, Grid>
 export const cellKey = (day: number, period: number): string => `${day}-${period}`
 
 /**
+ * Every class OTHER than `exceptClass` in which `teacherId` already teaches at
+ * this day+period. Empty array if none. An empty teacherId never clashes.
+ */
+export function clashingClasses(
+  grids: Grids, teacherId: string, day: number, period: number, exceptClass: string,
+): string[] {
+  if (!teacherId) return []
+  const key = cellKey(day, period)
+  const out: string[] = []
+  for (const [cls, grid] of Object.entries(grids)) {
+    if (cls === exceptClass) continue
+    const cell = grid[key]
+    if (cell && cell.teacherId === teacherId) out.push(cls)
+  }
+  return out
+}
+
+/**
  * The first class OTHER than `exceptClass` in which `teacherId` already teaches
- * at this day+period, or null if none. An empty teacherId never clashes.
+ * at this day+period, or null if none.
  */
 export function clashingClass(
   grids: Grids, teacherId: string, day: number, period: number, exceptClass: string,
 ): string | null {
-  if (!teacherId) return null
-  const key = cellKey(day, period)
-  for (const [cls, grid] of Object.entries(grids)) {
-    if (cls === exceptClass) continue
-    const cell = grid[key]
-    if (cell && cell.teacherId === teacherId) return cls
-  }
-  return null
+  return clashingClasses(grids, teacherId, day, period, exceptClass)[0] ?? null
 }
 
 /** True if the teacher is booked in another class at this slot. */
