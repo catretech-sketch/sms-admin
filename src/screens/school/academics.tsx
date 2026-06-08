@@ -13,6 +13,7 @@ import {
 } from '@/components/ui'
 import { teachers, subjects, grades, sections } from '@/data/mockDb'
 import type { Teacher } from '@/types'
+import { cellKey, clashingClass, pickTeacher, conflictsFor, type Cell, type Grid } from '@/lib/timetable'
 
 /* ---------- shared helpers / constants ---------- */
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']
@@ -21,7 +22,6 @@ const LUNCH_AFTER = 4             // lunch break shown after period 4
 const TOTAL_SLOTS = PERIODS * DAYS.length   // 40 teaching slots / week
 const ERASE = '__erase'
 
-const cellKey = (d: number, p: number) => `${d}-${p}`
 const classList = grades.slice(8).flatMap((g) => sections.map((s) => `${g}-${s}`))
 
 const teacherById = (id: string): Teacher | undefined => teachers.find((t) => t.id === id)
@@ -40,8 +40,6 @@ function subjStyle(s: string): { bg: string; fg: string; bd: string } {
   return { bg: `hsl(${hue} 65% 94%)`, fg: `hsl(${hue} 55% 32%)`, bd: `hsl(${hue} 50% 80%)` }
 }
 
-type Cell = { subject: string; teacherId: string }
-type Grid = Record<string, Cell | null>
 
 /* ============================================================
    1 · Classes & sections
@@ -186,6 +184,7 @@ function TimetableTab({ editable }: { editable: boolean }) {
   const [cfgOpen, setCfgOpen] = useState(false)
 
   const g = grids[cls] ?? {}
+  const conflicts = useMemo(() => conflictsFor(grids, cls), [grids, cls])
   const m = mode[cls] ?? 'choice'
   const filled = Object.values(g).filter((c): c is Cell => !!c).length
   const ctId = classTeachers[cls] ?? ''
@@ -201,8 +200,10 @@ function TimetableTab({ editable }: { editable: boolean }) {
     const team = subjTeachers[brush] ?? []
     const c = placeCounts[brush] ?? 0
     const tid = team.length ? team[c % team.length] : ''
+    const clashWith = tid ? clashingClass(grids, tid, d, p, cls) : null
     setGrids((prev) => ({ ...prev, [cls]: { ...(prev[cls] ?? {}), [key]: { subject: brush, teacherId: tid } } }))
     setPlaceCounts((prev) => ({ ...prev, [brush]: (prev[brush] ?? 0) + 1 }))
+    if (clashWith) toast.danger('Teacher clash', `${teacherName(tid)} is also teaching ${clashWith} on ${DAYS[d]} P${p + 1}.`)
   }
 
   const startManual = () => { setGrids((p) => ({ ...p, [cls]: {} })); setMode((p) => ({ ...p, [cls]: 'build' })) }
@@ -226,7 +227,7 @@ function TimetableTab({ editable }: { editable: boolean }) {
         if (ti >= tokens.length) continue
         const s = tokens[ti++]
         const team = subjTeachers[s] ?? []
-        const tid = team.length ? team[(rot[s] ?? 0) % team.length] : ''
+        const tid = pickTeacher({ ...grids, [cls]: next }, team, d, p, cls, rot[s] ?? 0)
         rot[s] = (rot[s] ?? 0) + 1
         next[cellKey(d, p)] = { subject: s, teacherId: tid }
       }
@@ -235,7 +236,8 @@ function TimetableTab({ editable }: { editable: boolean }) {
     setMode((prev) => ({ ...prev, [cls]: 'build' }))
     setPlaceCounts({})
     setCfgOpen(false)
-    toast.success('Timetable generated', `${Math.min(tokens.length, TOTAL_SLOTS)} periods placed for ${cls}.`)
+    const clashCount = conflictsFor({ ...grids, [cls]: next }, cls).size
+    toast.success('Timetable generated', `${Math.min(tokens.length, TOTAL_SLOTS)} periods placed for ${cls} · ${clashCount === 0 ? '0 clashes' : `${clashCount} clash${clashCount > 1 ? 'es' : ''} to review`}.`)
   }
 
   /* grid rows incl. fixed lunch break */
@@ -254,9 +256,16 @@ function TimetableTab({ editable }: { editable: boolean }) {
           {m === 'build' && (
             <div className="row ai-center gap8 wrap">
               <Badge tone={filled === TOTAL_SLOTS ? 'success' : 'neutral'}>{filled}/{TOTAL_SLOTS} periods set</Badge>
+              {conflicts.size > 0
+                ? <Badge tone="danger" icon="alert">{conflicts.size} clash{conflicts.size > 1 ? 'es' : ''}</Badge>
+                : filled > 0 ? <Badge tone="success" icon="checkCircle">No clashes</Badge> : null}
               {editable && <Btn size="sm" variant="secondary" icon="sparkle" onClick={() => setCfgOpen(true)}>Re-generate</Btn>}
               {editable && <Btn size="sm" variant="ghost" icon="refresh" onClick={restart}>Restart</Btn>}
-              {editable && <Btn size="sm" variant="primary" icon="check" onClick={() => toast.success('Timetable saved', `${cls} routine saved (${filled}/${TOTAL_SLOTS} periods).`)}>Save</Btn>}
+              {editable && <Btn size="sm" variant="primary" icon="check" onClick={() => {
+                const n = conflicts.size
+                if (n > 0) toast.danger('Saved with clashes', `${cls} saved (${filled}/${TOTAL_SLOTS}) · ${n} clash${n > 1 ? 'es' : ''} — resolve before publishing.`)
+                else toast.success('Timetable saved', `${cls} routine saved (${filled}/${TOTAL_SLOTS} periods).`)
+              }}>Save</Btn>}
             </div>
           )}
         </div>
@@ -327,21 +336,27 @@ function TimetableTab({ editable }: { editable: boolean }) {
                 <Fragment key={`p-${rd.p}`}>
                   <div className="t-xs fw6 muted" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>P{rd.p + 1}</div>
                   {DAYS.map((_d, di) => {
-                    const cell = g[cellKey(di, rd.p)]
+                    const ck = cellKey(di, rd.p)
+                    const cell = g[ck]
                     const st = cell ? subjStyle(cell.subject) : null
+                    const isClash = conflicts.has(ck)
+                    const clashWith = cell && isClash ? clashingClass(grids, cell.teacherId, di, rd.p, cls) : null
                     return (
                       <button key={di} onClick={() => place(di, rd.p)} disabled={!editable}
+                        title={clashWith ? `Also in ${clashWith} · ${DAYS[di]} P${rd.p + 1}` : undefined}
                         style={{
                           minHeight: 56, borderRadius: 8, padding: 6, textAlign: 'left',
                           cursor: editable ? 'pointer' : 'default',
-                          border: `1px solid ${st ? st.bd : 'var(--border)'}`,
+                          border: `${isClash ? '2px' : '1px'} solid ${isClash ? 'var(--danger)' : st ? st.bd : 'var(--border)'}`,
                           background: st ? st.bg : 'var(--surface)',
                           display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 2,
                         }}>
                         {cell ? (
                           <>
                             <span className="fw6 t-xs" style={{ color: st!.fg }}>{cell.subject}</span>
-                            <span className="t-xs muted" style={{ lineHeight: 1.1 }}>{teacherName(cell.teacherId)}</span>
+                            <span className="t-xs" style={{ lineHeight: 1.1, display: 'flex', alignItems: 'center', gap: 3, color: isClash ? 'var(--danger)' : 'var(--text-2)' }}>
+                              {isClash && <Icon name="alert" size={11} />}{teacherName(cell.teacherId)}
+                            </span>
                           </>
                         ) : <span className="muted" style={{ opacity: editable ? 0.5 : 0.2, fontSize: 16, textAlign: 'center' }}>{editable ? '+' : '·'}</span>}
                       </button>
