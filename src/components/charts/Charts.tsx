@@ -79,6 +79,31 @@ export function Bars({ data, h = 140, color = 'var(--brand-600)', labels, valueF
   )
 }
 
+/* ---------- Horizontal bars (ranked comparison) ---------- */
+export function HBars({ data, color = 'var(--brand-600)', labelWidth = 168, valueFmt }: {
+  data: BarDatum[]; color?: string; labelWidth?: number; valueFmt?: (v: number) => ReactNode
+}) {
+  const max = Math.max(...data.map((d) => (typeof d === 'object' ? d.value : d))) || 1
+  return (
+    <div className="sm-hbars" style={{ ['--hbar-lab-w' as string]: `${labelWidth}px` }}>
+      {data.map((d, i) => {
+        const v = typeof d === 'object' ? d.value : d
+        const lab = typeof d === 'object' ? d.label : undefined
+        const cl = typeof d === 'object' ? d.color : undefined
+        return (
+          <div key={i} className="sm-hbar-row">
+            <div className="sm-hbar-lab" title={typeof lab === 'string' ? lab : undefined}>{lab}</div>
+            <div className="sm-hbar-track">
+              <div className="sm-hbar-fill" style={{ width: `${(v / max) * 100}%`, background: cl || color }} />
+            </div>
+            <div className="sm-hbar-val">{valueFmt ? valueFmt(v) : v}</div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 /* ---------- Line chart (multi-series) ---------- */
 export function LineChart({ series, w = 560, h = 200, labels, yMax, yFmt }: {
   series: Series[]; w?: number; h?: number; labels: string[]; yMax?: number; yFmt?: (v: number) => ReactNode

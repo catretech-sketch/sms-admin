@@ -15,7 +15,7 @@
 .flex1 { flex:1; min-width:0; }
 .gap4{gap:4px}.gap6{gap:6px}.gap8{gap:8px}.gap10{gap:10px}.gap12{gap:12px}.gap14{gap:14px}.gap16{gap:16px}.gap20{gap:20px}.gap24{gap:24px}
 .muted{color:var(--text-2)} .muted3{color:var(--text-3)}
-.t-xs{font-size:11px}.t-sm{font-size:12px}.t-md{font-size:13px}.t-lg{font-size:15px}.t-xl{font-size:18px}
+.t-xs{font-size:12px}.t-sm{font-size:13px}.t-md{font-size:14px}.t-lg{font-size:16px}.t-xl{font-size:19px}
 .fw5{font-weight:500}.fw6{font-weight:600}.fw7{font-weight:700}
 .mono{font-variant-numeric:tabular-nums}
 .disp{font-family:var(--font-display)}
@@ -67,16 +67,18 @@ html[data-theme=dark] .sm-badge.soft.sm-badge-brand{ color:var(--brand-300); }
 .sm-tier-dot { width:6px; height:6px; border-radius:50%; }
 
 /* ---------- Card ---------- */
-.sm-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg); box-shadow:var(--sh-xs); }
-.sm-card.pad { padding:18px; }
-.sm-card.hover { transition:.16s; cursor:pointer; }
-.sm-card.hover:hover { box-shadow:var(--sh-md); border-color:var(--border-2); transform:translateY(-1px); }
+.sm-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--r-xl); box-shadow:var(--sh-sm);
+  transition:transform .16s ease, box-shadow .16s ease, border-color .16s ease; }
+.sm-card.pad { padding:20px; }
+.sm-card:hover { box-shadow:var(--sh-md); }
+.sm-card.hover { cursor:pointer; }
+.sm-card.hover:hover { box-shadow:var(--sh-lg); border-color:var(--border-2); transform:translateY(-3px); }
 .sm-card-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; gap:12px; }
-.sm-card-ic { display:inline-flex; width:30px; height:30px; align-items:center; justify-content:center;
-  border-radius:var(--r-sm); background:var(--brand-50); color:var(--brand-600); }
+.sm-card-ic { display:inline-flex; width:36px; height:36px; align-items:center; justify-content:center;
+  border-radius:var(--r-md); background:var(--brand-50); color:var(--brand-600); box-shadow:var(--sh-xs); }
 html[data-theme=dark] .sm-card-ic{ background:var(--surface-3); }
-.sm-card-title { font-weight:700; font-size:14.5px; font-family:var(--font-display); }
-.sm-card-sub { font-size:12px; color:var(--text-3); margin-top:1px; }
+.sm-card-title { font-weight:800; font-size:17px; font-family:var(--font-display); letter-spacing:-.01em; }
+.sm-card-sub { font-size:13px; color:var(--text-3); margin-top:2px; }
 
 /* ---------- Fields ---------- */
 .sm-field { display:flex; flex-direction:column; gap:6px; }

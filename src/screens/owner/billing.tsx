@@ -8,7 +8,7 @@ import { useMemo, useState, type ComponentType } from 'react'
 import { useToast } from '@/lib/hooks'
 import {
   PageHead, Tabs, Card, CardHead, Kpi, Btn, Badge, TierPill, Segmented, Select, Field, Input,
-  Modal, Icon, Bars, LineChart, Legend, Donut, DataTable, type Column, type BadgeTone,
+  Modal, Icon, HBars, LineChart, Legend, Donut, DataTable, type Column, type BadgeTone,
 } from '@/components/ui'
 import { schools, TIERS, TIER_META } from '@/data/mockDb'
 import { fmtMoney, fmtNum } from '@/lib/format'
@@ -99,7 +99,7 @@ function OwnerReports() {
     return { agg, top: ranked[0], low: ranked[ranked.length - 1], count: ranked.length }
   }, [ranked, meta])
 
-  const bars = ranked.map((r) => ({ value: r.value, label: r.school.logo, color: r.school.color }))
+  const bars = ranked.map((r) => ({ value: r.value, label: r.school.name, color: r.school.color }))
 
   return (
     <div>
@@ -154,10 +154,7 @@ function OwnerReports() {
       <Card>
         <CardHead title={`${meta.label} by school`} sub={`Ranked across all schools · FY ${year}`} icon="grid" />
         <div style={{ marginTop: 16 }}>
-          <Bars data={bars} h={180} valueFmt={(v) => meta.fmt(v)} />
-        </div>
-        <div style={{ marginTop: 14 }}>
-          <Legend items={ranked.map((r) => ({ color: r.school.color, label: `${r.school.logo} · ${r.school.name}` }))} />
+          <HBars data={bars} labelWidth={200} valueFmt={(v) => meta.fmt(v)} />
         </div>
       </Card>
     </div>
@@ -405,6 +402,7 @@ function RevenueTab() {
    Plans & pricing tab — interactive plan calculator
    ============================================================ */
 function PlanCalculator() {
+  const toast = useToast()
   const [strength, setStrength] = useState(800)
   const [billing, setBilling] = useState<'annual' | 'monthly'>('annual')
   const rec = recommendedTier(strength)
@@ -442,7 +440,8 @@ function PlanCalculator() {
         {TIERS.map((t) => {
           const rate = rateFor(strength, t)
           const annual = rate * strength
-          const price = billing === 'annual' ? annual : Math.round(annual / 12)
+          const monthly = Math.round(annual / 12)
+          const price = billing === 'annual' ? annual : monthly
           const isRec = t === rec
           return (
             <Card key={t} style={isRec ? { borderColor: TIER_META[t].color, borderWidth: 1.5 } : undefined}>
@@ -451,8 +450,15 @@ function PlanCalculator() {
                 {isRec && <Badge tone="success" icon="sparkle">Recommended</Badge>}
               </div>
               <div style={{ marginTop: 14 }}>
-                <div className="fw7" style={{ fontSize: 26, fontFamily: 'var(--font-display)' }}>{fmtMoney(price)}</div>
-                <div className="t-xs muted">{billing === 'annual' ? 'per year' : 'per month'}</div>
+                <div className="row ai-end gap6">
+                  <div className="fw7" style={{ fontSize: 26, fontFamily: 'var(--font-display)' }}>{fmtMoney(price)}</div>
+                  <div className="t-xs muted" style={{ marginBottom: 4 }}>{billing === 'annual' ? '/year' : '/month'}</div>
+                </div>
+                <div className="t-xs muted">
+                  {billing === 'annual'
+                    ? `≈ ${fmtMoney(monthly)}/mo`
+                    : `${fmtMoney(annual)}/yr billed annually`}
+                </div>
               </div>
               <div className="t-sm muted" style={{ marginTop: 8 }}>
                 {fmtNum(strength)} × {fmtMoney(rate)}/student/yr = {fmtMoney(annual)}/yr
@@ -464,6 +470,13 @@ function PlanCalculator() {
                   </div>
                 ))}
               </div>
+              <Btn
+                variant={isRec ? 'primary' : 'secondary'} icon="sparkle" style={{ width: '100%', marginTop: 16 }}
+                onClick={() => toast.success('Trial started', `14-day ${TIER_META[t].label} trial · ${fmtNum(strength)} students · no card required.`)}
+              >
+                Start 14-day trial
+              </Btn>
+              <div className="t-xs muted3 ta-center" style={{ marginTop: 8, textAlign: 'center' }}>Free for 14 days · no card required</div>
             </Card>
           )
         })}

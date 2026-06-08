@@ -5,7 +5,7 @@
 import { useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import {
-  PageHead, Card, CardHead, Kpi, Btn, Badge, TierPill, Avatar, Search, Select,
+  PageHead, Card, CardHead, Kpi, Btn, Badge, TierPill, Avatar, Search, Select, Segmented,
   Field, Input, Modal, Icon, Empty, Donut, Bars, LineChart, Legend, DataTable,
   type Column, type BadgeTone,
 } from '@/components/ui'
@@ -217,6 +217,7 @@ function OwnerSchools() {
   const [plan, setPlan] = useState('all')
   const [status, setStatus] = useState('all')
   const [report, setReport] = useState<School | null>(null)
+  const [upgrade, setUpgrade] = useState<School | null>(null)
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
@@ -252,6 +253,9 @@ function OwnerSchools() {
       key: 'actions', label: '', align: 'right',
       render: (s) => (
         <div className="row gap6 jc-end">
+          {s.plan !== 'platinum' && (
+            <Btn size="sm" variant="secondary" icon="sparkle" onClick={() => setUpgrade(s)}>Upgrade</Btn>
+          )}
           <Btn size="sm" variant="primary" icon="arrowRight" onClick={() => app.enterSchool(s.id)}>Open</Btn>
           <Btn size="sm" icon="doc" onClick={() => setReport(s)}>Account report</Btn>
         </div>
@@ -303,7 +307,83 @@ function OwnerSchools() {
       </Card>
 
       <AccountReportModal school={report} onClose={() => setReport(null)} />
+      <UpgradePlanModal key={upgrade?.id} school={upgrade} onClose={() => setUpgrade(null)} />
     </div>
+  )
+}
+
+/* ---------- Upgrade plan modal (from Schools list) ---------- */
+function UpgradePlanModal({ school, onClose }: { school: School | null; onClose: () => void }) {
+  const toast = useToast()
+  const curIdx = school ? TIERS.indexOf(school.plan) : 0
+  const [tier, setTier] = useState<Tier>(TIERS[Math.min(curIdx + 1, TIERS.length - 1)])
+  if (!school) return null
+  const s = school
+  const seats = s.students
+  const curAnnual = seats * rateFor(seats, s.plan)
+  const newAnnual = seats * rateFor(seats, tier)
+  const diff = newAnnual - curAnnual
+
+  const apply = () => {
+    if (TIERS.indexOf(tier) <= curIdx) {
+      toast.info('No upgrade', `${s.name} is already on ${TIER_META[s.plan].label}.`)
+      return
+    }
+    toast.success('Plan upgraded', `${s.name} → ${TIER_META[tier].label} · ${fmtMoney(newAnnual, s.currency)}/yr (+${fmtMoney(diff, s.currency)}/yr).`)
+    onClose()
+  }
+
+  return (
+    <Modal
+      open onClose={onClose} icon="sparkle" size="md"
+      title={`Upgrade plan · ${s.name}`}
+      sub={`${fmtNum(seats)} students · currently ${TIER_META[s.plan].label}`}
+      footer={
+        <div className="row gap8 jc-end">
+          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn variant="primary" icon="check" disabled={TIERS.indexOf(tier) <= curIdx} onClick={apply}>Confirm upgrade</Btn>
+        </div>
+      }
+    >
+      <div className="col gap10">
+        {TIERS.map((t) => {
+          const idx = TIERS.indexOf(t)
+          const isCurrent = idx === curIdx
+          const isLower = idx < curIdx
+          const rate = rateFor(seats, t)
+          const annual = seats * rate
+          const selected = t === tier && !isCurrent && !isLower
+          return (
+            <div key={t}
+              className="sm-card pad row ai-center jc-between gap12"
+              style={{
+                cursor: isLower || isCurrent ? 'not-allowed' : 'pointer',
+                opacity: isLower ? 0.5 : 1,
+                borderColor: selected ? TIER_META[t].color : undefined,
+                borderWidth: selected ? 2 : undefined,
+              }}
+              onClick={() => { if (!isLower && !isCurrent) setTier(t) }}
+            >
+              <div className="row ai-center gap10">
+                <TierPill plan={t} size="md" />
+                {isCurrent && <Badge tone="neutral">Current</Badge>}
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div className="fw7">{fmtMoney(annual, s.currency)}/yr</div>
+                <div className="t-xs muted">{fmtNum(seats)} × {fmtMoney(rate, s.currency)}/student/yr</div>
+              </div>
+            </div>
+          )
+        })}
+        <div className="sm-card pad row ai-center jc-between" style={{ background: 'var(--brand-50)' }}>
+          <span className="t-sm muted">New annual value</span>
+          <span className="fw7">
+            {fmtMoney(newAnnual, s.currency)}/yr{' '}
+            <span className="t-xs" style={{ color: 'var(--success)' }}>(+{fmtMoney(diff, s.currency)})</span>
+          </span>
+        </div>
+      </div>
+    </Modal>
   )
 }
 
@@ -419,6 +499,13 @@ const MODULE_OPTIONS: { key: string; label: string; desc: string; tier: Tier }[]
   { key: 'transport_gps', label: 'Transport GPS', desc: 'Live bus tracking', tier: 'platinum' },
 ]
 
+type BillingCycle = 'monthly' | 'quarterly' | 'yearly'
+const CYCLE_META: Record<BillingCycle, { label: string; div: number; per: string }> = {
+  monthly: { label: 'Monthly', div: 12, per: '/mo' },
+  quarterly: { label: 'Quarterly', div: 4, per: '/qtr' },
+  yearly: { label: 'Yearly', div: 1, per: '/yr' },
+}
+
 interface WizardData {
   name: string
   city: string
@@ -428,6 +515,7 @@ interface WizardData {
   adminPhone: string
   strength: number
   tier: Tier
+  cycle: BillingCycle
   modules: Set<string>
 }
 
@@ -438,7 +526,7 @@ function CreateSchoolWizard() {
   const [data, setData] = useState<WizardData>({
     name: '', city: '', tz: 'Asia/Kolkata',
     adminName: '', adminEmail: '', adminPhone: '',
-    strength: 800, tier: 'gold',
+    strength: 800, tier: 'gold', cycle: 'yearly',
     modules: new Set(['sis', 'attendance', 'exams', 'fees', 'communication']),
   })
 
@@ -459,8 +547,12 @@ function CreateSchoolWizard() {
     return true
   })()
 
+  const annual = data.strength * rateFor(data.strength, data.tier)
+  const cycleMeta = CYCLE_META[data.cycle]
+  const cyclePrice = Math.round(annual / cycleMeta.div)
+
   const create = () => {
-    toast.success('School created', `${data.name} is ready — ${TIER_META[data.tier].label} plan.`)
+    toast.success('School created', `${data.name} is ready — ${TIER_META[data.tier].label} plan · ${fmtMoney(cyclePrice)}${cycleMeta.per} (${cycleMeta.label.toLowerCase()}).`)
     app.go('owner.schools')
   }
 
@@ -533,7 +625,7 @@ function CreateSchoolWizard() {
           </div>
         )}
 
-        {step === 2 && <PlanStep data={data} onStrength={(v) => set('strength', v)} onTier={(t) => set('tier', t)} />}
+        {step === 2 && <PlanStep data={data} onStrength={(v) => set('strength', v)} onTier={(t) => set('tier', t)} onCycle={(c) => set('cycle', c)} />}
 
         {step === 3 && (
           <div className="col gap16">
@@ -570,14 +662,20 @@ function CreateSchoolWizard() {
 
         {step === 4 && <ReviewStep data={data} />}
 
-        {/* nav buttons */}
+        {/* nav buttons + running price summary */}
         <div className="sm-divider" style={{ margin: '20px 0 16px' }} />
-        <div className="row ai-center jc-between">
+        <div className="row ai-center jc-between gap12 wrap">
           <Btn icon="arrowLeft" disabled={step === 0} onClick={() => setStep((s) => Math.max(0, s - 1))}>Back</Btn>
+          <div className="row ai-center gap8 t-sm muted" style={{ marginLeft: 'auto' }}>
+            <TierPill plan={data.tier} />
+            <span>{fmtNum(data.strength)} students ·</span>
+            <span className="fw7" style={{ color: 'var(--text)' }}>{fmtMoney(cyclePrice)}{cycleMeta.per}</span>
+            {data.cycle !== 'yearly' && <span className="t-xs muted3">({fmtMoney(annual)}/yr)</span>}
+          </div>
           {step < WIZARD_STEPS.length - 1 ? (
             <Btn variant="primary" iconRight="arrowRight" disabled={!canNext} onClick={() => setStep((s) => s + 1)}>Next</Btn>
           ) : (
-            <Btn variant="primary" icon="check" onClick={create}>Create school</Btn>
+            <Btn variant="primary" icon="check" onClick={create}>Create school · {fmtMoney(cyclePrice)}{cycleMeta.per}</Btn>
           )}
         </div>
       </Card>
@@ -586,10 +684,15 @@ function CreateSchoolWizard() {
 }
 
 /* ---------- Wizard step 3: plan & tier driven by student strength ---------- */
-function PlanStep({ data, onStrength, onTier }: { data: WizardData; onStrength: (v: number) => void; onTier: (t: Tier) => void }) {
+function PlanStep({ data, onStrength, onTier, onCycle }: { data: WizardData; onStrength: (v: number) => void; onTier: (t: Tier) => void; onCycle: (c: BillingCycle) => void }) {
   const strength = data.strength
   const band = priceBand(strength)
   const rec = recommendedTier(strength)
+  const tierIdx = TIERS.indexOf(data.tier)
+  const nextTier: Tier | null = tierIdx < TIERS.length - 1 ? TIERS[tierIdx + 1] : null
+  const cm = CYCLE_META[data.cycle]
+  const annualSel = strength * rateFor(strength, data.tier)
+  const cycleSel = Math.round(annualSel / cm.div)
 
   return (
     <div className="col gap16">
@@ -609,10 +712,19 @@ function PlanStep({ data, onStrength, onTier }: { data: WizardData; onStrength: 
         </div>
       </div>
 
+      <Field label="Billing cycle" hint="Charged per student; the cycle only changes how often you're billed.">
+        <Segmented
+          value={data.cycle}
+          onChange={(v) => onCycle(v as BillingCycle)}
+          options={(Object.keys(CYCLE_META) as BillingCycle[]).map((c) => ({ value: c, label: CYCLE_META[c].label }))}
+        />
+      </Field>
+
       <div className="sm-grid-3">
         {TIERS.map((t) => {
           const rate = rateFor(strength, t)
           const total = strength * rate
+          const cyclePrice = Math.round(total / cm.div)
           const selected = data.tier === t
           const m = TIER_META[t]
           return (
@@ -626,10 +738,15 @@ function PlanStep({ data, onStrength, onTier }: { data: WizardData; onStrength: 
                 {rec === t && <Badge tone="success" icon="sparkle">Recommended</Badge>}
               </div>
               <div>
-                <div style={{ fontSize: 24, fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1 }}>{fmtMoney(total)}</div>
-                <div className="t-xs muted3" style={{ marginTop: 3 }}>per year · ₹{rate}/student</div>
+                <div className="row ai-end gap6">
+                  <div style={{ fontSize: 24, fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1 }}>{fmtMoney(cyclePrice)}</div>
+                  <div className="t-xs muted3" style={{ marginBottom: 2 }}>{cm.per}</div>
+                </div>
+                <div className="t-xs muted3" style={{ marginTop: 3 }}>
+                  {data.cycle === 'yearly' ? `₹${rate}/student/yr` : `${fmtMoney(total)}/yr · ₹${rate}/student`}
+                </div>
               </div>
-              <div className="t-xs muted">{fmtNum(strength)} students × ₹{rate} = {fmtMoney(total)}</div>
+              <div className="t-xs muted">{fmtNum(strength)} students × ₹{rate} = {fmtMoney(total)}/yr</div>
               <div className="row ai-center gap6 t-sm" style={{ color: selected ? m.color : 'var(--text-3)' }}>
                 <Icon name={selected ? 'checkCircle' : 'plus'} size={15} />
                 {selected ? 'Selected' : 'Choose plan'}
@@ -639,12 +756,22 @@ function PlanStep({ data, onStrength, onTier }: { data: WizardData; onStrength: 
         })}
       </div>
 
-      <div className="sm-card pad row ai-center gap10" style={{ background: 'var(--brand-50)' }}>
+      <div className="sm-card pad row ai-center gap10 wrap" style={{ background: 'var(--brand-50)' }}>
         <Icon name="rupee" size={18} style={{ color: 'var(--brand-600)' }} />
         <span className="t-md fw6">
-          {fmtNum(strength)} students × ₹{rateFor(strength, data.tier)}/yr = {fmtMoney(strength * rateFor(strength, data.tier))} annual
+          {cm.label} · {fmtMoney(cycleSel)}{cm.per}
+          {data.cycle !== 'yearly' && <span className="t-sm muted"> ({fmtMoney(annualSel)}/yr)</span>}
         </span>
-        <span className="t-sm muted" style={{ marginLeft: 'auto' }}>{TIER_META[data.tier].label} plan</span>
+        {nextTier ? (
+          <Btn
+            size="sm" variant="secondary" icon="sparkle" style={{ marginLeft: 'auto' }}
+            onClick={() => onTier(nextTier)}
+          >
+            Upgrade to {TIER_META[nextTier].label} (+{fmtMoney(strength * rateFor(strength, nextTier) - strength * rateFor(strength, data.tier))}/yr)
+          </Btn>
+        ) : (
+          <Badge tone="success" icon="checkCircle" style={{ marginLeft: 'auto' }}>Top tier selected</Badge>
+        )}
       </div>
     </div>
   )
@@ -654,6 +781,8 @@ function PlanStep({ data, onStrength, onTier }: { data: WizardData; onStrength: 
 function ReviewStep({ data }: { data: WizardData }) {
   const rate = rateFor(data.strength, data.tier)
   const annual = data.strength * rate
+  const cm = CYCLE_META[data.cycle]
+  const cyclePrice = Math.round(annual / cm.div)
   const rows: { label: string; value: React.ReactNode }[] = [
     { label: 'School name', value: data.name || '—' },
     { label: 'City', value: data.city || '—' },
@@ -663,7 +792,9 @@ function ReviewStep({ data }: { data: WizardData }) {
     { label: 'Admin phone', value: data.adminPhone || '—' },
     { label: 'Student strength', value: fmtNum(data.strength) },
     { label: 'Plan', value: <TierPill plan={data.tier} /> },
+    { label: 'Billing cycle', value: cm.label },
     { label: 'Per-student rate', value: `₹${rate}/yr` },
+    { label: `Billed ${cm.label.toLowerCase()}`, value: <span className="fw7">{fmtMoney(cyclePrice)}{cm.per}</span> },
     { label: 'Annual value', value: <span className="fw7">{fmtMoney(annual)}</span> },
     { label: 'Modules enabled', value: `${data.modules.size} modules` },
   ]

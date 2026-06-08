@@ -9,7 +9,7 @@ export { Tabs, Segmented, Breadcrumb, Popover, MenuItem, MenuSep, MenuLabel } fr
 export type { TabItem, SegItem, Crumb } from './nav'
 export { Modal, Drawer, Tip } from './overlay'
 export { Card, CardHead, Empty, Kpi, PageHead } from './content'
-export { Spark, Donut, Bars, LineChart, Legend, Gauge } from '@/components/charts/Charts'
+export { Spark, Donut, Bars, HBars, LineChart, Legend, Gauge } from '@/components/charts/Charts'
 export type { Segment, Series, BarDatum } from '@/components/charts/Charts'
 export { DataTable } from '@/components/table/DataTable'
 export type { Column } from '@/components/table/DataTable'
