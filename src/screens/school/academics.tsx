@@ -185,7 +185,7 @@ function TimetableTab({ editable }: { editable: boolean }) {
   const [editCell, setEditCell] = useState<{ key: string; d: number; p: number; subject: string; current: string } | null>(null)
   const [editTid, setEditTid] = useState('')
   /* clash confirmation popup when a manual placement would double-book a teacher */
-  const [clashPrompt, setClashPrompt] = useState<{ key: string; d: number; p: number; subject: string; tid: string; others: string[] } | null>(null)
+  const [clashPrompt, setClashPrompt] = useState<{ d: number; p: number; subject: string; tid: string; others: string[]; onConfirm: () => void } | null>(null)
 
   const g = grids[cls] ?? {}
   const conflicts = useMemo(() => conflictsFor(grids, cls), [grids, cls])
@@ -212,7 +212,7 @@ function TimetableTab({ editable }: { editable: boolean }) {
     const c = placeCounts[brush] ?? 0
     const tid = team.length ? team[c % team.length] : ''
     const others = tid ? clashingClasses(grids, tid, d, p, cls) : []
-    if (others.length) { setClashPrompt({ key, d, p, subject: brush, tid, others }); return }
+    if (others.length) { setClashPrompt({ d, p, subject: brush, tid, others, onConfirm: () => doPlace(key, brush, tid) }); return }
     doPlace(key, brush, tid)
   }
 
@@ -224,8 +224,12 @@ function TimetableTab({ editable }: { editable: boolean }) {
 
   const applyTeacher = () => {
     if (!editCell) return
-    setGrids((prev) => ({ ...prev, [cls]: { ...(prev[cls] ?? {}), [editCell.key]: { subject: editCell.subject, teacherId: editTid } } }))
+    const ec = editCell
+    const commit = () => setGrids((prev) => ({ ...prev, [cls]: { ...(prev[cls] ?? {}), [ec.key]: { subject: ec.subject, teacherId: editTid } } }))
+    const others = editTid ? clashingClasses(grids, editTid, ec.d, ec.p, cls) : []
     setEditCell(null)
+    if (others.length) { setClashPrompt({ d: ec.d, p: ec.p, subject: ec.subject, tid: editTid, others, onConfirm: commit }); return }
+    commit()
   }
 
   const startManual = () => { setGrids((p) => ({ ...p, [cls]: {} })); setMode((p) => ({ ...p, [cls]: 'build' })) }
@@ -455,15 +459,14 @@ function TimetableTab({ editable }: { editable: boolean }) {
           <div className="col gap8">
             {qualified(editCell.subject).map((t) => {
               const busy = clashingClass(grids, t.id, editCell.d, editCell.p, cls)
-              const disabled = !!busy && t.id !== editCell.current
               const sel = editTid === t.id
               return (
-                <button key={t.id} disabled={disabled} onClick={() => setEditTid(t.id)}
+                <button key={t.id} onClick={() => setEditTid(t.id)}
                   style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, width: '100%',
-                    border: `1px solid ${sel ? 'var(--brand-600)' : 'var(--border)'}`, borderRadius: 10, padding: '9px 11px',
-                    background: sel ? 'var(--brand-50)' : 'var(--surface)', textAlign: 'left',
-                    cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.55 : 1,
+                    border: `1px solid ${sel ? (busy ? 'var(--danger)' : 'var(--brand-600)') : 'var(--border)'}`, borderRadius: 10, padding: '9px 11px',
+                    background: sel ? (busy ? 'var(--danger-bg)' : 'var(--brand-50)') : 'var(--surface)', textAlign: 'left',
+                    cursor: 'pointer',
                   }}>
                   <div className="row ai-center gap8" style={{ minWidth: 0 }}>
                     <Icon name={sel ? 'checkCircle' : 'user'} size={15} style={{ color: sel ? 'var(--brand-600)' : 'var(--text-3)' }} />
@@ -489,7 +492,7 @@ function TimetableTab({ editable }: { editable: boolean }) {
         footer={
           <div className="row gap8 jc-end">
             <Btn variant="ghost" onClick={() => setClashPrompt(null)}>Cancel</Btn>
-            <Btn variant="danger" icon="alert" onClick={() => { if (clashPrompt) doPlace(clashPrompt.key, clashPrompt.subject, clashPrompt.tid); setClashPrompt(null) }}>Place anyway</Btn>
+            <Btn variant="danger" icon="alert" onClick={() => { clashPrompt?.onConfirm(); setClashPrompt(null) }}>Assign anyway</Btn>
           </div>
         }>
         {clashPrompt && (
@@ -502,7 +505,7 @@ function TimetableTab({ editable }: { editable: boolean }) {
                 <span className="fw6">{DAYS[clashPrompt.d]} P{clashPrompt.p + 1}</span>.
               </div>
             </div>
-            <div className="t-sm muted">Placing {clashPrompt.subject} here will double-book this teacher at the same time. Cancel and pick another slot/teacher, or place anyway (it will be flagged as a clash).</div>
+            <div className="t-sm muted">Assigning this teacher double-books them at the same time. Cancel and choose a free teacher/slot, or assign anyway (the cell will be flagged as a clash).</div>
           </div>
         )}
       </Modal>
