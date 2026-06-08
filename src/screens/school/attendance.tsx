@@ -302,10 +302,25 @@ const GEO_CHECKINS = [
   { name: 'Off-campus', within: 3, status: 'outside' as const },
 ]
 function GeoFence() {
+  const force = [
+    ...teachers.map((t) => ({ id: t.id, attendance: t.attendance })),
+    ...staff.map((s) => ({ id: s.id, attendance: s.attendance })),
+  ]
+  const inside = force.filter((p) => statusOf(p.id, p.attendance) !== 'absent').length
+
   return (
-    <TierGate feature="attendance.geofence" title="Geo-fenced attendance">
+    <TierGate feature="attendance.geofence" title="Geo-fenced check-in">
       <Card pad={false}>
-        <CardHead title="Geo-fenced attendance" sub="Auto check-in when devices enter the campus boundary" icon="pin" action={<Badge tone="info" icon="globe">Live</Badge>} />
+        <CardHead
+          title="Geo-fenced check-in"
+          sub="Auto check-in for teachers & staff entering campus"
+          icon="pin"
+          action={<Badge tone="info" icon="globe">Live</Badge>}
+        />
+        <div className="row ai-center gap10 wrap" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+          <Badge tone="success" icon="cap">{inside} of {force.length} teachers &amp; staff inside the fence</Badge>
+          <span className="t-xs muted3">Students aren’t geo-fenced — they’re marked class- &amp; subject-wise.</span>
+        </div>
         <div className="sm-grid-2 gap16" style={{ padding: 16 }}>
           <div style={{
             position: 'relative', minHeight: 220, borderRadius: 12, overflow: 'hidden',
