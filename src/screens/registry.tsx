@@ -8,6 +8,7 @@ import { dashboardScreens } from './school/dashboard'
 import { sisScreens } from './school/sis'
 import { examsScreens } from './school/exams'
 import { academicsScreens } from './school/academics'
+import { calendarScreens } from './school/calendar'
 import { peopleScreens } from './school/people'
 import { attendanceScreens } from './school/attendance'
 import { financeScreens } from './school/finance'
@@ -23,6 +24,7 @@ export const screenRegistry: Record<string, ComponentType> = {
   ...sisScreens,
   ...examsScreens,
   ...academicsScreens,
+  ...calendarScreens,
   ...peopleScreens,
   ...attendanceScreens,
   ...financeScreens,

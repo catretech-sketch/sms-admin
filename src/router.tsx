@@ -34,6 +34,7 @@ const VIEWS: Record<string, ViewMeta> = {
 
   // Academics & Exams (Phase 2)
   'school.academics': { title: 'Academics', sub: 'Classes, timetable & subjects', phase: 2 },
+  'school.calendar': { title: 'Calendar', sub: 'Academic calendar & events', phase: 2 },
   'school.exams': { title: 'Exams & grading', phase: 2 },
 
   // People & Ops (Phase 3)
