@@ -13,7 +13,7 @@ import {
 } from '@/components/ui'
 import { teachers, subjects, grades, sections } from '@/data/mockDb'
 import type { Teacher } from '@/types'
-import { cellKey, clashingClass, pickTeacher, conflictsFor, type Cell, type Grid } from '@/lib/timetable'
+import { cellKey, clashingClass, pickTeacher, conflictsFor, teacherLoads, clashingTeachers, type Cell, type Grid } from '@/lib/timetable'
 
 /* ---------- shared helpers / constants ---------- */
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']
@@ -181,9 +181,14 @@ function TimetableTab({ editable }: { editable: boolean }) {
   const [brush, setBrush] = useState('')
   const [placeCounts, setPlaceCounts] = useState<Record<string, number>>({})
   const [cfgOpen, setCfgOpen] = useState(false)
+  /* per-cell teacher override (works on auto-generated routines too) */
+  const [editCell, setEditCell] = useState<{ key: string; d: number; p: number; subject: string; current: string } | null>(null)
+  const [editTid, setEditTid] = useState('')
 
   const g = grids[cls] ?? {}
   const conflicts = useMemo(() => conflictsFor(grids, cls), [grids, cls])
+  const loads = useMemo(() => teacherLoads(grids), [grids])
+  const clashers = useMemo(() => clashingTeachers(grids), [grids])
   const m = mode[cls] ?? 'choice'
   const filled = Object.values(g).filter((c): c is Cell => !!c).length
   const ctId = classTeachers[cls] ?? ''
@@ -194,7 +199,12 @@ function TimetableTab({ editable }: { editable: boolean }) {
   const place = (d: number, p: number) => {
     if (!editable || m !== 'build') return
     const key = cellKey(d, p)
-    if (!brush) { toast.info('Pick a subject', 'Choose a subject from the palette (or Erase) first.'); return }
+    if (!brush) {
+      const existing = g[key]
+      if (existing) { setEditCell({ key, d, p, subject: existing.subject, current: existing.teacherId }); setEditTid(existing.teacherId) }
+      else toast.info('Pick a subject', 'Choose a subject from the palette (or Erase) first — or tap a filled cell to change its teacher.')
+      return
+    }
     if (brush === ERASE) { setGrids((prev) => ({ ...prev, [cls]: { ...(prev[cls] ?? {}), [key]: null } })); return }
     const team = subjTeachers[brush] ?? []
     const c = placeCounts[brush] ?? 0
@@ -203,6 +213,12 @@ function TimetableTab({ editable }: { editable: boolean }) {
     setGrids((prev) => ({ ...prev, [cls]: { ...(prev[cls] ?? {}), [key]: { subject: brush, teacherId: tid } } }))
     setPlaceCounts((prev) => ({ ...prev, [brush]: (prev[brush] ?? 0) + 1 }))
     if (clashWith) toast.danger('Teacher clash', `${teacherName(tid)} is also teaching ${clashWith} on ${DAYS[d]} P${p + 1}.`)
+  }
+
+  const applyTeacher = () => {
+    if (!editCell) return
+    setGrids((prev) => ({ ...prev, [cls]: { ...(prev[cls] ?? {}), [editCell.key]: { subject: editCell.subject, teacherId: editTid } } }))
+    setEditCell(null)
   }
 
   const startManual = () => { setGrids((p) => ({ ...p, [cls]: {} })); setMode((p) => ({ ...p, [cls]: 'build' })) }
@@ -294,6 +310,7 @@ function TimetableTab({ editable }: { editable: boolean }) {
 
       {/* builder */}
       {m === 'build' && (
+        <>
         <div className="row gap16 wrap" style={{ alignItems: 'flex-start' }}>
           {/* palette */}
           {editable && (
@@ -364,9 +381,31 @@ function TimetableTab({ editable }: { editable: boolean }) {
                 </Fragment>
               ))}
             </div>
-            {editable && <div className="t-xs muted" style={{ marginTop: 10 }}>{brush === ERASE ? 'Erase mode — tap a cell to clear it.' : brush ? `Placing “${brush}”. Tap a cell to drop it (teachers rotate).` : 'Select a subject from the palette to start placing.'}</div>}
+            {editable && <div className="t-xs muted" style={{ marginTop: 10 }}>{brush === ERASE ? 'Erase mode — tap a cell to clear it.' : brush ? `Placing “${brush}”. Tap a cell to drop it (teachers rotate).` : 'Select a subject to place — or tap a filled cell to change its teacher.'}</div>}
           </Card>
         </div>
+
+        {/* teacher load overview */}
+        {filled > 0 && (
+          <Card>
+            <CardHead title="Teacher load" sub="Periods assigned this week · across all classes" icon="users" />
+            <div className="sm-grid-3 gap8" style={{ marginTop: 8 }}>
+              {Object.entries(loads).sort((a, b) => b[1] - a[1]).map(([tid, n]) => (
+                <div key={tid} className="row ai-center jc-between" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '8px 11px' }}>
+                  <div className="row ai-center gap8" style={{ minWidth: 0 }}>
+                    <span className="sm-card-ic" style={{ width: 26, height: 26 }}><Icon name="user" size={13} /></span>
+                    <span className="fw6 t-sm" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{teacherName(tid)}</span>
+                  </div>
+                  <div className="row ai-center gap6" style={{ flex: '0 0 auto' }}>
+                    {clashers.has(tid) && <Badge tone="danger" icon="alert">clash</Badge>}
+                    <Badge tone="neutral">{n}/wk</Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+        </>
       )}
 
       {/* auto-generate config */}
@@ -398,6 +437,42 @@ function TimetableTab({ editable }: { editable: boolean }) {
             )
           })}
         </div>
+      </Modal>
+
+      {/* change-teacher (per-cell override) — cannot pick a teacher already busy elsewhere this slot */}
+      <Modal open={!!editCell} onClose={() => setEditCell(null)} size="sm" icon="user"
+        title="Change teacher"
+        sub={editCell ? `${editCell.subject} · ${DAYS[editCell.d]} P${editCell.p + 1} · ${cls}` : ''}
+        footer={<div className="row gap8 jc-end"><Btn variant="ghost" onClick={() => setEditCell(null)}>Cancel</Btn><Btn variant="primary" icon="check" onClick={applyTeacher}>Save</Btn></div>}>
+        {editCell && (
+          <div className="col gap8">
+            {qualified(editCell.subject).map((t) => {
+              const busy = clashingClass(grids, t.id, editCell.d, editCell.p, cls)
+              const disabled = !!busy && t.id !== editCell.current
+              const sel = editTid === t.id
+              return (
+                <button key={t.id} disabled={disabled} onClick={() => setEditTid(t.id)}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, width: '100%',
+                    border: `1px solid ${sel ? 'var(--brand-600)' : 'var(--border)'}`, borderRadius: 10, padding: '9px 11px',
+                    background: sel ? 'var(--brand-50)' : 'var(--surface)', textAlign: 'left',
+                    cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.55 : 1,
+                  }}>
+                  <div className="row ai-center gap8" style={{ minWidth: 0 }}>
+                    <Icon name={sel ? 'checkCircle' : 'user'} size={15} style={{ color: sel ? 'var(--brand-600)' : 'var(--text-3)' }} />
+                    <div style={{ minWidth: 0 }}>
+                      <div className="fw6 t-sm">{t.name}</div>
+                      <div className="t-xs muted3">{t.dept} · {loads[t.id] ?? 0}/wk</div>
+                    </div>
+                  </div>
+                  {busy
+                    ? <Badge tone="danger" icon="alert">busy in {busy}</Badge>
+                    : <Badge tone="success">free</Badge>}
+                </button>
+              )
+            })}
+          </div>
+        )}
       </Modal>
     </div>
   )

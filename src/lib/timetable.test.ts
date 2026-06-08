@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  cellKey, clashingClass, teacherBusyElsewhere, pickTeacher, conflictsFor, type Grids,
+  cellKey, clashingClass, teacherBusyElsewhere, pickTeacher, conflictsFor,
+  teacherLoads, clashingTeachers, type Grids,
 } from './timetable'
 
 const grids: Grids = {
@@ -31,5 +32,11 @@ describe('timetable clash detection', () => {
   })
   it('pickTeacher returns empty string for an empty roster', () => {
     expect(pickTeacher(grids, [], 0, 0, 'IX-C', 0)).toBe('')
+  })
+  it('teacherLoads counts periods per teacher across classes', () => {
+    expect(teacherLoads(grids)).toEqual({ t1: 2, t2: 1, t3: 1 })
+  })
+  it('clashingTeachers returns teachers double-booked somewhere', () => {
+    expect(clashingTeachers(grids)).toEqual(new Set(['t1']))
   })
 })

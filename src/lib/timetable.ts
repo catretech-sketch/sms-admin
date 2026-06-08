@@ -67,3 +67,27 @@ export function conflictsFor(grids: Grids, cls: string): Set<string> {
   }
   return out
 }
+
+/** Total assigned periods per teacher across every class. */
+export function teacherLoads(grids: Grids): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const grid of Object.values(grids)) {
+    for (const cell of Object.values(grid)) {
+      if (cell && cell.teacherId) out[cell.teacherId] = (out[cell.teacherId] ?? 0) + 1
+    }
+  }
+  return out
+}
+
+/** Teacher ids that are double-booked in at least one slot (across all classes). */
+export function clashingTeachers(grids: Grids): Set<string> {
+  const out = new Set<string>()
+  for (const cls of Object.keys(grids)) {
+    const grid = grids[cls]
+    for (const key of conflictsFor(grids, cls)) {
+      const cell = grid[key]
+      if (cell?.teacherId) out.add(cell.teacherId)
+    }
+  }
+  return out
+}
