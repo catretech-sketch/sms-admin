@@ -213,9 +213,11 @@ function Roster({ group, editable }: { group: Person['group']; editable: boolean
 }
 
 /* ============================================================
-   Subject-wise — class-section × subject roster, mark each
-   student Present / Late / Absent and submit.
+   Subject-wise — driven by the class's timetable. Pick a class
+   and a period (P1–P8); the subject + teacher come from that
+   class's published timetable. Mark each student and submit.
    ============================================================ */
+const PERIODS = 8
 const classList = grades.slice(8).flatMap((g) => sections.map((s) => `${g}-${s}`))
 const STATUS_OPTS = [
   { value: 'present', label: 'Present' },
@@ -223,16 +225,37 @@ const STATUS_OPTS = [
   { value: 'absent', label: 'Absent' },
 ]
 
+/* deterministic teacher for a subject (qualified pool, falls back to all) */
+function teacherForSubject(subject: string, salt: string): { id: string; name: string } {
+  const pool = teachers.filter((t) => t.subjects.includes(subject))
+  const list = pool.length ? pool : teachers
+  const t = list[hash(subject + salt) % list.length]
+  return { id: t.id, name: t.name }
+}
+
+/* a class's published daily timetable: period -> subject + teacher (deterministic) */
+interface TtSlot { period: number; subject: string; teacherId: string; teacherName: string }
+function classTimetable(cls: string): TtSlot[] {
+  return Array.from({ length: PERIODS }, (_, i) => {
+    const p = i + 1
+    const subject = subjects[hash(`${cls}-P${p}`) % subjects.length]
+    const t = teacherForSubject(subject, `${cls}-P${p}`)
+    return { period: p, subject, teacherId: t.id, teacherName: t.name }
+  })
+}
+
 function SubjectWise({ editable }: { editable: boolean }) {
   const toast = useToast()
   const [cls, setCls] = useState(students[0]?.cls ?? classList[0])
-  const [subject, setSubject] = useState(subjects[0])
+  const [period, setPeriod] = useState(1)
   const [marks, setMarks] = useState<Record<string, AttStatus>>({})
 
+  const timetable = useMemo(() => classTimetable(cls), [cls])
+  const slot = timetable[period - 1]
   const roster = useMemo(() => students.filter((s) => s.cls === cls), [cls])
-  const markKey = (id: string) => `${cls}|${subject}|${id}`
+  const markKey = (id: string) => `${cls}|P${period}|${id}`
   const statusFor = (s: { id: string; attendance: number }): AttStatus =>
-    marks[markKey(s.id)] ?? statusOf(s.id + subject, s.attendance)
+    marks[markKey(s.id)] ?? statusOf(s.id + 'P' + period, s.attendance)
   const presentCount = roster.filter((s) => statusFor(s) !== 'absent').length
 
   const setStatus = (id: string, st: AttStatus) => setMarks((m) => ({ ...m, [markKey(id)]: st }))
@@ -243,21 +266,36 @@ function SubjectWise({ editable }: { editable: boolean }) {
     <Card pad={false}>
       <CardHead
         title="Subject-wise attendance"
-        sub={`${cls} · ${subject} · ${presentCount}/${roster.length} present`}
+        sub={`${cls} · from the class timetable`}
         icon="grid"
         action={
           <div className="row ai-center gap8">
             <Select options={classList} value={cls} onChange={(e) => setCls(e.target.value)} />
-            <Select options={subjects} value={subject} onChange={(e) => setSubject(e.target.value)} />
+            <Select
+              value={String(period)}
+              onChange={(e) => setPeriod(Number(e.target.value))}
+              options={timetable.map((t) => ({ value: String(t.period), label: `P${t.period} · ${t.subject}` }))}
+            />
           </div>
         }
       />
+
+      {/* period header — subject + teacher pulled from the timetable */}
+      <div className="row ai-center jc-between gap12 wrap" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)' }}>
+        <div className="row ai-center gap10">
+          <Badge tone="brand" icon="clock">Period {slot.period}</Badge>
+          <span className="t-md fw6">{slot.subject}</span>
+          <span className="t-sm muted">· {slot.teacherName}</span>
+        </div>
+        <Badge tone={presentCount === roster.length ? 'success' : 'neutral'}>{presentCount}/{roster.length} present</Badge>
+      </div>
+
       {roster.length === 0 ? (
         <div style={{ padding: 8 }}><Empty icon="users" title="No students" body={`No students are enrolled in ${cls}.`} /></div>
       ) : (
         <>
           <div className="row ai-center jc-between gap12 wrap" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
-            <span className="t-sm muted">Mark each student for {subject}.</span>
+            <span className="t-sm muted">Mark each student for {slot.subject} (Period {slot.period}).</span>
             {editable && <Btn size="sm" variant="secondary" icon="check" onClick={markAllPresent}>Mark all present</Btn>}
           </div>
           <div className="col">
@@ -282,7 +320,7 @@ function SubjectWise({ editable }: { editable: boolean }) {
           <div className="row ai-center jc-between" style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
             <span className="t-sm muted">{presentCount} present · {roster.length - presentCount} absent</span>
             <Btn variant="primary" icon="check" disabled={!editable}
-              onClick={() => toast.success('Attendance submitted', `${cls} · ${subject} · ${presentCount}/${roster.length} present`)}>
+              onClick={() => toast.success('Attendance submitted', `${cls} · P${slot.period} ${slot.subject} · ${presentCount}/${roster.length} present`)}>
               Submit attendance
             </Btn>
           </div>
