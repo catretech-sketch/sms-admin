@@ -40,7 +40,6 @@ function subjStyle(s: string): { bg: string; fg: string; bd: string } {
   return { bg: `hsl(${hue} 65% 94%)`, fg: `hsl(${hue} 55% 32%)`, bd: `hsl(${hue} 50% 80%)` }
 }
 
-
 /* ============================================================
    1 · Classes & sections
    ============================================================ */
@@ -227,7 +226,7 @@ function TimetableTab({ editable }: { editable: boolean }) {
         if (ti >= tokens.length) continue
         const s = tokens[ti++]
         const team = subjTeachers[s] ?? []
-        const tid = pickTeacher({ ...grids, [cls]: next }, team, d, p, cls, rot[s] ?? 0)
+        const tid = pickTeacher(grids, team, d, p, cls, rot[s] ?? 0)
         rot[s] = (rot[s] ?? 0) + 1
         next[cellKey(d, p)] = { subject: s, teacherId: tid }
       }
