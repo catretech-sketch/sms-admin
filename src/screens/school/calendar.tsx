@@ -8,11 +8,18 @@ import { useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import { can } from '@/lib/gating'
 import {
-  PageHead, Card, CardHead, Btn, Badge, Select, Field, Input, Modal, Icon, Empty, Segmented,
+  PageHead, Card, CardHead, Btn, Badge, Select, Field, Input, Textarea, Checkbox, Modal, Icon, Empty, Segmented,
 } from '@/components/ui'
 
 type EvType = 'holiday' | 'exam' | 'fee' | 'ptm' | 'event'
-interface Ev { date: string; type: EvType; title: string }
+interface Ev { date: string; type: EvType; title: string; desc?: string }
+
+type Channel = 'app' | 'push' | 'email'
+const CHANNELS: { key: Channel; label: string }[] = [
+  { key: 'app', label: 'In-app' },
+  { key: 'push', label: 'Push' },
+  { key: 'email', label: 'Email' },
+]
 
 const EVENT_META: Record<EvType, { label: string; color: string; icon: string }> = {
   holiday: { label: 'Holiday', color: '#16a34a', icon: 'sparkle' },
@@ -58,8 +65,8 @@ function CalendarScreen() {
   const [extra, setExtra] = useState<Ev[]>([])
   const [selDay, setSelDay] = useState<string | null>(null)
   const [addOpen, setAddOpen] = useState(false)
-  const [form, setForm] = useState<{ date: string; type: EvType; title: string }>({
-    date: iso(today.getFullYear(), today.getMonth(), today.getDate()), type: 'event', title: '',
+  const [form, setForm] = useState<{ date: string; type: EvType; title: string; desc: string; channels: Channel[] }>({
+    date: iso(today.getFullYear(), today.getMonth(), today.getDate()), type: 'event', title: '', desc: '', channels: ['app'],
   })
 
   const monthLabel = new Date(cursor.y, cursor.m, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
@@ -88,11 +95,13 @@ function CalendarScreen() {
     return { y, m }
   })
   const toggleType = (t: EvType) => setEnabled((s) => { const n = new Set(s); if (n.has(t)) n.delete(t); else n.add(t); return n })
+  const toggleChannel = (c: Channel) => setForm((f) => ({ ...f, channels: f.channels.includes(c) ? f.channels.filter((x) => x !== c) : [...f.channels, c] }))
   const addEvent = () => {
     if (!form.title.trim()) { toast.danger('Title required', 'Enter an event title.'); return }
-    setExtra((x) => [...x, { date: form.date, type: form.type, title: form.title.trim() }])
-    toast.success('Event added', `${EVENT_META[form.type].label}: ${form.title.trim()}`)
-    setAddOpen(false); setForm((f) => ({ ...f, title: '' }))
+    setExtra((x) => [...x, { date: form.date, type: form.type, title: form.title.trim(), desc: form.desc.trim() || undefined }])
+    const chs = form.channels.map((c) => CHANNELS.find((x) => x.key === c)!.label)
+    toast.success('Event added', `${EVENT_META[form.type].label}: ${form.title.trim()}${chs.length ? ` · notified via ${chs.join(', ')}` : ''}`)
+    setAddOpen(false); setForm((f) => ({ ...f, title: '', desc: '' }))
   }
 
   const agenda = useMemo(() => [...events].sort((a, b) => a.date.localeCompare(b.date)), [events])
@@ -219,8 +228,8 @@ function CalendarScreen() {
                 const m = EVENT_META[e.type]
                 return (
                   <div key={i} className="row ai-center gap10" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '9px 11px' }}>
-                    <span className="sm-card-ic" style={{ background: `color-mix(in srgb, ${m.color} 14%, transparent)`, color: m.color }}><Icon name={m.icon} size={15} /></span>
-                    <div className="flex1"><div className="fw6 t-sm">{e.title}</div><div className="t-xs muted3">{m.label}</div></div>
+                    <span className="sm-card-ic" style={{ background: `color-mix(in srgb, ${m.color} 14%, transparent)`, color: m.color, flex: '0 0 auto' }}><Icon name={m.icon} size={15} /></span>
+                    <div className="flex1" style={{ minWidth: 0 }}><div className="fw6 t-sm">{e.title}</div><div className="t-xs muted3">{m.label}</div>{e.desc && <div className="t-xs muted" style={{ marginTop: 4 }}>{e.desc}</div>}</div>
                   </div>
                 )
               })}
@@ -235,6 +244,14 @@ function CalendarScreen() {
           <Field label="Date"><Input type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} /></Field>
           <Field label="Type"><Select value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as EvType }))} options={TYPES.map((t) => ({ value: t, label: EVENT_META[t].label }))} /></Field>
           <Field label="Title" required><Input icon="calendar" value={form.title} placeholder="e.g. Independence Day" onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} /></Field>
+          <Field label="Description"><Textarea value={form.desc} placeholder="Optional details — agenda, venue, instructions…" onChange={(e) => setForm((f) => ({ ...f, desc: e.target.value }))} /></Field>
+          <Field label="Notify via" hint="Announce to parents & staff when this event is saved">
+            <div className="row ai-center gap16 wrap">
+              {CHANNELS.map((c) => (
+                <Checkbox key={c.key} checked={form.channels.includes(c.key)} onChange={() => toggleChannel(c.key)} label={c.label} />
+              ))}
+            </div>
+          </Field>
         </div>
       </Modal>
     </div>
