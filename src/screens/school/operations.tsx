@@ -56,14 +56,38 @@ function CommunicationScreen() {
 }
 
 /* ---------- Messenger: thread list + conversation (message only) ---------- */
+interface ChatThread { id: number; parent: string; hue: number; student: string; teacher: string; last: string; time: string; unread: number; msgs: ThreadMsg[] }
+
 function MessengerTab() {
   const toast = useToast()
+  const [localThreads, setLocalThreads] = useState<ChatThread[]>([])
   const [activeId, setActiveId] = useState<number>(threads[0]?.id ?? 0)
   const [drafts, setDrafts] = useState<Record<number, ThreadMsg[]>>({})
   const [text, setText] = useState('')
+  const [newOpen, setNewOpen] = useState(false)
+  const [contactQ, setContactQ] = useState('')
 
-  const thread = threads.find((t) => t.id === activeId)
+  const allThreads: ChatThread[] = [...localThreads, ...(threads as ChatThread[])]
+  const thread = allThreads.find((t) => t.id === activeId)
   const msgs: ThreadMsg[] = thread ? [...thread.msgs, ...(drafts[activeId] || [])] : []
+
+  /* everyone you can message: teachers, staff and parents */
+  const contacts = useMemo(() => [
+    ...teachers.map((t) => ({ id: 't:' + t.id, name: t.name, hue: t.avatarHue, role: `Teacher · ${t.dept}` })),
+    ...staff.map((s) => ({ id: 's:' + s.id, name: s.name, hue: s.avatarHue, role: `${s.role} · ${s.dept}` })),
+    ...students.slice(0, 60).map((s) => ({ id: 'p:' + s.id, name: `${s.name} (parent)`, hue: s.avatarHue, role: `Parent · ${s.cls}` })),
+  ], [])
+  const filteredContacts = useMemo(() => {
+    const term = contactQ.trim().toLowerCase()
+    return term ? contacts.filter((c) => c.name.toLowerCase().includes(term) || c.role.toLowerCase().includes(term)) : contacts
+  }, [contacts, contactQ])
+
+  const startChat = (c: { name: string; hue: number; role: string }) => {
+    const id = 1001 + localThreads.length
+    setLocalThreads((prev) => [{ id, parent: c.name, hue: c.hue, student: c.role, teacher: 'New conversation', last: '', time: 'now', unread: 0, msgs: [] }, ...prev])
+    setActiveId(id); setNewOpen(false); setContactQ('')
+    toast.success('Chat started', `You can now message ${c.name}.`)
+  }
 
   const send = () => {
     const t = text.trim()
@@ -78,11 +102,12 @@ function MessengerTab() {
       <div className="row" style={{ alignItems: 'stretch', minHeight: 460 }}>
         {/* Thread list */}
         <div style={{ width: 300, borderRight: '1px solid var(--border)', flex: '0 0 auto' }}>
-          <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)' }}>
+          <div className="row ai-center jc-between" style={{ padding: '10px 12px 10px 14px', borderBottom: '1px solid var(--border)' }}>
             <span className="fw7 t-md">Conversations</span>
+            <Btn size="sm" variant="secondary" icon="plus" onClick={() => setNewOpen(true)}>New chat</Btn>
           </div>
-          <div className="col">
-            {threads.map((t) => (
+          <div className="col" style={{ overflowY: 'auto', maxHeight: 520 }}>
+            {allThreads.map((t) => (
               <button key={t.id} className="row ai-center gap10"
                 onClick={() => setActiveId(t.id)}
                 style={{
@@ -146,6 +171,27 @@ function MessengerTab() {
           )}
         </div>
       </div>
+
+      {/* New chat — message anyone */}
+      <Modal open={newOpen} onClose={() => setNewOpen(false)} size="sm" icon="message"
+        title="New chat" sub="Message anyone — teachers, staff or parents"
+        footer={<div className="row jc-end"><Btn variant="ghost" onClick={() => setNewOpen(false)}>Cancel</Btn></div>}>
+        <Search value={contactQ} onChange={setContactQ} placeholder="Search people…" />
+        <div className="col gap6" style={{ marginTop: 12, maxHeight: 360, overflowY: 'auto' }}>
+          {filteredContacts.map((c) => (
+            <button key={c.id} onClick={() => startChat(c)} className="row ai-center gap10"
+              style={{ width: '100%', textAlign: 'left', border: '1px solid var(--border)', borderRadius: 10, padding: '8px 11px', background: 'var(--surface)', cursor: 'pointer' }}>
+              <Avatar name={c.name} hue={c.hue} size={34} />
+              <div className="flex1" style={{ minWidth: 0 }}>
+                <div className="fw6 t-sm" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
+                <div className="t-xs muted3">{c.role}</div>
+              </div>
+              <Icon name="arrowRight" size={15} style={{ color: 'var(--text-3)', flex: '0 0 auto' }} />
+            </button>
+          ))}
+          {filteredContacts.length === 0 && <div style={{ padding: 8 }}><Empty icon="search" title="No people match" /></div>}
+        </div>
+      </Modal>
     </Card>
   )
 }
