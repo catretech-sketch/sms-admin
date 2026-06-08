@@ -21,7 +21,7 @@ const GROUP_OPTS = [
   { value: 'students', label: 'Students' },
   { value: 'teachers', label: 'Teachers' },
   { value: 'staff', label: 'Staff' },
-  { value: 'period', label: 'Period-wise' },
+  { value: 'period', label: 'Subject-wise' },
   { value: 'geo', label: 'Geo-fence' },
 ]
 
@@ -213,46 +213,81 @@ function Roster({ group, editable }: { group: Person['group']; editable: boolean
 }
 
 /* ============================================================
-   Period-wise — periods × a selected class, marked / unmarked
+   Subject-wise — class-section × subject roster, mark each
+   student Present / Late / Absent and submit.
    ============================================================ */
-const PERIODS = 8
 const classList = grades.slice(8).flatMap((g) => sections.map((s) => `${g}-${s}`))
+const STATUS_OPTS = [
+  { value: 'present', label: 'Present' },
+  { value: 'late', label: 'Late' },
+  { value: 'absent', label: 'Absent' },
+]
 
-function PeriodWise() {
+function SubjectWise({ editable }: { editable: boolean }) {
   const toast = useToast()
-  const [cls, setCls] = useState(classList[0])
-  const slots = useMemo(() => Array.from({ length: PERIODS }, (_, i) => {
-    const p = i + 1
-    const h = hash(`${cls}-P${p}`)
-    return { p, subject: subjects[h % subjects.length], marked: (h % 100) < 78 }
-  }), [cls])
-  const markedCount = slots.filter((s) => s.marked).length
+  const [cls, setCls] = useState(students[0]?.cls ?? classList[0])
+  const [subject, setSubject] = useState(subjects[0])
+  const [marks, setMarks] = useState<Record<string, AttStatus>>({})
+
+  const roster = useMemo(() => students.filter((s) => s.cls === cls), [cls])
+  const markKey = (id: string) => `${cls}|${subject}|${id}`
+  const statusFor = (s: { id: string; attendance: number }): AttStatus =>
+    marks[markKey(s.id)] ?? statusOf(s.id + subject, s.attendance)
+  const presentCount = roster.filter((s) => statusFor(s) !== 'absent').length
+
+  const setStatus = (id: string, st: AttStatus) => setMarks((m) => ({ ...m, [markKey(id)]: st }))
+  const markAllPresent = () =>
+    setMarks((m) => ({ ...m, ...Object.fromEntries(roster.map((s) => [markKey(s.id), 'present' as AttStatus])) }))
 
   return (
     <Card pad={false}>
       <CardHead
-        title="Period-wise attendance"
-        sub={`${markedCount} of ${PERIODS} periods marked`}
+        title="Subject-wise attendance"
+        sub={`${cls} · ${subject} · ${presentCount}/${roster.length} present`}
         icon="grid"
-        action={<Select options={classList} value={cls} onChange={(e) => setCls(e.target.value)} />}
+        action={
+          <div className="row ai-center gap8">
+            <Select options={classList} value={cls} onChange={(e) => setCls(e.target.value)} />
+            <Select options={subjects} value={subject} onChange={(e) => setSubject(e.target.value)} />
+          </div>
+        }
       />
-      <div className="sm-grid-3 gap12" style={{ padding: 16 }}>
-        {slots.map((s) => (
-          <Card key={s.p} style={{ borderColor: s.marked ? 'var(--success)' : 'var(--border)' }}>
-            <div className="row ai-center jc-between">
-              <span className="t-md fw6">Period {s.p}</span>
-              <Badge tone={s.marked ? 'success' : 'neutral'} dot>{s.marked ? 'Marked' : 'Unmarked'}</Badge>
-            </div>
-            <div className="t-sm muted" style={{ marginTop: 8 }}>{s.subject}</div>
-            {!s.marked && (
-              <Btn size="sm" variant="secondary" icon="edit" style={{ marginTop: 10 }}
-                onClick={() => toast.info('Mark period', `${cls} · Period ${s.p} (${s.subject})`)}>
-                Mark now
-              </Btn>
-            )}
-          </Card>
-        ))}
-      </div>
+      {roster.length === 0 ? (
+        <div style={{ padding: 8 }}><Empty icon="users" title="No students" body={`No students are enrolled in ${cls}.`} /></div>
+      ) : (
+        <>
+          <div className="row ai-center jc-between gap12 wrap" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+            <span className="t-sm muted">Mark each student for {subject}.</span>
+            {editable && <Btn size="sm" variant="secondary" icon="check" onClick={markAllPresent}>Mark all present</Btn>}
+          </div>
+          <div className="col">
+            {roster.map((s) => {
+              const st = statusFor(s)
+              return (
+                <div key={s.id} className="row ai-center jc-between gap12" style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
+                  <div className="row ai-center gap12" style={{ minWidth: 0 }}>
+                    <Avatar name={s.name} hue={s.avatarHue} size={32} />
+                    <div style={{ minWidth: 0 }}>
+                      <div className="t-md fw6">{s.name}</div>
+                      <div className="t-xs muted3">{s.id} · {s.cls}</div>
+                    </div>
+                  </div>
+                  {editable
+                    ? <Segmented value={st} onChange={(v) => setStatus(s.id, v as AttStatus)} options={STATUS_OPTS} />
+                    : <Badge tone={STATUS_TONE[st]} dot>{STATUS_LABEL[st]}</Badge>}
+                </div>
+              )
+            })}
+          </div>
+          <div className="row ai-center jc-between" style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
+            <span className="t-sm muted">{presentCount} present · {roster.length - presentCount} absent</span>
+            <Btn variant="primary" icon="check" disabled={!editable}
+              onClick={() => toast.success('Attendance submitted', `${cls} · ${subject} · ${presentCount}/${roster.length} present`)}>
+              Submit attendance
+            </Btn>
+          </div>
+        </>
+      )}
     </Card>
   )
 }
@@ -335,7 +370,7 @@ function AttendanceScreen() {
 
       {/* Active group */}
       {(group === 'students' || group === 'teachers' || group === 'staff') && <Roster group={group} editable={editable} />}
-      {group === 'period' && <PeriodWise />}
+      {group === 'period' && <SubjectWise editable={editable} />}
       {group === 'geo' && <GeoFence />}
     </div>
   )
