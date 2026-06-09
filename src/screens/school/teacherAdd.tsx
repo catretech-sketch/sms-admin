@@ -64,7 +64,7 @@ const INITIAL_FORM: Form = {
 
 const INITIAL_FILES: Files = {
   teacherPhoto: null, resume: null, joiningLetter: null, aadhaarDoc: null, panDoc: null,
-  experienceCert: null, educationCert: null, policeVerification: null, otherDoc: null, signature: null,
+  experienceCert: null, educationCert: null, otherDoc: null, signature: null,
 }
 
 function AddTeacherScreen() {
@@ -163,7 +163,7 @@ function AddTeacherScreen() {
         resume: files.resume?.name, joiningLetter: files.joiningLetter?.name,
         aadhaar: files.aadhaarDoc?.name, pan: files.panDoc?.name,
         experienceCert: files.experienceCert?.name, educationCert: files.educationCert?.name,
-        policeVerification: files.policeVerification?.name, other: files.otherDoc?.name,
+        other: files.otherDoc?.name,
       },
     }
 
@@ -322,7 +322,6 @@ function AddTeacherScreen() {
             {upload('panDoc', 'PAN card')}
             {upload('experienceCert', 'Experience certificate')}
             {upload('educationCert', 'Education certificate')}
-            {upload('policeVerification', 'Police verification certificate')}
             {upload('otherDoc', 'Other documents')}
           </>)}</div>
         </Card>

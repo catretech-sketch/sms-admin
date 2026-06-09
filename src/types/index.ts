@@ -98,7 +98,7 @@ export interface SocialInfo { facebook?: string; instagram?: string; linkedin?: 
 export interface LeaveInfo { medical?: number; casual?: number; sick?: number; maternity?: number }
 export interface TeacherDocs {
   resume?: string; joiningLetter?: string; aadhaar?: string; pan?: string
-  experienceCert?: string; educationCert?: string; policeVerification?: string; other?: string
+  experienceCert?: string; educationCert?: string; other?: string
 }
 
 export interface Teacher {
