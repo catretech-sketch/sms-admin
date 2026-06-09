@@ -3,8 +3,8 @@
    plan, language, view navigation.
    ============================================================ */
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
-import type { ConsoleKind, Role, School, Tier } from '@/types'
-import { schools } from '@/data/mockDb'
+import type { ConsoleKind, Role, School, Student, Tier } from '@/types'
+import { schools, students as seedStudents } from '@/data/mockDb'
 
 export interface DemoAccount {
   email: string
@@ -43,6 +43,9 @@ interface AppState {
   /* derived */
   school: School
   plan: Tier
+  /* student roster (seeded, with in-session additions) */
+  students: Student[]
+  addStudent: (student: Student) => void
   /* actions */
   login: (email: string) => void
   logout: () => void
@@ -73,6 +76,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [mobileNav, setMobileNav] = useState(false)
   /* plan overrides allow live "upgrade" without mutating the dataset */
   const [planOverride, setPlanOverride] = useState<Record<string, Tier>>({})
+  /* roster: seeded data plus students enrolled this session (newest first) */
+  const [students, setStudents] = useState<Student[]>(seedStudents)
+  const addStudent = (student: Student) => setStudents((list) => [student, ...list])
 
   const school = useMemo(() => schools.find((s) => s.id === schoolId) ?? schools[0], [schoolId])
   const plan: Tier = planOverride[schoolId] ?? school.plan
@@ -129,6 +135,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     loggedIn, user, consoleKind, role, schoolId, ownerViewingSchool, lang, dir, view, mobileNav,
     focus, intent,
     school, plan,
+    students, addStudent,
     login, logout, go, clearIntent, setSchoolId, enterSchool, exitToOwner, upgrade, setLang, setMobileNav,
   }
 

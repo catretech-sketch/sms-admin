@@ -6,6 +6,7 @@
 import type { ComponentType } from 'react'
 import { dashboardScreens } from './school/dashboard'
 import { sisScreens } from './school/sis'
+import { studentAddScreens } from './school/studentAdd'
 import { examsScreens } from './school/exams'
 import { academicsScreens } from './school/academics'
 import { calendarScreens } from './school/calendar'
@@ -22,6 +23,7 @@ export const screenRegistry: Record<string, ComponentType> = {
   ...adminScreens,
   ...dashboardScreens,
   ...sisScreens,
+  ...studentAddScreens,
   ...examsScreens,
   ...academicsScreens,
   ...calendarScreens,

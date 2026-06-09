@@ -3,7 +3,9 @@
    Toggle, Checkbox, Search
    ============================================================ */
 import type { InputHTMLAttributes, TextareaHTMLAttributes, SelectHTMLAttributes, ReactNode, Ref } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Icon } from './Icon'
+import { validateFile } from '@/lib/validation'
 
 export function Field({ label, required, hint, error, children }: {
   label?: ReactNode; required?: boolean; hint?: ReactNode; error?: ReactNode; children: ReactNode
@@ -86,6 +88,79 @@ export function Search({ value, onChange, placeholder = 'Search…', style }: {
       <Icon name="search" size={16} />
       <input value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
       {value && <button className="sm-search-clear" onClick={() => onChange('')} aria-label="Clear"><Icon name="x" size={14} /></button>}
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------
+   FileUpload — client-side picker with type/size validation and
+   an inline preview (image thumbnail or doc chip). Mock only: the
+   selected File lives in caller state; nothing is uploaded.
+   ------------------------------------------------------------ */
+export function FileUpload({ accept = '.pdf,.jpg,.jpeg,.png', value, onChange, ariaLabel }: {
+  accept?: string
+  value: File | null
+  onChange: (file: File | null) => void
+  ariaLabel?: string
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [preview, setPreview] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (value && value.type.startsWith('image/')) {
+      const url = URL.createObjectURL(value)
+      setPreview(url)
+      return () => URL.revokeObjectURL(url)
+    }
+    setPreview(null)
+    return undefined
+  }, [value])
+
+  const pick = (file: File | null) => {
+    if (!file) { onChange(null); setErr(null); return }
+    const e = validateFile(file)
+    if (e) {
+      setErr(e)
+      onChange(null)
+      if (inputRef.current) inputRef.current.value = ''
+      return
+    }
+    setErr(null)
+    onChange(file)
+  }
+
+  const clear = () => {
+    onChange(null)
+    setErr(null)
+    if (inputRef.current) inputRef.current.value = ''
+  }
+
+  return (
+    <div className="sm-upload">
+      <input
+        ref={inputRef} type="file" accept={accept} hidden aria-label={ariaLabel}
+        onChange={(e) => pick(e.target.files?.[0] ?? null)}
+      />
+      {value ? (
+        <div className={['sm-upload-file', err && 'is-error'].filter(Boolean).join(' ')}>
+          {preview
+            ? <img src={preview} alt="" className="sm-upload-thumb" />
+            : <span className="sm-upload-ic"><Icon name="doc" size={16} /></span>}
+          <div className="sm-upload-meta">
+            <div className="fw6 t-sm sm-upload-name">{value.name}</div>
+            <div className="t-xs muted">{(value.size / 1024 / 1024).toFixed(2)} MB</div>
+          </div>
+          <button type="button" className="sm-upload-x" onClick={clear} aria-label="Remove file"><Icon name="x" size={14} /></button>
+        </div>
+      ) : (
+        <button type="button" className="sm-upload-drop" onClick={() => inputRef.current?.click()}>
+          <Icon name="upload" size={16} />
+          <span>Choose file</span>
+          <span className="t-xs muted">PDF, JPG, PNG · max 4 MB</span>
+        </button>
+      )}
+      {err && <span className="sm-err"><Icon name="alert" size={12} />{err}</span>}
     </div>
   )
 }

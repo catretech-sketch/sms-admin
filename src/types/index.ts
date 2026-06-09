@@ -34,6 +34,24 @@ export interface School {
   color: string
 }
 
+/* Parent (father / mother) sub-record captured at enrolment. */
+export interface ParentInfo {
+  name?: string
+  email?: string
+  phone?: string
+  occupation?: string
+  aadhaar?: string
+  photoName?: string
+}
+
+/* Uploaded document filenames (mock — files are not persisted). */
+export interface StudentDocs {
+  birthCert?: string
+  transferCert?: string
+  studentAadhaar?: string
+  fatherAadhaar?: string
+}
+
 export interface Student {
   id: string
   adm: string
@@ -51,6 +69,22 @@ export interface Student {
   status: ActiveStatus
   house: string
   avatarHue: number
+  /* ---- optional enrolment detail (added via the Add Student form) ---- */
+  academicYear?: string
+  admissionDate?: string
+  dob?: string
+  bloodGroup?: string
+  religion?: string
+  category?: string
+  caste?: string
+  motherTongue?: string
+  languages?: string
+  email?: string
+  aadhaar?: string
+  photoName?: string
+  father?: ParentInfo
+  mother?: ParentInfo
+  documents?: StudentDocs
 }
 
 export interface Teacher {

@@ -5,11 +5,11 @@
 import { useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import {
-  PageHead, Card, CardHead, Btn, Badge, Avatar, Search, Select, Field, Input,
+  PageHead, Card, CardHead, Btn, Badge, Avatar, Search, Select,
   Drawer, Tabs, Icon, Empty, Progress, Spark, Bars, DataTable,
   type Column, type BadgeTone,
 } from '@/components/ui'
-import { students, grades, sections } from '@/data/mockDb'
+import { grades } from '@/data/mockDb'
 import { reportFor, classRank, attendanceMonths, fmtMoney } from '@/lib/format'
 import type { Student, FeeStatus } from '@/types'
 
@@ -20,57 +20,6 @@ const attColor = (v: number): string => (v >= 90 ? 'var(--success)' : v >= 80 ? 
 
 function canEdit(role: string): boolean {
   return role === 'admin' || role === 'principal' || role === 'vice_principal'
-}
-
-/* ============================================================
-   Add-student drawer
-   ============================================================ */
-function AddStudentDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const toast = useToast()
-  const [name, setName] = useState('')
-  const [cls, setCls] = useState(grades[8] + '-A')
-  const [guardian, setGuardian] = useState('')
-  const [phone, setPhone] = useState('')
-
-  const clsOptions = useMemo(
-    () => grades.slice(4).flatMap((g) => sections.map((s) => g + '-' + s)),
-    [],
-  )
-
-  const submit = () => {
-    if (!name.trim()) { toast.danger('Name required', 'Please enter the student’s full name.'); return }
-    toast.success('Student added', `${name} enrolled in ${cls}.`)
-    setName(''); setGuardian(''); setPhone('')
-    onClose()
-  }
-
-  return (
-    <Drawer
-      open={open} onClose={onClose} icon="user"
-      title="Add student" sub="Create a new enrolment record"
-      footer={
-        <div className="row gap8 jc-end">
-          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn variant="primary" icon="check" onClick={submit}>Save student</Btn>
-        </div>
-      }
-    >
-      <div className="col gap16">
-        <Field label="Full name" required>
-          <Input icon="user" value={name} placeholder="e.g. Aarav Sharma" onChange={(e) => setName(e.target.value)} />
-        </Field>
-        <Field label="Class & section" required>
-          <Select options={clsOptions} value={cls} onChange={(e) => setCls(e.target.value)} />
-        </Field>
-        <Field label="Guardian">
-          <Input icon="users" value={guardian} placeholder="Parent / guardian name" onChange={(e) => setGuardian(e.target.value)} />
-        </Field>
-        <Field label="Phone" hint="Used for fee + attendance alerts.">
-          <Input icon="phone" value={phone} placeholder="+91 9XXXXXXXXX" onChange={(e) => setPhone(e.target.value)} />
-        </Field>
-      </div>
-    </Drawer>
-  )
 }
 
 /* ============================================================
@@ -152,10 +101,10 @@ function StudentsScreen() {
   const [grade, setGrade] = useState('all')
   const [status, setStatus] = useState('all')
   const [fee, setFee] = useState('all')
-  const [addOpen, setAddOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
 
   const editable = canEdit(app.role)
+  const students = app.students
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
@@ -166,7 +115,7 @@ function StudentsScreen() {
       if (fee !== 'all' && s.feeStatus !== fee) return false
       return true
     })
-  }, [q, grade, status, fee])
+  }, [students, q, grade, status, fee])
 
   const columns: Column<Student>[] = [
     {
@@ -232,7 +181,7 @@ function StudentsScreen() {
         sub={sub}
         actions={editable ? (
           <>
-            <Btn variant="primary" icon="plus" onClick={() => setAddOpen(true)}>Add student</Btn>
+            <Btn variant="primary" icon="plus" onClick={() => app.go('school.sis.add')}>Add student</Btn>
             <Btn variant="secondary" icon="upload" onClick={() => setImportOpen(true)}>Import</Btn>
             <Btn variant="secondary" icon="arrowRight" onClick={() => toast.info('Promote class', 'Open the year-end promotion wizard to advance students.')}>Promote class</Btn>
           </>
@@ -266,7 +215,6 @@ function StudentsScreen() {
         />
       </Card>
 
-      <AddStudentDrawer open={addOpen} onClose={() => setAddOpen(false)} />
       <ImportDrawer open={importOpen} onClose={() => setImportOpen(false)} />
     </div>
   )
@@ -292,7 +240,7 @@ function Student360() {
   const toast = useToast()
   const [tab, setTab] = useState('overview')
 
-  const stu = students.find((s) => s.id === app.focus) ?? students[0]
+  const stu = app.students.find((s) => s.id === app.focus) ?? app.students[0]
   const report = reportFor(stu)
   const rank = classRank(stu)
   const months = attendanceMonths(stu)
