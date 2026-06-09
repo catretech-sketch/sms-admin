@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   required, validateAadhaar, validateFile, validateEmail, validatePhone, MAX_FILE_MB,
+  validatePAN, validateIFSC, validateURL, passwordsMatch,
 } from './validation'
 
 describe('required', () => {
@@ -80,5 +81,61 @@ describe('validatePhone', () => {
   })
   it('rejects too-short numbers', () => {
     expect(validatePhone('12345')).not.toBeNull()
+  })
+})
+
+describe('validatePAN', () => {
+  it('accepts a well-formed PAN (any case)', () => {
+    expect(validatePAN('ABCDE1234F')).toBeNull()
+    expect(validatePAN('abcde1234f')).toBeNull()
+  })
+  it('treats empty as valid', () => {
+    expect(validatePAN('')).toBeNull()
+  })
+  it('rejects malformed PANs', () => {
+    expect(validatePAN('ABCD1234F')).not.toBeNull()
+    expect(validatePAN('ABCDE12345')).not.toBeNull()
+  })
+})
+
+describe('validateIFSC', () => {
+  it('accepts a well-formed IFSC', () => {
+    expect(validateIFSC('SBIN0001234')).toBeNull()
+  })
+  it('treats empty as valid', () => {
+    expect(validateIFSC('')).toBeNull()
+  })
+  it('rejects malformed IFSC codes', () => {
+    expect(validateIFSC('SBIN1001234')).not.toBeNull() // 5th char must be 0
+    expect(validateIFSC('SBI0001234')).not.toBeNull()
+  })
+})
+
+describe('validateURL', () => {
+  it('accepts http and https URLs', () => {
+    expect(validateURL('https://linkedin.com/in/x')).toBeNull()
+    expect(validateURL('http://x.io')).toBeNull()
+  })
+  it('treats empty as valid', () => {
+    expect(validateURL('')).toBeNull()
+  })
+  it('rejects non-URLs', () => {
+    expect(validateURL('linkedin.com')).not.toBeNull()
+    expect(validateURL('not a url')).not.toBeNull()
+  })
+})
+
+describe('passwordsMatch', () => {
+  it('passes when both empty', () => {
+    expect(passwordsMatch('', '')).toBeNull()
+  })
+  it('passes when equal', () => {
+    expect(passwordsMatch('secret1', 'secret1')).toBeNull()
+  })
+  it('fails when different', () => {
+    expect(passwordsMatch('secret1', 'secret2')).not.toBeNull()
+  })
+  it('fails when one side is blank', () => {
+    expect(passwordsMatch('secret1', '')).not.toBeNull()
   })
 })

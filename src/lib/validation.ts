@@ -54,3 +54,32 @@ export function validatePhone(value: string | null | undefined): string | null {
   const digits = (value as string).replace(/\D/g, '')
   return digits.length >= 10 && digits.length <= 13 ? null : 'Enter a valid phone number'
 }
+
+/** PAN: 5 letters, 4 digits, 1 letter (e.g. ABCDE1234F). Empty is allowed. */
+export function validatePAN(value: string | null | undefined): string | null {
+  if (isBlank(value)) return null
+  return /^[A-Z]{5}[0-9]{4}[A-Z]$/.test((value as string).trim().toUpperCase())
+    ? null : 'PAN must look like ABCDE1234F'
+}
+
+/** IFSC: 4 letters, a 0, then 6 alphanumerics (e.g. SBIN0001234). Empty allowed. */
+export function validateIFSC(value: string | null | undefined): string | null {
+  if (isBlank(value)) return null
+  return /^[A-Z]{4}0[A-Z0-9]{6}$/.test((value as string).trim().toUpperCase())
+    ? null : 'Enter a valid IFSC code'
+}
+
+/** Basic http(s) URL. Empty is allowed. */
+export function validateURL(value: string | null | undefined): string | null {
+  if (isBlank(value)) return null
+  return /^https?:\/\/[^\s.]+\.[^\s]+$/.test((value as string).trim()) ? null : 'Enter a valid URL'
+}
+
+/** Confirm-password match. Error only when a value is present and differs. */
+export function passwordsMatch(
+  password: string | null | undefined,
+  confirm: string | null | undefined,
+): string | null {
+  if (isBlank(password) && isBlank(confirm)) return null
+  return password === confirm ? null : 'Passwords do not match'
+}

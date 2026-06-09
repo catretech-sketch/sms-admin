@@ -8,11 +8,11 @@ import { useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import { can } from '@/lib/gating'
 import {
-  PageHead, Card, Btn, Badge, Avatar, Search, Select, Field, Input,
+  PageHead, Card, Btn, Badge, Avatar, Search, Select,
   Drawer, Icon, Empty, Progress, DataTable,
   type Column, type BadgeTone,
 } from '@/components/ui'
-import { teachers, staff, students, depts } from '@/data/mockDb'
+import { staff, students, depts } from '@/data/mockDb'
 import { fmtMoney } from '@/lib/format'
 import type { Teacher, Staff } from '@/types'
 
@@ -20,54 +20,6 @@ import type { Teacher, Staff } from '@/types'
 const attColor = (v: number): string => (v >= 90 ? 'var(--success)' : v >= 80 ? 'var(--brand-600)' : v >= 75 ? 'var(--warning)' : 'var(--danger)')
 const statusTone = (s: string): BadgeTone => (s === 'active' ? 'success' : 'neutral')
 const statusLabel = (s: string): string => (s === 'active' ? 'Active' : 'Inactive')
-
-/* ============================================================
-   Add-teacher drawer
-   ============================================================ */
-function AddTeacherDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const toast = useToast()
-  const [name, setName] = useState('')
-  const [dept, setDept] = useState(depts[0])
-  const [subjects, setSubjects] = useState('')
-  const [desig, setDesig] = useState('Teacher')
-
-  const reset = () => { setName(''); setSubjects(''); setDept(depts[0]); setDesig('Teacher') }
-
-  const submit = () => {
-    if (!name.trim()) { toast.danger('Name required', 'Please enter the teacher’s full name.'); return }
-    toast.success('Teacher added', `${name} added to ${dept} department.`)
-    reset()
-    onClose()
-  }
-
-  return (
-    <Drawer
-      open={open} onClose={onClose} icon="cap"
-      title="Add teacher" sub="Create a new teaching staff record"
-      footer={
-        <div className="row gap8 jc-end">
-          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn variant="primary" icon="check" onClick={submit}>Save teacher</Btn>
-        </div>
-      }
-    >
-      <div className="col gap16">
-        <Field label="Full name" required>
-          <Input icon="user" value={name} placeholder="e.g. Rajesh Kumar" onChange={(e) => setName(e.target.value)} />
-        </Field>
-        <Field label="Department" required>
-          <Select options={depts} value={dept} onChange={(e) => setDept(e.target.value)} />
-        </Field>
-        <Field label="Designation" required>
-          <Select options={['Senior Teacher', 'Teacher', 'HOD', 'PGT', 'TGT', 'Assistant Teacher']} value={desig} onChange={(e) => setDesig(e.target.value)} />
-        </Field>
-        <Field label="Subjects" hint="Comma-separated, e.g. Mathematics, Computer">
-          <Input icon="book" value={subjects} placeholder="Mathematics, Science" onChange={(e) => setSubjects(e.target.value)} />
-        </Field>
-      </div>
-    </Drawer>
-  )
-}
 
 /* ============================================================
    Teacher profile drawer (read-only)
@@ -145,16 +97,16 @@ function TeachersScreen() {
   const [q, setQ] = useState('')
   const [dept, setDept] = useState('all')
   const [status, setStatus] = useState('all')
-  const [addOpen, setAddOpen] = useState(false)
   const [profile, setProfile] = useState<Teacher | null>(null)
 
   const editable = can(app.role, 'sis', 'E')
+  const teachers = app.teachers
 
   const message = (t: Teacher) => toast.success('Message sent', `Notified ${t.name}.`)
 
   const topPerformers = useMemo(
     () => teachers.slice().sort((a, b) => b.rating - a.rating).slice(0, 4),
-    [],
+    [teachers],
   )
 
   const rows = useMemo(() => {
@@ -165,7 +117,7 @@ function TeachersScreen() {
       if (status !== 'all' && t.status !== status) return false
       return true
     })
-  }, [q, dept, status])
+  }, [teachers, q, dept, status])
 
   const columns: Column<Teacher>[] = [
     {
@@ -242,7 +194,7 @@ function TeachersScreen() {
         title="Teachers"
         sub={`${teachers.length} teaching staff · ${app.school.name}`}
         actions={editable
-          ? <Btn variant="primary" icon="plus" onClick={() => setAddOpen(true)}>Add teacher</Btn>
+          ? <Btn variant="primary" icon="plus" onClick={() => app.go('school.teachers.add')}>Add teacher</Btn>
           : <Badge tone="neutral" icon="eye">View only</Badge>}
       />
 
@@ -284,7 +236,6 @@ function TeachersScreen() {
         />
       </Card>
 
-      <AddTeacherDrawer open={addOpen} onClose={() => setAddOpen(false)} />
       <TeacherProfile teacher={profile} onClose={() => setProfile(null)} onMessage={(t) => { message(t); setProfile(null) }} />
     </div>
   )

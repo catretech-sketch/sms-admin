@@ -4,11 +4,9 @@
    Frontend-only: validates + previews uploads client-side and
    adds the new student to the in-session roster.
    ============================================================ */
-import { useMemo, useState, type ComponentType, type ReactNode } from 'react'
+import { useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
-import {
-  PageHead, Card, CardHead, Btn, Badge, Field, Input, Textarea, Select, FileUpload, Icon,
-} from '@/components/ui'
+import { PageHead, Card, CardHead, Btn, Badge, Icon, useFormKit } from '@/components/ui'
 import { grades, sections } from '@/data/mockDb'
 import { required, validateAadhaar, validateEmail, validatePhone, validateFile } from '@/lib/validation'
 import type { Student } from '@/types'
@@ -43,10 +41,6 @@ const INITIAL_FILES: Files = {
   birthCert: null, transferCert: null,
 }
 
-function fieldGrid(children: ReactNode) {
-  return <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 14 }}>{children}</div>
-}
-
 function AddStudentScreen() {
   const app = useApp()
   const toast = useToast()
@@ -54,8 +48,7 @@ function AddStudentScreen() {
   const [files, setFiles] = useState<Files>(INITIAL_FILES)
   const [errors, setErrors] = useState<Record<string, string>>({})
 
-  const set = (key: string, value: string) => setForm((s) => ({ ...s, [key]: value }))
-  const setFile = (key: string) => (file: File | null) => setFiles((s) => ({ ...s, [key]: file }))
+  const { txt, sel, area, upload, fieldGrid } = useFormKit(f, setForm, files, setFiles, errors)
 
   const clsOptions = useMemo(
     () => [{ value: '', label: 'Select…' }, ...grades.slice(4).map((g) => ({ value: g, label: g }))],
@@ -153,33 +146,6 @@ function AddStudentScreen() {
     toast.success('Student added', `${name} enrolled in ${cls}.`)
     app.go('school.sis')
   }
-
-  /* ---------- field helpers ---------- */
-  const txt = (key: string, label: ReactNode, opts: { required?: boolean; icon?: string; ph?: string; type?: string } = {}) => (
-    <Field label={label} required={opts.required} error={errors[key]}>
-      <Input
-        icon={opts.icon} type={opts.type} value={f[key]} placeholder={opts.ph}
-        error={!!errors[key]} onChange={(ev) => set(key, ev.target.value)}
-      />
-    </Field>
-  )
-  const sel = (key: string, label: ReactNode, options: Parameters<typeof Select>[0]['options'], req?: boolean) => (
-    <Field label={label} required={req} error={errors[key]}>
-      <Select options={options} value={f[key]} onChange={(ev) => set(key, ev.target.value)} />
-    </Field>
-  )
-  const area = (key: string, label: ReactNode, opts: { ph?: string } = {}) => (
-    <div style={{ gridColumn: '1 / -1' }}>
-      <Field label={label} error={errors[key]}>
-        <Textarea value={f[key]} placeholder={opts.ph} onChange={(ev) => set(key, ev.target.value)} />
-      </Field>
-    </div>
-  )
-  const upload = (key: string, label: ReactNode) => (
-    <Field label={label} error={errors[key]}>
-      <FileUpload value={files[key]} onChange={setFile(key)} ariaLabel={typeof label === 'string' ? label : key} />
-    </Field>
-  )
 
   return (
     <div>

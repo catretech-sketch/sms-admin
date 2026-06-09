@@ -5,6 +5,8 @@ export { Btn, IconBtn, Badge, TierPill, Avatar, Progress, Skeleton, Spinner } fr
 export type { BtnProps, IconBtnProps, BadgeTone } from './primitives'
 export { Field, Input, Textarea, Select, Toggle, Checkbox, Search, FileUpload } from './forms'
 export type { InputProps, TextareaProps, SelectProps, SelectOption } from './forms'
+export { useFormKit, fieldGrid } from './formKit'
+export type { FormState, FileState, TxtOpts } from './formKit'
 export { Tabs, Segmented, Breadcrumb, Popover, MenuItem, MenuSep, MenuLabel } from './nav'
 export type { TabItem, SegItem, Crumb } from './nav'
 export { Modal, Drawer, Tip } from './overlay'

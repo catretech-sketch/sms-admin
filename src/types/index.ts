@@ -89,6 +89,18 @@ export interface Student {
   documents?: StudentDocs
 }
 
+/* ---- Teacher enrolment sub-records (optional, mock) ---- */
+export interface BankInfo { holder?: string; account?: string; bank?: string; ifsc?: string; branch?: string }
+export interface EmergencyInfo { person?: string; relationship?: string; phone?: string }
+export interface TransportInfo { route?: string; vehicle?: string; pickup?: string }
+export interface HostelInfo { hostel?: string; room?: string }
+export interface SocialInfo { facebook?: string; instagram?: string; linkedin?: string; youtube?: string; twitter?: string }
+export interface LeaveInfo { medical?: number; casual?: number; sick?: number; maternity?: number }
+export interface TeacherDocs {
+  resume?: string; joiningLetter?: string; aadhaar?: string; pan?: string
+  experienceCert?: string; educationCert?: string; policeVerification?: string; other?: string
+}
+
 export interface Teacher {
   id: string
   name: string
@@ -107,6 +119,46 @@ export interface Teacher {
   status: ActiveStatus
   avatarHue: number
   top: boolean
+  /* ---- optional onboarding detail (added via the Add Teacher form) ---- */
+  dob?: string
+  bloodGroup?: string
+  maritalStatus?: string
+  altPhone?: string
+  fatherName?: string
+  motherName?: string
+  aadhaar?: string
+  pan?: string
+  nationality?: string
+  religion?: string
+  languages?: string
+  permanentAddress?: string
+  currentAddress?: string
+  photoName?: string
+  qualification?: string
+  specialization?: string
+  prevSchool?: string
+  prevSchoolAddress?: string
+  prevSchoolPhone?: string
+  dateOfJoining?: string
+  dateOfLeaving?: string
+  employeeType?: string
+  contractType?: string
+  workShift?: string
+  workLocation?: string
+  basicSalary?: string
+  epf?: string
+  uan?: string
+  username?: string
+  notes?: string
+  remarks?: string
+  signatureName?: string
+  bank?: BankInfo
+  emergency?: EmergencyInfo
+  transport?: TransportInfo
+  hostel?: HostelInfo
+  social?: SocialInfo
+  leaves?: LeaveInfo
+  documents?: TeacherDocs
 }
 
 export interface Staff {
