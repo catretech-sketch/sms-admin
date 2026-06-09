@@ -7,7 +7,7 @@
 import { useMemo, useState, type ComponentType, type ReactNode } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import {
-  PageHead, Card, CardHead, Btn, Badge, Field, Input, Select, FileUpload, Icon,
+  PageHead, Card, CardHead, Btn, Badge, Field, Input, Textarea, Select, FileUpload, Icon,
 } from '@/components/ui'
 import { grades, sections } from '@/data/mockDb'
 import { required, validateAadhaar, validateEmail, validatePhone, validateFile } from '@/lib/validation'
@@ -32,7 +32,7 @@ const INITIAL_FORM: Form = {
   academicYear: ACADEMIC_YEARS[0], adm: '', admissionDate: '', roll: '', status: 'active',
   firstName: '', lastName: '', cls: '', section: '', gender: '', dob: '',
   bloodGroup: '', house: '', religion: '', category: '', phone: '', email: '',
-  caste: '', motherTongue: '', languages: '', aadhaar: '',
+  caste: '', motherTongue: '', languages: '', lastSchool: '', address: '', aadhaar: '',
   fatherName: '', fatherEmail: '', fatherPhone: '', fatherOccupation: '', fatherAadhaar: '',
   motherName: '', motherEmail: '', motherPhone: '', motherOccupation: '',
 }
@@ -128,6 +128,8 @@ function AddStudentScreen() {
       caste: f.caste || undefined,
       motherTongue: f.motherTongue || undefined,
       languages: f.languages || undefined,
+      lastSchool: f.lastSchool || undefined,
+      address: f.address || undefined,
       email: f.email || undefined,
       aadhaar: f.aadhaar || undefined,
       photoName: files.studentPhoto?.name,
@@ -165,6 +167,13 @@ function AddStudentScreen() {
     <Field label={label} required={req} error={errors[key]}>
       <Select options={options} value={f[key]} onChange={(ev) => set(key, ev.target.value)} />
     </Field>
+  )
+  const area = (key: string, label: ReactNode, opts: { ph?: string } = {}) => (
+    <div style={{ gridColumn: '1 / -1' }}>
+      <Field label={label} error={errors[key]}>
+        <Textarea value={f[key]} placeholder={opts.ph} onChange={(ev) => set(key, ev.target.value)} />
+      </Field>
+    </div>
   )
   const upload = (key: string, label: ReactNode) => (
     <Field label={label} error={errors[key]}>
@@ -206,6 +215,8 @@ function AddStudentScreen() {
               {txt('caste', 'Caste')}
               {txt('motherTongue', 'Mother tongue', { ph: 'e.g. Hindi' })}
               {txt('languages', 'Languages known', { ph: 'e.g. Hindi, English' })}
+              {txt('lastSchool', 'Last school name', { icon: 'building', ph: 'Previous school attended' })}
+              {area('address', 'Address', { ph: 'Residential address' })}
               {txt('aadhaar', 'Aadhaar number', { ph: '12 digits' })}
               {upload('studentAadhaarDoc', 'Aadhaar card upload')}
               {upload('studentPhoto', 'Student photo')}

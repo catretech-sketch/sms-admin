@@ -79,6 +79,8 @@ export interface Student {
   caste?: string
   motherTongue?: string
   languages?: string
+  lastSchool?: string
+  address?: string
   email?: string
   aadhaar?: string
   photoName?: string
