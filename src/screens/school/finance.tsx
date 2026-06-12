@@ -9,12 +9,12 @@ import { useApp, useToast } from '@/lib/hooks'
 import { can } from '@/lib/gating'
 import {
   PageHead, Card, CardHead, Kpi, Btn, Badge, Avatar, Search, Select, Field, Input,
-  Modal, Icon, Empty, Bars, DataTable, type Column, type BadgeTone,
+  Modal, Tabs, Icon, Empty, Bars, DataTable, type Column, type BadgeTone,
 } from '@/components/ui'
 import { TierGate } from '@/components/shell/gates'
 import { students, teachers, staff, grades } from '@/data/mockDb'
 import { fmtMoney, fmtNum } from '@/lib/format'
-import type { Student, Teacher, Staff, FeeStatus } from '@/types'
+import type { Student, Teacher, Staff, FeeStatus, FeeType, FeePayment } from '@/types'
 
 /* ============================================================
    Fees collection
@@ -22,6 +22,12 @@ import type { Student, Teacher, Staff, FeeStatus } from '@/types'
 const feeTone: Record<FeeStatus, BadgeTone> = { paid: 'success', partial: 'warning', due: 'danger' }
 const feeLabel: Record<FeeStatus, string> = { paid: 'Paid', partial: 'Partial', due: 'Due' }
 const PAY_MODES = ['Cash', 'UPI', 'Card', 'Bank transfer', 'Cheque']
+const feeTypeMeta: Record<FeeType, { label: string; tone: BadgeTone }> = {
+  academic: { label: 'Academic', tone: 'brand' },
+  transport: { label: 'Transport (Bus)', tone: 'info' },
+  other: { label: 'Other', tone: 'neutral' },
+}
+const FEE_TYPE_OPTS = (Object.keys(feeTypeMeta) as FeeType[]).map((v) => ({ value: v, label: feeTypeMeta[v].label }))
 
 interface FeeRow { stu: Student; term: number; paid: number; due: number; status: FeeStatus }
 
@@ -44,14 +50,22 @@ function buildFeeRow(s: Student): FeeRow {
 /* ---------- Record-payment modal ---------- */
 function PaymentModal({ row, cur, onClose }: { row: FeeRow; cur: string; onClose: () => void }) {
   const toast = useToast()
+  const app = useApp()
   const [amount, setAmount] = useState(String(row.due || row.term))
   const [mode, setMode] = useState(PAY_MODES[1])
   const [ref, setRef] = useState('')
+  const [feeType, setFeeType] = useState<FeeType>('academic')
 
   const submit = () => {
     const n = Number(amount)
     if (!n || n <= 0) { toast.danger('Amount required', 'Enter a valid payment amount.'); return }
-    toast.success('Payment recorded', `${fmtMoney(n, cur)} · ${mode} · ${row.stu.name} (${row.stu.cls})`)
+    const payment: FeePayment = {
+      id: Date.now(), studentId: row.stu.id, studentName: row.stu.name, cls: row.stu.cls,
+      feeType, amount: n, mode, ref: ref.trim(),
+      date: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+    }
+    app.addFeePayment(payment)
+    toast.success('Payment recorded', `${fmtMoney(n, cur)} · ${feeTypeMeta[feeType].label} · ${mode} · ${row.stu.name} (${row.stu.cls})`)
     onClose()
   }
 
@@ -67,6 +81,9 @@ function PaymentModal({ row, cur, onClose }: { row: FeeRow; cur: string; onClose
       }
     >
       <div className="col gap16">
+        <Field label="Fee type" required>
+          <Select options={FEE_TYPE_OPTS} value={feeType} onChange={(e) => setFeeType(e.target.value as FeeType)} />
+        </Field>
         <Field label="Amount" required hint={`Term fee ${fmtMoney(row.term, cur)} · paid so far ${fmtMoney(row.paid, cur)}.`}>
           <Input icon="rupee" type="number" inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} />
         </Field>
@@ -121,6 +138,51 @@ function WaiverModal({ row, cur, onClose }: { row: FeeRow; cur: string; onClose:
   )
 }
 
+/* ---------- Fee history (saved payments) ---------- */
+function FeeHistoryTab({ cur }: { cur: string }) {
+  const app = useApp()
+  const [q, setQ] = useState('')
+  const [type, setType] = useState('all')
+
+  const rows = useMemo(() => {
+    const needle = q.trim().toLowerCase()
+    return app.feePayments.filter((p) => {
+      if (needle && !(p.studentName.toLowerCase().includes(needle) || p.cls.toLowerCase().includes(needle) || p.ref.toLowerCase().includes(needle))) return false
+      if (type !== 'all' && p.feeType !== type) return false
+      return true
+    })
+  }, [app.feePayments, q, type])
+
+  const columns: Column<FeePayment>[] = [
+    { key: 'date', label: 'Date', sortValue: (p) => p.id, render: (p) => <span className="muted">{p.date}</span> },
+    {
+      key: 'student', label: 'Student', sortValue: (p) => p.studentName,
+      render: (p) => <div><div className="fw6">{p.studentName}</div><div className="t-xs muted">{p.cls}</div></div>,
+    },
+    { key: 'feeType', label: 'Fee type', sortValue: (p) => p.feeType, render: (p) => <Badge tone={feeTypeMeta[p.feeType].tone}>{feeTypeMeta[p.feeType].label}</Badge> },
+    { key: 'amount', label: 'Amount', align: 'right', sortValue: (p) => p.amount, render: (p) => <span className="fw6">{fmtMoney(p.amount, cur)}</span> },
+    { key: 'mode', label: 'Mode', sortValue: (p) => p.mode, render: (p) => <Badge tone="neutral">{p.mode}</Badge> },
+    { key: 'ref', label: 'Reference', sortValue: (p) => p.ref, render: (p) => p.ref ? <span className="t-sm muted">{p.ref}</span> : <span className="muted">—</span> },
+  ]
+
+  return (
+    <Card pad={false}>
+      <div className="row ai-center gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
+        <Search value={q} onChange={setQ} placeholder="Search student, class, reference…" style={{ flex: 1, minWidth: 220 }} />
+        <Select options={[{ value: 'all', label: 'All fee types' }, ...FEE_TYPE_OPTS]} value={type} onChange={(e) => setType(e.target.value)} />
+      </div>
+      <DataTable<FeePayment>
+        columns={columns}
+        rows={rows}
+        pageSize={12}
+        rowKey={(p) => p.id}
+        initialSort={{ key: 'date', dir: 'desc' }}
+        empty={<Empty icon="wallet" title="No payments recorded yet" body="Recorded fee payments will appear here with their type and mode." />}
+      />
+    </Card>
+  )
+}
+
 function FeesScreen() {
   const app = useApp()
   const cur = app.school.currency
@@ -131,6 +193,7 @@ function FeesScreen() {
   const [status, setStatus] = useState('all')
   const [payRow, setPayRow] = useState<FeeRow | null>(null)
   const [waiveRow, setWaiveRow] = useState<FeeRow | null>(null)
+  const [tab, setTab] = useState('collection')
 
   const all = useMemo(() => students.map(buildFeeRow), [])
 
@@ -216,6 +279,13 @@ function FeesScreen() {
         }
       />
 
+      <div style={{ marginBottom: 16 }}>
+        <Tabs value={tab} onChange={setTab} tabs={[{ value: 'collection', label: 'Collection', icon: 'wallet' }, { value: 'history', label: 'History', icon: 'clock' }]} />
+      </div>
+
+      {tab === 'history' && <FeeHistoryTab cur={cur} />}
+
+      {tab === 'collection' && (<>
       {/* Live "payment received" cue */}
       {latest && (
         <Card className="row ai-center jc-between gap12 wrap" style={{ marginBottom: 16, borderColor: 'var(--success)' }}>
@@ -265,6 +335,8 @@ function FeesScreen() {
           empty={<Empty icon="wallet" title="No matching records" body="Try adjusting the search or status filter." />}
         />
       </Card>
+
+      </>)}
 
       {payRow && <PaymentModal key={payRow.stu.id} row={payRow} cur={cur} onClose={() => setPayRow(null)} />}
       {waiveRow && <WaiverModal key={waiveRow.stu.id} row={waiveRow} cur={cur} onClose={() => setWaiveRow(null)} />}
