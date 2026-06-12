@@ -39,4 +39,11 @@ describe('Timetable teacher/subject views', () => {
     fireEvent.click(seg().getByText('Subject'))
     expect(within(container).getByText(/view them by subject/i)).toBeInTheDocument()
   })
+
+  it('All classes overview shows the empty state with nothing built', () => {
+    const { container, clickTab, seg } = renderScreen()
+    clickTab('Timetable')
+    fireEvent.click(seg().getByText('All classes'))
+    expect(within(container).getByText(/class-wise overview/i)).toBeInTheDocument()
+  })
 })
