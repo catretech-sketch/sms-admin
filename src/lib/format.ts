@@ -62,3 +62,43 @@ export function attendanceMonths(stu: Student): MonthValue[] {
   const h = hash(stu.id)
   return months.map((m, i) => ({ label: m, value: Math.max(60, Math.min(100, stu.attendance + ((h >> i) % 14) - 7)) }))
 }
+
+/* ---- Toppers ranking (pure; pass an explicit student list) ---- */
+export type TopperMetric = 'exam' | 'attendance'
+export interface ScoredStudent { student: Student; score: number; secondary: number }
+export interface ClassTopperGroup { cls: string; toppers: ScoredStudent[] }
+
+export function examPct(stu: Student): number { return reportFor(stu).pct }
+
+function primaryScore(stu: Student, metric: TopperMetric): number {
+  return metric === 'exam' ? examPct(stu) : stu.attendance
+}
+function secondaryScore(stu: Student, metric: TopperMetric): number {
+  return metric === 'exam' ? stu.attendance : examPct(stu)
+}
+
+function rankStudents(list: Student[], metric: TopperMetric): ScoredStudent[] {
+  return list
+    .map((s) => ({ student: s, score: primaryScore(s, metric), secondary: secondaryScore(s, metric) }))
+    .sort((a, b) =>
+      b.score - a.score ||
+      b.secondary - a.secondary ||
+      a.student.id.localeCompare(b.student.id),
+    )
+}
+
+export function overallToppers(list: Student[], metric: TopperMetric, limit: number): ScoredStudent[] {
+  return rankStudents(list, metric).slice(0, limit)
+}
+
+export function classToppers(list: Student[], metric: TopperMetric, perClass: number): ClassTopperGroup[] {
+  const byCls = new Map<string, Student[]>()
+  for (const s of list) {
+    const arr = byCls.get(s.cls)
+    if (arr) arr.push(s)
+    else byCls.set(s.cls, [s])
+  }
+  return [...byCls.keys()]
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+    .map((cls) => ({ cls, toppers: overallToppers(byCls.get(cls)!, metric, perClass) }))
+}
