@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   cellKey, clashingClass, clashingClasses, teacherBusyElsewhere, pickTeacher, conflictsFor,
-  teacherLoads, clashingTeachers, type Grids,
+  teacherLoads, clashingTeachers, teacherSchedule, subjectSchedule, type Grids,
 } from './timetable'
 
 const grids: Grids = {
@@ -43,5 +43,36 @@ describe('timetable clash detection', () => {
     expect(clashingClasses(grids, 't1', 0, 0, 'IX-A')).toEqual(['IX-B'])
     expect(clashingClasses(grids, 't1', 0, 0, 'IX-C')).toEqual(['IX-A', 'IX-B'])
     expect(clashingClasses(grids, 't3', 0, 0, 'IX-A')).toEqual([])
+  })
+})
+
+describe('teacher/subject schedule derivation', () => {
+  const g: Grids = {
+    'X-A': { [cellKey(0, 0)]: { subject: 'Math', teacherId: 'T1' }, [cellKey(0, 1)]: { subject: 'Sci', teacherId: 'T2' } },
+    'X-B': { [cellKey(0, 0)]: { subject: 'Eng', teacherId: 'T1' }, [cellKey(1, 0)]: null },
+  }
+
+  it('teacherSchedule groups a teacher’s placements by slot across classes', () => {
+    const s = teacherSchedule(g, 'T1')
+    expect(s[cellKey(0, 0)]).toEqual([
+      { cls: 'X-A', subject: 'Math' },
+      { cls: 'X-B', subject: 'Eng' },
+    ])
+    expect(s[cellKey(0, 1)]).toBeUndefined()
+  })
+
+  it('teacherSchedule returns {} for an empty teacherId', () => {
+    expect(teacherSchedule(g, '')).toEqual({})
+  })
+
+  it('subjectSchedule groups a subject’s placements by slot', () => {
+    const s = subjectSchedule(g, 'Math')
+    expect(s[cellKey(0, 0)]).toEqual([{ cls: 'X-A', teacherId: 'T1' }])
+    expect(Object.keys(s)).toHaveLength(1)
+  })
+
+  it('returns {} when nothing matches', () => {
+    expect(teacherSchedule({}, 'T1')).toEqual({})
+    expect(subjectSchedule(g, 'Nonexistent')).toEqual({})
   })
 })

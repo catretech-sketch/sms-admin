@@ -102,3 +102,30 @@ export function clashingTeachers(grids: Grids): Set<string> {
   }
   return out
 }
+
+export interface TeacherSlotEntry { cls: string; subject: string }
+export interface SubjectSlotEntry { cls: string; teacherId: string }
+
+/** All of a teacher's placements, keyed by slot (2+ entries = clash). */
+export function teacherSchedule(grids: Grids, teacherId: string): Record<string, TeacherSlotEntry[]> {
+  const out: Record<string, TeacherSlotEntry[]> = {}
+  if (!teacherId) return out
+  for (const [cls, grid] of Object.entries(grids)) {
+    for (const [key, cell] of Object.entries(grid)) {
+      if (cell && cell.teacherId === teacherId) (out[key] ??= []).push({ cls, subject: cell.subject })
+    }
+  }
+  return out
+}
+
+/** All placements of a subject, keyed by slot (2+ entries = same-slot in two classes). */
+export function subjectSchedule(grids: Grids, subject: string): Record<string, SubjectSlotEntry[]> {
+  const out: Record<string, SubjectSlotEntry[]> = {}
+  if (!subject) return out
+  for (const [cls, grid] of Object.entries(grids)) {
+    for (const [key, cell] of Object.entries(grid)) {
+      if (cell && cell.subject === subject) (out[key] ??= []).push({ cls, teacherId: cell.teacherId })
+    }
+  }
+  return out
+}
