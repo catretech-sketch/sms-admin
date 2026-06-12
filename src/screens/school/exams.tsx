@@ -14,7 +14,7 @@ import {
 } from '@/components/ui'
 import { students, subjects, grades, sections } from '@/data/mockDb'
 import { reportFor, classRank, gradeFor, studentSubjectMarks } from '@/lib/format'
-import { markKey, marksProgress } from '@/lib/examData'
+import { markKey, attKey, marksProgress } from '@/lib/examData'
 import type { Exam, Student } from '@/types'
 
 /* ---------- sample invigilator pool (frontend-only) ---------- */
@@ -406,6 +406,105 @@ function MarksEntryTab() {
 }
 
 /* ============================================================
+   Tab — Exam attendance (present/absent per paper)
+   ============================================================ */
+function ExamAttendanceTab() {
+  const app = useApp()
+  const toast = useToast()
+  const editable = can(app.role, 'exams', 'E')
+
+  const [examId, setExamId] = useState(app.exams[0]?.id ?? '')
+  const [grade, setGrade] = useState('VI')
+  const [section, setSection] = useState('A')
+  const [subject, setSubject] = useState(subjects[0])
+  const cls = grade + '-' + section
+
+  const roster = useMemo(
+    () => students.filter((s) => s.cls === cls).sort((a, b) => a.roll - b.roll),
+    [cls],
+  )
+
+  const load = (): Record<string, 'present' | 'absent'> => {
+    const out: Record<string, 'present' | 'absent'> = {}
+    roster.forEach((s) => { out[s.id] = app.examAttendance[attKey(examId, s.id, subject)] ?? 'present' })
+    return out
+  }
+
+  const [att, setAtt] = useState<Record<string, 'present' | 'absent'>>(load)
+  useEffect(() => { setAtt(load()) }, [roster, subject, examId])
+
+  const present = roster.filter((s) => (att[s.id] ?? 'present') === 'present').length
+  const absent = roster.length - present
+  const exam = app.exams.find((e) => e.id === examId)
+
+  const save = () => {
+    const entries: Record<string, 'present' | 'absent'> = {}
+    roster.forEach((s) => { entries[attKey(examId, s.id, subject)] = att[s.id] ?? 'present' })
+    app.saveExamAttendance(entries)
+    toast.success('Attendance saved', `${present} present · ${absent} absent for ${cls} · ${subject} · ${exam?.name ?? ''}.`)
+  }
+
+  return (
+    <Card pad={false}>
+      <div className="row ai-center gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
+        <CardHead title="Exam attendance" sub={`${cls} · ${subject} · ${roster.length} students`} icon="calendar" />
+        <div className="row gap8 ai-center wrap" style={{ marginLeft: 'auto' }}>
+          <Select options={app.exams.map((e) => ({ value: e.id, label: e.name }))} value={examId} onChange={(e) => setExamId(e.target.value)} />
+          <Select options={grades.slice(4)} value={grade} onChange={(e) => setGrade(e.target.value)} />
+          <Select options={sections} value={section} onChange={(e) => setSection(e.target.value)} />
+          <Select options={subjects} value={subject} onChange={(e) => setSubject(e.target.value)} />
+        </div>
+      </div>
+
+      {roster.length === 0 ? (
+        <Empty icon="users" title="No students in this class" body="Pick another grade or section." />
+      ) : (
+        <>
+          <div className="row ai-center gap20 wrap" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+            <span className="t-sm">Present <span className="fw7" style={{ color: 'var(--success)' }}>{present}</span></span>
+            <span className="t-sm">Absent <span className="fw7" style={{ color: 'var(--danger)' }}>{absent}</span></span>
+            <span className="t-sm">Total <span className="fw7">{roster.length}</span></span>
+          </div>
+          <table className="sm-table">
+            <thead>
+              <tr>
+                <th style={{ width: 60 }}>Roll</th>
+                <th>Student</th>
+                <th className="ta-center" style={{ width: 200 }}>Attendance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {roster.map((s) => {
+                const v = att[s.id] ?? 'present'
+                return (
+                  <tr key={s.id}>
+                    <td className="muted">{s.roll}</td>
+                    <td className="fw6">{s.name}</td>
+                    <td className="ta-center">
+                      <div className="row gap6 jc-center">
+                        <Btn variant={v === 'present' ? 'primary' : 'secondary'} size="sm" disabled={!editable}
+                          onClick={() => setAtt((m) => ({ ...m, [s.id]: 'present' }))}>Present</Btn>
+                        <Btn variant={v === 'absent' ? 'primary' : 'secondary'} size="sm" disabled={!editable}
+                          onClick={() => setAtt((m) => ({ ...m, [s.id]: 'absent' }))}>Absent</Btn>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          <div className="row jc-end gap8" style={{ padding: 16, borderTop: '1px solid var(--border)' }}>
+            {editable
+              ? <Btn variant="primary" icon="check" onClick={save}>Save attendance</Btn>
+              : <Badge tone="neutral" icon="eye">View only</Badge>}
+          </div>
+        </>
+      )}
+    </Card>
+  )
+}
+
+/* ============================================================
    Report card modal — printable
    ============================================================ */
 function ReportCardModal({ student, onClose }: { student: Student | null; onClose: () => void }) {
@@ -563,6 +662,7 @@ function ExamsScreen() {
   const tabs = [
     { value: 'exams', label: 'Exams & tests', icon: 'clipboard' },
     { value: 'marks', label: 'Marks entry', icon: 'edit' },
+    { value: 'attendance', label: 'Exam attendance', icon: 'calendar' },
     { value: 'reports', label: 'Report cards', icon: 'cap' },
   ]
 
@@ -575,6 +675,7 @@ function ExamsScreen() {
 
       {tab === 'exams' && <ExamsListTab onDatesheet={setDatesheetExam} onReports={() => setTab('reports')} />}
       {tab === 'marks' && <MarksEntryTab />}
+      {tab === 'attendance' && <ExamAttendanceTab />}
       {tab === 'reports' && <ReportCardsTab />}
 
       <DatesheetDrawer exam={datesheetExam} onClose={() => setDatesheetExam(null)} />
