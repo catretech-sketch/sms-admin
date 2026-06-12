@@ -60,16 +60,19 @@ Extend report building so report cards reflect entered marks. In
 export function reportFor(
   stu: Student,
   examId?: string,
-  getMark?: (subject: string) => number | undefined,
+  getMark?: (studentId: string, subject: string) => number | undefined,
 ): Report
 ```
 
-For each subject, use `getMark(subject)` when it returns a number,
+For each subject, use `getMark(stu.id, subject)` when it returns a number,
 otherwise the existing `studentSubjectMarks(stu, subject, examId)`. All
-current callers pass no `getMark`, so behavior is unchanged.
+current callers pass no `getMark`, so behavior is unchanged. The override
+keys on `studentId` (not just subject) so `classRank` can apply it
+correctly across every peer in the class.
 
 `classRank(stu, examId?, getMark?)` gains the same optional param and
-forwards it to `reportFor` so ranks reflect entered marks when supplied.
+forwards it to `reportFor` for each peer, so ranks reflect entered marks
+when supplied.
 
 ## 3. Persist exam creation (`CreateExamModal`)
 
@@ -141,10 +144,10 @@ column then shows "Published". If already published, the button reads
 ## 7. Report cards tab (`ReportCardsTab`, `ReportCardModal`)
 
 - Add the same **Exam selector** (default first exam).
-- Build a per-exam `getMark = (subject) => app.examMarks[markKey(examId,
-  student.id, subject)]` and pass it into `reportFor(student, examId,
-  getMark)` and `classRank(student, examId, getMark)` so cards reflect
-  entered marks (falling back to the seed where unentered).
+- Build a per-exam `getMark = (sid, subject) => app.examMarks[markKey(examId,
+  sid, subject)]` and pass it into `reportFor(student, examId, getMark)` and
+  `classRank(student, examId, getMark)` so cards reflect entered marks
+  (falling back to the seed where unentered).
 
 ## Testing
 
