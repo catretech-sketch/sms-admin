@@ -34,12 +34,18 @@ describe('Fee collection history', () => {
     expect(within(container).getAllByText('Transport (Bus)').length).toBeGreaterThan(0)
   })
 
-  it('shows the fee structure grid and saves edits', () => {
+  it('shows configurable fee heads, adds one, and saves', () => {
     const { container, clickTab } = renderScreen()
     clickTab('Structure')
+    // default heads render as column headers
     expect(within(container).getByText('Academic')).toBeInTheDocument()
     expect(within(container).getByText('Transport')).toBeInTheDocument()
     expect(within(container).getByText('Other')).toBeInTheDocument()
+    // add a custom head
+    fireEvent.change(within(container).getByPlaceholderText(/New fee head/i), { target: { value: 'Lab fee' } })
+    fireEvent.click(within(container).getByText('Add fee head'))
+    expect(within(container).getByText('Lab fee')).toBeInTheDocument()
+    // edit an amount + save
     const firstAmount = within(container).getAllByRole('spinbutton')[0] as HTMLInputElement
     fireEvent.change(firstAmount, { target: { value: '50000' } })
     fireEvent.click(within(container).getByText('Save structure'))
