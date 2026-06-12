@@ -3,7 +3,7 @@
    plan, language, view navigation.
    ============================================================ */
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
-import type { ConsoleKind, Exam, PaperSlot, Role, School, Staff, Student, Teacher, Tier } from '@/types'
+import type { ConsoleKind, Exam, FeePayment, PaperSlot, Role, School, Staff, Student, Teacher, Tier } from '@/types'
 import { schools, students as seedStudents, teachers as seedTeachers, staff as seedStaff, exams as seedExams } from '@/data/mockDb'
 
 export interface DemoAccount {
@@ -63,6 +63,9 @@ interface AppState {
   /* per-exam datesheets (in-session) */
   datesheets: Record<string, PaperSlot[]>
   saveDatesheet: (examId: string, slots: PaperSlot[]) => void
+  /* fee payment history (in-session) */
+  feePayments: FeePayment[]
+  addFeePayment: (p: FeePayment) => void
   /* actions */
   login: (email: string) => void
   logout: () => void
@@ -113,6 +116,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [datesheets, setDatesheets] = useState<Record<string, PaperSlot[]>>({})
   const saveDatesheet = (examId: string, slots: PaperSlot[]) =>
     setDatesheets((m) => ({ ...m, [examId]: slots }))
+  const [feePayments, setFeePayments] = useState<FeePayment[]>([])
+  const addFeePayment = (p: FeePayment) => setFeePayments((list) => [p, ...list])
 
   const school = useMemo(() => schools.find((s) => s.id === schoolId) ?? schools[0], [schoolId])
   const plan: Tier = planOverride[schoolId] ?? school.plan
@@ -174,6 +179,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     staff, addStaff,
     exams, addExam, updateExam, examMarks, saveExamMarks, examAttendance, saveExamAttendance,
     datesheets, saveDatesheet,
+    feePayments, addFeePayment,
     login, logout, go, clearIntent, setSchoolId, enterSchool, exitToOwner, upgrade, setLang, setMobileNav,
   }
 

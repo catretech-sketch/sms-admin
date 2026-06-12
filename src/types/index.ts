@@ -10,6 +10,18 @@ export type ConsoleKind = 'owner' | 'school'
 
 export type SchoolStatus = 'active' | 'trial' | 'past_due'
 export type FeeStatus = 'paid' | 'partial' | 'due'
+export type FeeType = 'academic' | 'transport' | 'other'
+export interface FeePayment {
+  id: number
+  studentId: string
+  studentName: string
+  cls: string
+  feeType: FeeType
+  amount: number
+  mode: string
+  ref: string
+  date: string
+}
 export type ActiveStatus = 'active' | 'inactive'
 export type BusStatus = 'on_route' | 'at_stop' | 'delayed' | 'idle' | 'maintenance'
 
