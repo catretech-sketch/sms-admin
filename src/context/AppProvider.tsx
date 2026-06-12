@@ -3,8 +3,8 @@
    plan, language, view navigation.
    ============================================================ */
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
-import type { ConsoleKind, Role, School, Staff, Student, Teacher, Tier } from '@/types'
-import { schools, students as seedStudents, teachers as seedTeachers, staff as seedStaff } from '@/data/mockDb'
+import type { ConsoleKind, Exam, Role, School, Staff, Student, Teacher, Tier } from '@/types'
+import { schools, students as seedStudents, teachers as seedTeachers, staff as seedStaff, exams as seedExams } from '@/data/mockDb'
 
 export interface DemoAccount {
   email: string
@@ -52,6 +52,14 @@ interface AppState {
   /* non-teaching staff roster (seeded, with in-session additions) */
   staff: Staff[]
   addStaff: (staff: Staff) => void
+  /* exams + per-exam marks & attendance (in-session) */
+  exams: Exam[]
+  addExam: (exam: Exam) => void
+  updateExam: (id: string, patch: Partial<Exam>) => void
+  examMarks: Record<string, number>
+  saveExamMarks: (entries: Record<string, number>) => void
+  examAttendance: Record<string, 'present' | 'absent'>
+  saveExamAttendance: (entries: Record<string, 'present' | 'absent'>) => void
   /* actions */
   login: (email: string) => void
   logout: () => void
@@ -89,6 +97,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const addTeacher = (teacher: Teacher) => setTeachers((list) => [teacher, ...list])
   const [staff, setStaff] = useState<Staff[]>(seedStaff)
   const addStaff = (s: Staff) => setStaff((list) => [s, ...list])
+  const [exams, setExams] = useState<Exam[]>(seedExams)
+  const addExam = (exam: Exam) => setExams((list) => [exam, ...list])
+  const updateExam = (id: string, patch: Partial<Exam>) =>
+    setExams((list) => list.map((e) => (e.id === id ? { ...e, ...patch } : e)))
+  const [examMarks, setExamMarks] = useState<Record<string, number>>({})
+  const saveExamMarks = (entries: Record<string, number>) =>
+    setExamMarks((m) => ({ ...m, ...entries }))
+  const [examAttendance, setExamAttendance] = useState<Record<string, 'present' | 'absent'>>({})
+  const saveExamAttendance = (entries: Record<string, 'present' | 'absent'>) =>
+    setExamAttendance((m) => ({ ...m, ...entries }))
 
   const school = useMemo(() => schools.find((s) => s.id === schoolId) ?? schools[0], [schoolId])
   const plan: Tier = planOverride[schoolId] ?? school.plan
@@ -148,6 +166,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     students, addStudent,
     teachers, addTeacher,
     staff, addStaff,
+    exams, addExam, updateExam, examMarks, saveExamMarks, examAttendance, saveExamAttendance,
     login, logout, go, clearIntent, setSchoolId, enterSchool, exitToOwner, upgrade, setLang, setMobileNav,
   }
 

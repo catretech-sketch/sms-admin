@@ -32,7 +32,7 @@ describe('reportFor getMark override', () => {
     expect(r.rows.every((row) => row.marks === 100)).toBe(true)
 
     const seeded = reportFor(stu)
-    const partial = reportFor(stu, undefined, (sid, subject) =>
+    const partial = reportFor(stu, undefined, (_sid, subject) =>
       subject === 'English' ? 100 : undefined,
     )
     // English overridden to 100; other subjects keep their seeded marks
