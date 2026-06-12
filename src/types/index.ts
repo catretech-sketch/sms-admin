@@ -246,6 +246,17 @@ export interface Exam {
   published: boolean
 }
 
+export interface PaperSlot {
+  id: number
+  subject: string
+  date: string        // yyyy-mm-dd
+  start: string       // HH:MM (24h)
+  duration: number    // minutes
+  room: string
+  inv1: string
+  inv2: string
+}
+
 export interface Approval {
   id: string
   type: string
