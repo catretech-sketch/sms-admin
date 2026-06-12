@@ -3,7 +3,7 @@
    plan, language, view navigation.
    ============================================================ */
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
-import type { ConsoleKind, Exam, Role, School, Staff, Student, Teacher, Tier } from '@/types'
+import type { ConsoleKind, Exam, PaperSlot, Role, School, Staff, Student, Teacher, Tier } from '@/types'
 import { schools, students as seedStudents, teachers as seedTeachers, staff as seedStaff, exams as seedExams } from '@/data/mockDb'
 
 export interface DemoAccount {
@@ -60,6 +60,9 @@ interface AppState {
   saveExamMarks: (entries: Record<string, number>) => void
   examAttendance: Record<string, 'present' | 'absent'>
   saveExamAttendance: (entries: Record<string, 'present' | 'absent'>) => void
+  /* per-exam datesheets (in-session) */
+  datesheets: Record<string, PaperSlot[]>
+  saveDatesheet: (examId: string, slots: PaperSlot[]) => void
   /* actions */
   login: (email: string) => void
   logout: () => void
@@ -107,6 +110,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [examAttendance, setExamAttendance] = useState<Record<string, 'present' | 'absent'>>({})
   const saveExamAttendance = (entries: Record<string, 'present' | 'absent'>) =>
     setExamAttendance((m) => ({ ...m, ...entries }))
+  const [datesheets, setDatesheets] = useState<Record<string, PaperSlot[]>>({})
+  const saveDatesheet = (examId: string, slots: PaperSlot[]) =>
+    setDatesheets((m) => ({ ...m, [examId]: slots }))
 
   const school = useMemo(() => schools.find((s) => s.id === schoolId) ?? schools[0], [schoolId])
   const plan: Tier = planOverride[schoolId] ?? school.plan
@@ -167,6 +173,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     teachers, addTeacher,
     staff, addStaff,
     exams, addExam, updateExam, examMarks, saveExamMarks, examAttendance, saveExamAttendance,
+    datesheets, saveDatesheet,
     login, logout, go, clearIntent, setSchoolId, enterSchool, exitToOwner, upgrade, setLang, setMobileNav,
   }
 
