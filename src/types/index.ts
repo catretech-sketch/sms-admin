@@ -161,6 +161,11 @@ export interface Teacher {
   documents?: TeacherDocs
 }
 
+export interface StaffDocs {
+  resume?: string; joiningLetter?: string; aadhaar?: string; pan?: string
+  experienceCert?: string; educationCert?: string; other?: string
+}
+
 export interface Staff {
   id: string
   name: string
@@ -174,6 +179,40 @@ export interface Staff {
   attendance: number
   status: ActiveStatus
   avatarHue: number
+  /* ---- optional onboarding detail (added via the Add Staff form) ---- */
+  dob?: string
+  bloodGroup?: string
+  maritalStatus?: string
+  altPhone?: string
+  email?: string
+  fatherName?: string
+  motherName?: string
+  aadhaar?: string
+  pan?: string
+  nationality?: string
+  religion?: string
+  languages?: string
+  permanentAddress?: string
+  currentAddress?: string
+  photoName?: string
+  designation?: string
+  employeeType?: string
+  contractType?: string
+  workLocation?: string
+  dateOfJoining?: string
+  dateOfLeaving?: string
+  basicSalary?: string
+  epf?: string
+  uan?: string
+  username?: string
+  notes?: string
+  remarks?: string
+  signatureName?: string
+  bank?: BankInfo
+  emergency?: EmergencyInfo
+  transport?: TransportInfo
+  social?: SocialInfo
+  documents?: StaffDocs
 }
 
 export interface Bus {
