@@ -14,6 +14,7 @@ import {
 } from '@/components/ui'
 import { students, subjects, grades, sections } from '@/data/mockDb'
 import { reportFor, classRank, gradeFor, studentSubjectMarks } from '@/lib/format'
+import { markKey, marksProgress } from '@/lib/examData'
 import type { Exam, Student } from '@/types'
 
 /* ---------- sample invigilator pool (frontend-only) ---------- */
@@ -294,17 +295,12 @@ function ExamsListTab({ onDatesheet, onReports }: { onDatesheet: (e: Exam) => vo
 /* ============================================================
    Tab 2 — Marks entry grid (auto-grade, live pass/fail)
    ============================================================ */
-function seedMarks(roster: Student[], subject: string): Record<string, number> {
-  const out: Record<string, number> = {}
-  roster.forEach((s) => { out[s.id] = studentSubjectMarks(s, subject) })
-  return out
-}
-
 function MarksEntryTab() {
   const app = useApp()
   const toast = useToast()
   const editable = can(app.role, 'exams', 'E')
 
+  const [examId, setExamId] = useState(app.exams[0]?.id ?? '')
   const [grade, setGrade] = useState('VI')
   const [section, setSection] = useState('A')
   const [subject, setSubject] = useState(subjects[0])
@@ -315,8 +311,17 @@ function MarksEntryTab() {
     [cls],
   )
 
-  const [marks, setMarks] = useState<Record<string, number>>(() => seedMarks(roster, subject))
-  useEffect(() => { setMarks(seedMarks(roster, subject)) }, [roster, subject])
+  const loadMarks = (): Record<string, number> => {
+    const out: Record<string, number> = {}
+    roster.forEach((s) => {
+      const saved = app.examMarks[markKey(examId, s.id, subject)]
+      out[s.id] = saved ?? studentSubjectMarks(s, subject)
+    })
+    return out
+  }
+
+  const [marks, setMarks] = useState<Record<string, number>>(loadMarks)
+  useEffect(() => { setMarks(loadMarks()) }, [roster, subject, examId])
 
   const setMark = (id: string, raw: string) => {
     const n = Math.max(0, Math.min(100, Math.round(Number(raw) || 0)))
@@ -327,11 +332,24 @@ function MarksEntryTab() {
   const avg = entered.length ? +(entered.reduce((a, b) => a + b, 0) / entered.length).toFixed(1) : 0
   const passCount = entered.filter((v) => v >= 33).length
 
+  const exam = app.exams.find((e) => e.id === examId)
+
+  const save = () => {
+    if (!exam) { toast.danger('Pick an exam', 'Select an exam to save marks against.'); return }
+    const entries: Record<string, number> = {}
+    roster.forEach((s) => { entries[markKey(examId, s.id, subject)] = marks[s.id] ?? 0 })
+    app.saveExamMarks(entries)
+    const merged = { ...app.examMarks, ...entries }
+    app.updateExam(examId, { status: 'marks_entry', marksEntered: marksProgress(merged, examId, exam.subjects) })
+    toast.success('Marks saved', `${roster.length} entries saved for ${cls} · ${subject} · ${exam.name}.`)
+  }
+
   return (
     <Card pad={false}>
       <div className="row ai-center gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
         <CardHead title="Marks entry" sub={`${cls} · ${subject} · ${roster.length} students`} icon="edit" />
-        <div className="row gap8 ai-center" style={{ marginLeft: 'auto' }}>
+        <div className="row gap8 ai-center wrap" style={{ marginLeft: 'auto' }}>
+          <Select options={app.exams.map((e) => ({ value: e.id, label: e.name }))} value={examId} onChange={(e) => setExamId(e.target.value)} />
           <Select options={grades.slice(4)} value={grade} onChange={(e) => setGrade(e.target.value)} />
           <Select options={sections} value={section} onChange={(e) => setSection(e.target.value)} />
           <Select options={subjects} value={subject} onChange={(e) => setSubject(e.target.value)} />
@@ -378,7 +396,7 @@ function MarksEntryTab() {
           </table>
           <div className="row jc-end gap8" style={{ padding: 16, borderTop: '1px solid var(--border)' }}>
             {editable
-              ? <Btn variant="primary" icon="check" onClick={() => toast.success('Marks saved', `${roster.length} entries saved for ${cls} · ${subject}.`)}>Save marks</Btn>
+              ? <Btn variant="primary" icon="check" onClick={save}>Save marks</Btn>
               : <Badge tone="neutral" icon="eye">View only</Badge>}
           </div>
         </>
