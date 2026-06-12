@@ -221,7 +221,7 @@ function DatesheetDrawer({ exam, onClose }: { exam: Exam | null; onClose: () => 
 /* ============================================================
    Tab 1 — Exams & tests list
    ============================================================ */
-function ExamsListTab({ onDatesheet, onReports }: { onDatesheet: (e: Exam) => void; onReports: () => void }) {
+function ExamsListTab({ onDatesheet, onPublish }: { onDatesheet: (e: Exam) => void; onPublish: (e: Exam) => void }) {
   const app = useApp()
   const [createOpen, setCreateOpen] = useState(false)
   const editable = can(app.role, 'exams', 'E') || can(app.role, 'exams', 'A')
@@ -264,7 +264,7 @@ function ExamsListTab({ onDatesheet, onReports }: { onDatesheet: (e: Exam) => vo
       render: (e) => (
         <div className="row gap8 jc-end" onClick={(ev) => ev.stopPropagation()}>
           <Btn variant="secondary" size="sm" icon="calendar" onClick={() => onDatesheet(e)}>Datesheet</Btn>
-          <Btn variant="ghost" size="sm" icon="clipboard" onClick={onReports}>Report cards</Btn>
+          <Btn variant={e.published ? 'ghost' : 'primary'} size="sm" icon="check" onClick={() => onPublish(e)}>{e.published ? 'Published' : 'Publish'}</Btn>
         </div>
       ),
     },
@@ -652,12 +652,93 @@ function ReportCardsTab() {
 }
 
 /* ============================================================
+   Publish results — audience + preview
+   ============================================================ */
+function firstClassOfExam(): string {
+  return clsOptions[0] // 'VI-A'
+}
+
+function PublishResultsModal({ exam, onClose }: { exam: Exam | null; onClose: () => void }) {
+  const app = useApp()
+  const toast = useToast()
+  const canPublish = can(app.role, 'exams', 'A')
+  if (!exam) return null
+
+  const cls = firstClassOfExam()
+  const roster = students.filter((s) => s.cls === cls).sort((a, b) => a.roll - b.roll)
+  const getMark = (sid: string, subject: string) => app.examMarks[markKey(exam.id, sid, subject)]
+  const sample = roster[0]
+  const report = sample ? reportFor(sample, exam.id, getMark) : null
+  const classAvg = roster.length
+    ? +(roster.reduce((a, s) => a + reportFor(s, exam.id, getMark).pct, 0) / roster.length).toFixed(1)
+    : 0
+  const classPass = roster.filter((s) => reportFor(s, exam.id, getMark).result === 'PASS').length
+
+  const publish = () => {
+    app.updateExam(exam.id, { published: true, status: 'completed' })
+    toast.success('Results published', `${exam.name} released to teachers, parents & students.`)
+    onClose()
+  }
+
+  return (
+    <Modal
+      open={!!exam} onClose={onClose} size="lg" icon="clipboard"
+      title={exam.published ? 'Published results' : 'Publish results'}
+      sub={`${exam.name} · ${exam.grades}`}
+      footer={
+        <div className="row gap8 jc-end">
+          <Btn variant="ghost" onClick={onClose}>Close</Btn>
+          {canPublish && !exam.published && (
+            <Btn variant="primary" icon="check" onClick={publish}>Publish to all</Btn>
+          )}
+          {exam.published && <Badge tone="success" icon="check">Published</Badge>}
+        </div>
+      }
+    >
+      <div className="col gap16">
+        <div>
+          <div className="t-sm muted" style={{ marginBottom: 8 }}>Visible to</div>
+          <div className="row gap8 wrap">
+            <Badge tone="brand" icon="cap">Teachers</Badge>
+            <Badge tone="info" icon="users">Parents</Badge>
+            <Badge tone="success" icon="user">Students</Badge>
+          </div>
+        </div>
+
+        <Card>
+          <CardHead title="Teachers see" sub={`${cls} summary`} icon="cap" />
+          <div className="row gap20 wrap" style={{ marginTop: 8 }}>
+            <div><div className="t-xs muted">Class average</div><div className="fw7 t-lg">{classAvg}%</div></div>
+            <div><div className="t-xs muted">Passing</div><div className="fw7 t-lg">{classPass}/{roster.length}</div></div>
+          </div>
+        </Card>
+
+        <Card>
+          <CardHead title="Parents & students see" sub={sample ? `${sample.name} · ${cls}` : cls} icon="user" />
+          {report ? (
+            <div className="row ai-center jc-between wrap gap16" style={{ marginTop: 8 }}>
+              <div className="row gap20 wrap">
+                <div><div className="t-xs muted">Percentage</div><div className="fw7 t-lg">{report.pct}%</div></div>
+                <div><div className="t-xs muted">Grade</div><div className="fw7 t-lg">{report.grade}</div></div>
+                <div><div className="t-xs muted">Result</div><div className="fw7 t-lg">{report.result}</div></div>
+              </div>
+              <Badge tone={report.result === 'PASS' ? 'success' : 'danger'} solid>{report.result}</Badge>
+            </div>
+          ) : <Empty icon="users" title="No students" body="No roster to preview." />}
+        </Card>
+      </div>
+    </Modal>
+  )
+}
+
+/* ============================================================
    ExamsScreen — hub with internal tabs
    ============================================================ */
 function ExamsScreen() {
   const app = useApp()
   const [tab, setTab] = useState('exams')
   const [datesheetExam, setDatesheetExam] = useState<Exam | null>(null)
+  const [publishExam, setPublishExam] = useState<Exam | null>(null)
 
   const tabs = [
     { value: 'exams', label: 'Exams & tests', icon: 'clipboard' },
@@ -673,12 +754,13 @@ function ExamsScreen() {
         <Tabs value={tab} onChange={setTab} tabs={tabs} />
       </div>
 
-      {tab === 'exams' && <ExamsListTab onDatesheet={setDatesheetExam} onReports={() => setTab('reports')} />}
+      {tab === 'exams' && <ExamsListTab onDatesheet={setDatesheetExam} onPublish={setPublishExam} />}
       {tab === 'marks' && <MarksEntryTab />}
       {tab === 'attendance' && <ExamAttendanceTab />}
       {tab === 'reports' && <ReportCardsTab />}
 
       <DatesheetDrawer exam={datesheetExam} onClose={() => setDatesheetExam(null)} />
+      <PublishResultsModal exam={publishExam} onClose={() => setPublishExam(null)} />
     </div>
   )
 }
