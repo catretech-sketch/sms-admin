@@ -183,6 +183,76 @@ function FeeHistoryTab({ cur }: { cur: string }) {
   )
 }
 
+/* ---------- Fee structure (per-grade amounts) ---------- */
+const STRUCTURE_GRADES = grades.slice(4)
+type StructRow = Record<FeeType, number>
+const defaultStruct = (g: string): StructRow => ({ academic: termFeeFor(g), transport: 18000, other: 0 })
+
+function FeeStructureTab({ cur, editable }: { cur: string; editable: boolean }) {
+  const app = useApp()
+  const toast = useToast()
+  const [draft, setDraft] = useState<Record<string, StructRow>>(() => {
+    const out: Record<string, StructRow> = {}
+    STRUCTURE_GRADES.forEach((g) => { out[g] = app.feeStructure[g] ?? defaultStruct(g) })
+    return out
+  })
+
+  const setCell = (g: string, head: FeeType, raw: string) => {
+    const n = Math.max(0, Math.round(Number(raw) || 0))
+    setDraft((d) => ({ ...d, [g]: { ...d[g], [head]: n } }))
+  }
+  const rowTotal = (r: StructRow) => r.academic + r.transport + r.other
+  const grandTotal = STRUCTURE_GRADES.reduce((a, g) => a + rowTotal(draft[g]), 0)
+
+  const save = () => {
+    app.saveFeeStructure(draft)
+    toast.success('Fee structure saved', `${STRUCTURE_GRADES.length} grades updated.`)
+  }
+
+  return (
+    <Card pad={false}>
+      <div className="row ai-center jc-between gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
+        <div><div className="fw6">Fee structure</div><div className="t-sm muted">Per-grade amounts by fee head · {cur}</div></div>
+        {editable
+          ? <Btn variant="primary" icon="check" onClick={save}>Save structure</Btn>
+          : <Badge tone="neutral" icon="eye">View only</Badge>}
+      </div>
+      <table className="sm-table">
+        <thead>
+          <tr>
+            <th>Grade</th>
+            <th className="ta-right">Academic</th>
+            <th className="ta-right">Transport</th>
+            <th className="ta-right">Other</th>
+            <th className="ta-right">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {STRUCTURE_GRADES.map((g) => {
+            const r = draft[g]
+            return (
+              <tr key={g}>
+                <td className="fw6">Grade {g}</td>
+                {(['academic', 'transport', 'other'] as FeeType[]).map((head) => (
+                  <td key={head} className="ta-right" style={{ width: 140 }}>
+                    <Input type="number" min={0} value={String(r[head])} disabled={!editable}
+                      style={{ width: 120, textAlign: 'right' }}
+                      onChange={(e) => setCell(g, head, e.target.value)} />
+                  </td>
+                ))}
+                <td className="ta-right fw7">{fmtMoney(rowTotal(r), cur)}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+      <div className="row jc-end" style={{ padding: 16, borderTop: '1px solid var(--border)' }}>
+        <span className="t-sm">Grand total (all grades) <span className="fw7">{fmtMoney(grandTotal, cur)}</span></span>
+      </div>
+    </Card>
+  )
+}
+
 function FeesScreen() {
   const app = useApp()
   const cur = app.school.currency
@@ -280,10 +350,11 @@ function FeesScreen() {
       />
 
       <div style={{ marginBottom: 16 }}>
-        <Tabs value={tab} onChange={setTab} tabs={[{ value: 'collection', label: 'Collection', icon: 'wallet' }, { value: 'history', label: 'History', icon: 'clock' }]} />
+        <Tabs value={tab} onChange={setTab} tabs={[{ value: 'collection', label: 'Collection', icon: 'wallet' }, { value: 'history', label: 'History', icon: 'clock' }, { value: 'structure', label: 'Structure', icon: 'rupee' }]} />
       </div>
 
       {tab === 'history' && <FeeHistoryTab cur={cur} />}
+      {tab === 'structure' && <FeeStructureTab cur={cur} editable={canRecord} />}
 
       {tab === 'collection' && (<>
       {/* Live "payment received" cue */}
