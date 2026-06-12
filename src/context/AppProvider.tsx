@@ -3,8 +3,8 @@
    plan, language, view navigation.
    ============================================================ */
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
-import type { ConsoleKind, Role, School, Student, Teacher, Tier } from '@/types'
-import { schools, students as seedStudents, teachers as seedTeachers } from '@/data/mockDb'
+import type { ConsoleKind, Role, School, Staff, Student, Teacher, Tier } from '@/types'
+import { schools, students as seedStudents, teachers as seedTeachers, staff as seedStaff } from '@/data/mockDb'
 
 export interface DemoAccount {
   email: string
@@ -49,6 +49,9 @@ interface AppState {
   /* teacher roster (seeded, with in-session additions) */
   teachers: Teacher[]
   addTeacher: (teacher: Teacher) => void
+  /* non-teaching staff roster (seeded, with in-session additions) */
+  staff: Staff[]
+  addStaff: (staff: Staff) => void
   /* actions */
   login: (email: string) => void
   logout: () => void
@@ -84,6 +87,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const addStudent = (student: Student) => setStudents((list) => [student, ...list])
   const [teachers, setTeachers] = useState<Teacher[]>(seedTeachers)
   const addTeacher = (teacher: Teacher) => setTeachers((list) => [teacher, ...list])
+  const [staff, setStaff] = useState<Staff[]>(seedStaff)
+  const addStaff = (s: Staff) => setStaff((list) => [s, ...list])
 
   const school = useMemo(() => schools.find((s) => s.id === schoolId) ?? schools[0], [schoolId])
   const plan: Tier = planOverride[schoolId] ?? school.plan
@@ -142,6 +147,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     school, plan,
     students, addStudent,
     teachers, addTeacher,
+    staff, addStaff,
     login, logout, go, clearIntent, setSchoolId, enterSchool, exitToOwner, upgrade, setLang, setMobileNav,
   }
 
