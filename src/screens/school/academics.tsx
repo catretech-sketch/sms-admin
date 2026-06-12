@@ -611,17 +611,21 @@ function SubjectsTab({ editable }: { editable: boolean }) {
 /* ============================================================
    5 · Homework tracker
    ============================================================ */
-interface Hw { id: number; cls: string; subject: string; title: string; due: string; status: string }
+interface Hw { id: number; cls: string; subject: string; title: string; due: string; status: string; teacher: string; source: 'teacher_app' | 'admin' }
 const hwTone: Record<string, BadgeTone> = { Assigned: 'brand', Submitted: 'info', Graded: 'success', Overdue: 'danger' }
+const sourceBadge = (s: 'teacher_app' | 'admin') =>
+  s === 'teacher_app' ? <Badge tone="info">Teacher app</Badge> : <Badge tone="neutral">Admin</Badge>
+const tName = (i: number): string => teachers[i % teachers.length].name
 
 function HomeworkTab({ editable }: { editable: boolean }) {
   const toast = useToast()
+  const app = useApp()
   const [rows, setRows] = useState<Hw[]>([
-    { id: 1, cls: 'IX-A', subject: 'Mathematics', title: 'Quadratic equations — Ex 4.3', due: '2026-06-12', status: 'Assigned' },
-    { id: 2, cls: 'X-B', subject: 'Science', title: 'Chemical reactions worksheet', due: '2026-06-10', status: 'Submitted' },
-    { id: 3, cls: 'IX-C', subject: 'English', title: 'Essay: My favourite book', due: '2026-06-05', status: 'Graded' },
-    { id: 4, cls: 'XI-A', subject: 'Computer', title: 'Python loops assignment', due: '2026-06-04', status: 'Overdue' },
-    { id: 5, cls: 'X-A', subject: 'Social Studies', title: 'Map work — rivers of India', due: '2026-06-14', status: 'Assigned' },
+    { id: 1, cls: 'IX-A', subject: 'Mathematics', title: 'Quadratic equations — Ex 4.3', due: '2026-06-12', status: 'Assigned', teacher: tName(0), source: 'teacher_app' },
+    { id: 2, cls: 'X-B', subject: 'Science', title: 'Chemical reactions worksheet', due: '2026-06-10', status: 'Submitted', teacher: tName(1), source: 'teacher_app' },
+    { id: 3, cls: 'IX-C', subject: 'English', title: 'Essay: My favourite book', due: '2026-06-05', status: 'Graded', teacher: tName(2), source: 'teacher_app' },
+    { id: 4, cls: 'XI-A', subject: 'Computer', title: 'Python loops assignment', due: '2026-06-04', status: 'Overdue', teacher: tName(3), source: 'teacher_app' },
+    { id: 5, cls: 'X-A', subject: 'Social Studies', title: 'Map work — rivers of India', due: '2026-06-14', status: 'Assigned', teacher: tName(4), source: 'teacher_app' },
   ])
   const [open, setOpen] = useState(false)
   const [cls, setCls] = useState(classList[0])
@@ -631,13 +635,16 @@ function HomeworkTab({ editable }: { editable: boolean }) {
 
   const add = () => {
     if (!title.trim()) { toast.danger('Title required', 'Enter a homework title.'); return }
-    setRows((r) => [{ id: Date.now(), cls, subject, title: title.trim(), due, status: 'Assigned' }, ...r])
+    setRows((r) => [{ id: Date.now(), cls, subject, title: title.trim(), due, status: 'Assigned', teacher: app.user?.name ?? 'Admin', source: 'admin' }, ...r])
     toast.success('Homework assigned', `${subject} → ${cls}.`); setTitle(''); setOpen(false)
   }
 
   const cols: Column<Hw>[] = [
     { key: 'cls', label: 'Class', sortValue: (r) => r.cls, render: (r) => <Badge tone="neutral">{r.cls}</Badge> },
     { key: 'subject', label: 'Subject', sortValue: (r) => r.subject, render: (r) => <span className="fw6">{r.subject}</span> },
+    { key: 'teacher', label: 'Teacher', sortValue: (r) => r.teacher, render: (r) => (
+      <div className="row ai-center gap8"><span className="t-sm">{r.teacher}</span>{sourceBadge(r.source)}</div>
+    ) },
     { key: 'title', label: 'Title', sortValue: (r) => r.title },
     { key: 'due', label: 'Due', sortValue: (r) => r.due, render: (r) => <span className="muted">{r.due}</span> },
     { key: 'status', label: 'Status', align: 'center', sortValue: (r) => r.status, render: (r) => <Badge tone={hwTone[r.status] ?? 'neutral'} dot>{r.status}</Badge> },
