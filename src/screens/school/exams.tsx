@@ -507,11 +507,16 @@ function ExamAttendanceTab() {
 /* ============================================================
    Report card modal — printable
    ============================================================ */
-function ReportCardModal({ student, onClose }: { student: Student | null; onClose: () => void }) {
+function ReportCardModal({ student, examId, getMark, onClose }: {
+  student: Student | null
+  examId?: string
+  getMark?: (studentId: string, subject: string) => number | undefined
+  onClose: () => void
+}) {
   const app = useApp()
   if (!student) return null
-  const report = reportFor(student)
-  const rank = classRank(student)
+  const report = reportFor(student, examId, getMark)
+  const rank = classRank(student, examId, getMark)
 
   return (
     <Modal
@@ -603,6 +608,8 @@ function ReportCardModal({ student, onClose }: { student: Student | null; onClos
    Tab 3 — Report cards grid
    ============================================================ */
 function ReportCardsTab() {
+  const app = useApp()
+  const [examId, setExamId] = useState(app.exams[0]?.id ?? '')
   const [cls, setCls] = useState('VI-A')
   const [open, setOpen] = useState<Student | null>(null)
 
@@ -611,11 +618,14 @@ function ReportCardsTab() {
     [cls],
   )
 
+  const getMark = (sid: string, subject: string) => app.examMarks[markKey(examId, sid, subject)]
+
   return (
     <Card pad={false}>
       <div className="row ai-center gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
         <CardHead title="Report cards" sub={`${cls} · ${roster.length} students`} icon="clipboard" />
-        <div style={{ marginLeft: 'auto' }}>
+        <div className="row gap8 ai-center" style={{ marginLeft: 'auto' }}>
+          <Select options={app.exams.map((e) => ({ value: e.id, label: e.name }))} value={examId} onChange={(e) => setExamId(e.target.value)} />
           <Select options={clsOptions} value={cls} onChange={(e) => setCls(e.target.value)} />
         </div>
       </div>
@@ -625,8 +635,8 @@ function ReportCardsTab() {
       ) : (
         <div className="sm-grid-3 gap12" style={{ padding: 16 }}>
           {roster.map((s) => {
-            const report = reportFor(s)
-            const rank = classRank(s)
+            const report = reportFor(s, examId, getMark)
+            const rank = classRank(s, examId, getMark)
             return (
               <Card key={s.id} hover onClick={() => setOpen(s)}>
                 <div className="row ai-center jc-between">
@@ -646,7 +656,7 @@ function ReportCardsTab() {
           })}
         </div>
       )}
-      <ReportCardModal student={open} onClose={() => setOpen(null)} />
+      <ReportCardModal student={open} examId={examId} getMark={getMark} onClose={() => setOpen(null)} />
     </Card>
   )
 }
