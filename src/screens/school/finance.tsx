@@ -183,72 +183,115 @@ function FeeHistoryTab({ cur }: { cur: string }) {
   )
 }
 
-/* ---------- Fee structure (per-grade amounts) ---------- */
+/* ---------- Fee structure (configurable heads × per-grade amounts) ---------- */
 const STRUCTURE_GRADES = grades.slice(4)
-type StructRow = Record<FeeType, number>
-const defaultStruct = (g: string): StructRow => ({ academic: termFeeFor(g), transport: 18000, other: 0 })
+const DEFAULT_HEADS = ['Academic', 'Transport', 'Other']
+const seedAmount = (g: string, head: string): number =>
+  head === 'Academic' ? termFeeFor(g) : head === 'Transport' ? 18000 : 0
 
 function FeeStructureTab({ cur, editable }: { cur: string; editable: boolean }) {
   const app = useApp()
   const toast = useToast()
-  const [draft, setDraft] = useState<Record<string, StructRow>>(() => {
-    const out: Record<string, StructRow> = {}
-    STRUCTURE_GRADES.forEach((g) => { out[g] = app.feeStructure[g] ?? defaultStruct(g) })
+  const [heads, setHeads] = useState<string[]>(() => (app.feeHeads.length ? app.feeHeads : DEFAULT_HEADS))
+  const [draft, setDraft] = useState<Record<string, Record<string, number>>>(() => {
+    const hs = app.feeHeads.length ? app.feeHeads : DEFAULT_HEADS
+    const out: Record<string, Record<string, number>> = {}
+    STRUCTURE_GRADES.forEach((g) => {
+      out[g] = {}
+      hs.forEach((h) => { out[g][h] = app.feeStructure[g]?.[h] ?? seedAmount(g, h) })
+    })
     return out
   })
+  const [newHead, setNewHead] = useState('')
 
-  const setCell = (g: string, head: FeeType, raw: string) => {
+  const setCell = (g: string, head: string, raw: string) => {
     const n = Math.max(0, Math.round(Number(raw) || 0))
     setDraft((d) => ({ ...d, [g]: { ...d[g], [head]: n } }))
   }
-  const rowTotal = (r: StructRow) => r.academic + r.transport + r.other
-  const grandTotal = STRUCTURE_GRADES.reduce((a, g) => a + rowTotal(draft[g]), 0)
+  const addHead = () => {
+    const name = newHead.trim()
+    if (!name) { toast.danger('Name required', 'Enter a fee head name.'); return }
+    if (heads.some((h) => h.toLowerCase() === name.toLowerCase())) { toast.danger('Already exists', `${name} is already a fee head.`); return }
+    setHeads((hs) => [...hs, name])
+    setDraft((d) => {
+      const out: Record<string, Record<string, number>> = {}
+      STRUCTURE_GRADES.forEach((g) => { out[g] = { ...d[g], [name]: 0 } })
+      return out
+    })
+    setNewHead('')
+  }
+  const removeHead = (head: string) => {
+    setHeads((hs) => hs.filter((h) => h !== head))
+    setDraft((d) => {
+      const out: Record<string, Record<string, number>> = {}
+      STRUCTURE_GRADES.forEach((g) => { const { [head]: _omit, ...rest } = d[g]; out[g] = rest })
+      return out
+    })
+  }
+  const rowTotal = (g: string) => heads.reduce((a, h) => a + (draft[g][h] ?? 0), 0)
+  const grandTotal = STRUCTURE_GRADES.reduce((a, g) => a + rowTotal(g), 0)
 
   const save = () => {
-    app.saveFeeStructure(draft)
-    toast.success('Fee structure saved', `${STRUCTURE_GRADES.length} grades updated.`)
+    app.saveFeeStructure(heads, draft)
+    toast.success('Fee structure saved', `${STRUCTURE_GRADES.length} grades · ${heads.length} fee heads.`)
   }
 
   return (
     <Card pad={false}>
       <div className="row ai-center jc-between gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
         <div><div className="fw6">Fee structure</div><div className="t-sm muted">Per-grade amounts by fee head · {cur}</div></div>
-        {editable
-          ? <Btn variant="primary" icon="check" onClick={save}>Save structure</Btn>
-          : <Badge tone="neutral" icon="eye">View only</Badge>}
+        <div className="row ai-center gap8 wrap">
+          {editable && (
+            <div className="row ai-center gap6">
+              <Input value={newHead} placeholder="New fee head (e.g. Lab fee)" onChange={(e) => setNewHead(e.target.value)} style={{ width: 200 }} />
+              <Btn variant="secondary" size="sm" icon="plus" onClick={addHead}>Add fee head</Btn>
+            </div>
+          )}
+          {editable
+            ? <Btn variant="primary" icon="check" disabled={heads.length === 0} onClick={save}>Save structure</Btn>
+            : <Badge tone="neutral" icon="eye">View only</Badge>}
+        </div>
       </div>
-      <table className="sm-table">
-        <thead>
-          <tr>
-            <th>Grade</th>
-            <th className="ta-right">Academic</th>
-            <th className="ta-right">Transport</th>
-            <th className="ta-right">Other</th>
-            <th className="ta-right">Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {STRUCTURE_GRADES.map((g) => {
-            const r = draft[g]
-            return (
-              <tr key={g}>
-                <td className="fw6">Grade {g}</td>
-                {(['academic', 'transport', 'other'] as FeeType[]).map((head) => (
-                  <td key={head} className="ta-right" style={{ width: 140 }}>
-                    <Input type="number" min={0} value={String(r[head])} disabled={!editable}
-                      style={{ width: 120, textAlign: 'right' }}
-                      onChange={(e) => setCell(g, head, e.target.value)} />
-                  </td>
+      {heads.length === 0 ? (
+        <Empty icon="wallet" title="No fee heads" body="Add a fee head (e.g. Academic, Transport, Lab) to define the structure." />
+      ) : (
+        <>
+          <table className="sm-table">
+            <thead>
+              <tr>
+                <th>Grade</th>
+                {heads.map((h) => (
+                  <th key={h} className="ta-right">
+                    <span className="row ai-center jc-end gap6">
+                      {h}
+                      {editable && <button onClick={() => removeHead(h)} aria-label={`Remove ${h}`} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text-3)', display: 'inline-flex', padding: 0 }}><Icon name="x" size={12} /></button>}
+                    </span>
+                  </th>
                 ))}
-                <td className="ta-right fw7">{fmtMoney(rowTotal(r), cur)}</td>
+                <th className="ta-right">Total</th>
               </tr>
-            )
-          })}
-        </tbody>
-      </table>
-      <div className="row jc-end" style={{ padding: 16, borderTop: '1px solid var(--border)' }}>
-        <span className="t-sm">Grand total (all grades) <span className="fw7">{fmtMoney(grandTotal, cur)}</span></span>
-      </div>
+            </thead>
+            <tbody>
+              {STRUCTURE_GRADES.map((g) => (
+                <tr key={g}>
+                  <td className="fw6">Grade {g}</td>
+                  {heads.map((h) => (
+                    <td key={h} className="ta-right" style={{ width: 130 }}>
+                      <Input type="number" min={0} value={String(draft[g][h] ?? 0)} disabled={!editable}
+                        style={{ width: 110, textAlign: 'right' }}
+                        onChange={(e) => setCell(g, h, e.target.value)} />
+                    </td>
+                  ))}
+                  <td className="ta-right fw7">{fmtMoney(rowTotal(g), cur)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="row jc-end" style={{ padding: 16, borderTop: '1px solid var(--border)' }}>
+            <span className="t-sm">Grand total (all grades) <span className="fw7">{fmtMoney(grandTotal, cur)}</span></span>
+          </div>
+        </>
+      )}
     </Card>
   )
 }
