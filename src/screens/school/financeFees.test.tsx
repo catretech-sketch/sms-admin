@@ -33,4 +33,16 @@ describe('Fee collection history', () => {
     clickTab('History')
     expect(within(container).getAllByText('Transport (Bus)').length).toBeGreaterThan(0)
   })
+
+  it('shows the fee structure grid and saves edits', () => {
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+    expect(within(container).getByText('Academic')).toBeInTheDocument()
+    expect(within(container).getByText('Transport')).toBeInTheDocument()
+    expect(within(container).getByText('Other')).toBeInTheDocument()
+    const firstAmount = within(container).getAllByRole('spinbutton')[0] as HTMLInputElement
+    fireEvent.change(firstAmount, { target: { value: '50000' } })
+    fireEvent.click(within(container).getByText('Save structure'))
+    expect(within(container).getByText(/Fee structure saved/i)).toBeInTheDocument()
+  })
 })
