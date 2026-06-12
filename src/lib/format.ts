@@ -35,10 +35,15 @@ export function studentSubjectMarks(stu: Student, subj: string, examId?: string)
   return Math.max(18, Math.min(99, Math.round(base * 0.55 + (h % 45) + (subj === 'Mathematics' ? -4 : subj === 'English' ? 4 : 0))))
 }
 
-export function reportFor(stu: Student, examId?: string): Report {
+export function reportFor(
+  stu: Student,
+  examId?: string,
+  getMark?: (studentId: string, subject: string) => number | undefined,
+): Report {
   const rows = subjects.map((s) => {
     const max = 100
-    const marks = studentSubjectMarks(stu, s, examId)
+    const override = getMark?.(stu.id, s)
+    const marks = override ?? studentSubjectMarks(stu, s, examId)
     const pct = (marks / max) * 100
     const g = gradeFor(pct)
     return { subject: s, max, marks, grade: g, gpa: gpaFor(g), pass: marks >= 33 }
@@ -50,9 +55,13 @@ export function reportFor(stu: Student, examId?: string): Report {
   return { rows, total, maxTotal, pct, grade: gradeFor(pct), gpa, result: rows.every((r) => r.pass) ? 'PASS' : 'COMPARTMENT' }
 }
 
-export function classRank(stu: Student, examId?: string): RankInfo {
+export function classRank(
+  stu: Student,
+  examId?: string,
+  getMark?: (studentId: string, subject: string) => number | undefined,
+): RankInfo {
   const peers = students.filter((s) => s.cls === stu.cls)
-  const scored = peers.map((s) => ({ id: s.id, pct: reportFor(s, examId).pct })).sort((a, b) => b.pct - a.pct)
+  const scored = peers.map((s) => ({ id: s.id, pct: reportFor(s, examId, getMark).pct })).sort((a, b) => b.pct - a.pct)
   const rank = scored.findIndex((s) => s.id === stu.id) + 1
   return { rank, classSize: peers.length }
 }
