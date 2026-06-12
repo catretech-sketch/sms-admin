@@ -3,7 +3,7 @@
    plan, language, view navigation.
    ============================================================ */
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
-import type { ConsoleKind, Exam, FeePayment, FeeType, PaperSlot, Role, School, Staff, Student, Teacher, Tier } from '@/types'
+import type { ConsoleKind, Exam, FeePayment, PaperSlot, Role, School, Staff, Student, Teacher, Tier } from '@/types'
 import { schools, students as seedStudents, teachers as seedTeachers, staff as seedStaff, exams as seedExams } from '@/data/mockDb'
 
 export interface DemoAccount {
@@ -66,9 +66,10 @@ interface AppState {
   /* fee payment history (in-session) */
   feePayments: FeePayment[]
   addFeePayment: (p: FeePayment) => void
-  /* per-grade fee structure (in-session) */
-  feeStructure: Record<string, Record<FeeType, number>>
-  saveFeeStructure: (next: Record<string, Record<FeeType, number>>) => void
+  /* configurable fee heads + per-grade fee structure (in-session) */
+  feeHeads: string[]
+  feeStructure: Record<string, Record<string, number>>
+  saveFeeStructure: (heads: string[], structure: Record<string, Record<string, number>>) => void
   /* actions */
   login: (email: string) => void
   logout: () => void
@@ -121,8 +122,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setDatesheets((m) => ({ ...m, [examId]: slots }))
   const [feePayments, setFeePayments] = useState<FeePayment[]>([])
   const addFeePayment = (p: FeePayment) => setFeePayments((list) => [p, ...list])
-  const [feeStructure, setFeeStructureState] = useState<Record<string, Record<FeeType, number>>>({})
-  const saveFeeStructure = (next: Record<string, Record<FeeType, number>>) => setFeeStructureState(next)
+  const [feeHeads, setFeeHeads] = useState<string[]>(['Academic', 'Transport', 'Other'])
+  const [feeStructure, setFeeStructureState] = useState<Record<string, Record<string, number>>>({})
+  const saveFeeStructure = (heads: string[], structure: Record<string, Record<string, number>>) => {
+    setFeeHeads(heads)
+    setFeeStructureState(structure)
+  }
 
   const school = useMemo(() => schools.find((s) => s.id === schoolId) ?? schools[0], [schoolId])
   const plan: Tier = planOverride[schoolId] ?? school.plan
@@ -185,7 +190,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     exams, addExam, updateExam, examMarks, saveExamMarks, examAttendance, saveExamAttendance,
     datesheets, saveDatesheet,
     feePayments, addFeePayment,
-    feeStructure, saveFeeStructure,
+    feeHeads, feeStructure, saveFeeStructure,
     login, logout, go, clearIntent, setSchoolId, enterSchool, exitToOwner, upgrade, setLang, setMobileNav,
   }
 
