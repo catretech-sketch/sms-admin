@@ -4,16 +4,16 @@
    Subjects · Homework. Frontend-only, mock data, fully
    interactive (click-to-place timetable, auto-generate, etc).
    ============================================================ */
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState, type Dispatch, type SetStateAction, type ReactNode } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import { can } from '@/lib/gating'
 import {
-  PageHead, Tabs, Card, CardHead, Btn, Badge, Select, Field, Input,
+  PageHead, Tabs, Segmented, Card, CardHead, Btn, Badge, Select, Field, Input,
   Modal, Icon, Empty, DataTable, type Column, type BadgeTone,
 } from '@/components/ui'
 import { teachers, subjects, grades, sections } from '@/data/mockDb'
 import type { Teacher } from '@/types'
-import { cellKey, clashingClass, clashingClasses, pickTeacher, conflictsFor, teacherLoads, clashingTeachers, type Cell, type Grid } from '@/lib/timetable'
+import { cellKey, clashingClass, clashingClasses, pickTeacher, conflictsFor, teacherLoads, clashingTeachers, teacherSchedule, subjectSchedule, type Cell, type Grid } from '@/lib/timetable'
 
 /* ---------- shared helpers / constants ---------- */
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']
@@ -159,9 +159,153 @@ function TeacherChips({ subject, ids, onChange, editable }: {
   )
 }
 
+/* ---- Pivot views (teacher-wise / subject-wise) over the class grids ---- */
+type GridsState = Record<string, Grid>
+interface ViewProps { grids: GridsState; setGrids: Dispatch<SetStateAction<GridsState>>; editable: boolean }
+interface PivotEdit { cls: string; d: number; p: number; subject: string; current: string }
+
+function PivotGrid({ renderCell }: { renderCell: (d: number, p: number) => ReactNode }) {
+  const rowsDesc: ({ type: 'period'; p: number } | { type: 'lunch' })[] = []
+  for (let p = 0; p < PERIODS; p++) { rowsDesc.push({ type: 'period', p }); if (p === LUNCH_AFTER - 1) rowsDesc.push({ type: 'lunch' }) }
+  return (
+    <Card style={{ overflowX: 'auto' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: `64px repeat(${DAYS.length}, minmax(110px, 1fr))`, gap: 6, minWidth: 640 }}>
+        <div />
+        {DAYS.map((d) => <div key={d} className="t-xs fw6 ta-center muted" style={{ padding: '4px 0' }}>{d}</div>)}
+        {rowsDesc.map((rd, ri) => rd.type === 'lunch' ? (
+          <Fragment key={`lunch-${ri}`}>
+            <div className="t-xs muted" style={{ display: 'flex', justifyContent: 'center' }}><Icon name="clock" size={13} /></div>
+            <div className="t-xs fw6 muted" style={{ gridColumn: `2 / span ${DAYS.length}`, textAlign: 'center', padding: '6px 0', background: 'var(--surface-2)', borderRadius: 8 }}>Lunch break</div>
+          </Fragment>
+        ) : (
+          <Fragment key={`p-${rd.p}`}>
+            <div className="t-xs fw6 muted" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>P{rd.p + 1}</div>
+            {DAYS.map((_d, di) => <Fragment key={di}>{renderCell(di, rd.p)}</Fragment>)}
+          </Fragment>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+function PivotCellEditor({ edit, grids, setGrids, onClose }: { edit: PivotEdit | null; grids: GridsState; setGrids: Dispatch<SetStateAction<GridsState>>; onClose: () => void }) {
+  const [tid, setTid] = useState('')
+  useEffect(() => { setTid(edit?.current ?? '') }, [edit])
+  if (!edit) return null
+  const e = edit
+  const save = () => {
+    setGrids((prev) => ({ ...prev, [e.cls]: { ...(prev[e.cls] ?? {}), [cellKey(e.d, e.p)]: { subject: e.subject, teacherId: tid } } }))
+    onClose()
+  }
+  const clear = () => {
+    setGrids((prev) => ({ ...prev, [e.cls]: { ...(prev[e.cls] ?? {}), [cellKey(e.d, e.p)]: null } }))
+    onClose()
+  }
+  return (
+    <Modal open={!!edit} onClose={onClose} size="sm" icon="user"
+      title="Edit slot" sub={`${e.subject} · ${e.cls} · ${DAYS[e.d]} P${e.p + 1}`}
+      footer={
+        <div className="row ai-center jc-between" style={{ width: '100%' }}>
+          <Btn variant="danger" icon="trash" onClick={clear}>Clear slot</Btn>
+          <div className="row gap8"><Btn variant="ghost" onClick={onClose}>Cancel</Btn><Btn variant="primary" icon="check" onClick={save}>Save</Btn></div>
+        </div>
+      }>
+      <div className="col gap8">
+        {qualified(e.subject).map((t) => {
+          const busy = clashingClass(grids, t.id, e.d, e.p, e.cls)
+          const sel = tid === t.id
+          return (
+            <button key={t.id} onClick={() => setTid(t.id)}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, width: '100%',
+                border: `1px solid ${sel ? (busy ? 'var(--danger)' : 'var(--brand-600)') : 'var(--border)'}`, borderRadius: 10, padding: '9px 11px',
+                background: sel ? (busy ? 'var(--danger-bg)' : 'var(--brand-50)') : 'var(--surface)', textAlign: 'left', cursor: 'pointer' }}>
+              <div className="row ai-center gap8" style={{ minWidth: 0 }}>
+                <Icon name={sel ? 'checkCircle' : 'user'} size={15} />
+                <div style={{ minWidth: 0 }}><div className="fw6 t-sm">{t.name}</div><div className="t-xs muted3">{t.dept}</div></div>
+              </div>
+              {busy ? <Badge tone="danger" icon="alert">busy in {busy}</Badge> : <Badge tone="success">free</Badge>}
+            </button>
+          )
+        })}
+      </div>
+    </Modal>
+  )
+}
+
+function hasAnyGrid(grids: GridsState): boolean {
+  return Object.values(grids).some((g) => Object.values(g).some((c) => !!c))
+}
+
+function TeacherView({ grids, setGrids, editable }: ViewProps) {
+  const [tid, setTid] = useState(teachers[0].id)
+  const [edit, setEdit] = useState<PivotEdit | null>(null)
+  const sched = useMemo(() => teacherSchedule(grids, tid), [grids, tid])
+
+  if (!hasAnyGrid(grids)) return <Empty icon="calendar" title="No timetables yet" body="Build class timetables in the Class view first, then view them by teacher." />
+
+  return (
+    <div className="col gap12">
+      <Card><div className="row ai-center gap12 wrap"><Field label="Teacher"><Select style={{ minWidth: 200 }} options={teacherOpts} value={tid} onChange={(e) => setTid(e.target.value)} /></Field></div></Card>
+      <PivotGrid renderCell={(d, p) => {
+        const entries = sched[cellKey(d, p)] ?? []
+        if (!entries.length) return <div style={{ minHeight: 56, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)' }} />
+        const clash = entries.length > 1
+        const st = subjStyle(entries[0].subject)
+        const first = entries[0]
+        return (
+          <button onClick={() => { if (editable) setEdit({ cls: first.cls, d, p, subject: first.subject, current: tid }) }} disabled={!editable}
+            style={{ minHeight: 56, borderRadius: 8, padding: 6, textAlign: 'left', cursor: editable ? 'pointer' : 'default',
+              border: `${clash ? '2px' : '1px'} solid ${clash ? 'var(--danger)' : st.bd}`, background: st.bg, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 2 }}>
+            {entries.map((en, i) => (
+              <span key={i} className="t-xs" style={{ color: clash ? 'var(--danger)' : st.fg, display: 'flex', alignItems: 'center', gap: 3 }}>
+                {clash && i === 0 && <Icon name="alert" size={11} />}<span className="fw6">{en.cls}</span> · {en.subject}
+              </span>
+            ))}
+          </button>
+        )
+      }} />
+      <PivotCellEditor edit={edit} grids={grids} setGrids={setGrids} onClose={() => setEdit(null)} />
+    </div>
+  )
+}
+
+function SubjectView({ grids, setGrids, editable }: ViewProps) {
+  const [subj, setSubj] = useState(subjects[0])
+  const [edit, setEdit] = useState<PivotEdit | null>(null)
+  const sched = useMemo(() => subjectSchedule(grids, subj), [grids, subj])
+
+  if (!hasAnyGrid(grids)) return <Empty icon="calendar" title="No timetables yet" body="Build class timetables in the Class view first, then view them by subject." />
+
+  const st = subjStyle(subj)
+  return (
+    <div className="col gap12">
+      <Card><div className="row ai-center gap12 wrap"><Field label="Subject"><Select style={{ minWidth: 200 }} options={subjects} value={subj} onChange={(e) => setSubj(e.target.value)} /></Field></div></Card>
+      <PivotGrid renderCell={(d, p) => {
+        const entries = sched[cellKey(d, p)] ?? []
+        if (!entries.length) return <div style={{ minHeight: 56, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)' }} />
+        const clash = entries.length > 1
+        const first = entries[0]
+        return (
+          <button onClick={() => { if (editable) setEdit({ cls: first.cls, d, p, subject: subj, current: first.teacherId }) }} disabled={!editable}
+            style={{ minHeight: 56, borderRadius: 8, padding: 6, textAlign: 'left', cursor: editable ? 'pointer' : 'default',
+              border: `${clash ? '2px' : '1px'} solid ${clash ? 'var(--danger)' : st.bd}`, background: st.bg, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 2 }}>
+            {entries.map((en, i) => (
+              <span key={i} className="t-xs" style={{ color: clash ? 'var(--danger)' : st.fg, display: 'flex', alignItems: 'center', gap: 3 }}>
+                {clash && i === 0 && <Icon name="alert" size={11} />}<span className="fw6">{en.cls}</span> · {teacherName(en.teacherId)}
+              </span>
+            ))}
+          </button>
+        )
+      }} />
+      <PivotCellEditor edit={edit} grids={grids} setGrids={setGrids} onClose={() => setEdit(null)} />
+    </div>
+  )
+}
+
 function TimetableTab({ editable }: { editable: boolean }) {
   const toast = useToast()
   const [cls, setCls] = useState(classList[0])
+  const [view, setView] = useState<'class' | 'teacher' | 'subject'>('class')
   const [grids, setGrids] = useState<Record<string, Grid>>({})
   const [mode, setMode] = useState<Record<string, 'choice' | 'build'>>({})
   const [classTeachers, setClassTeachers] = useState<Record<string, string>>(() => {
@@ -272,6 +416,15 @@ function TimetableTab({ editable }: { editable: boolean }) {
 
   return (
     <div className="col gap16">
+      <Card>
+        <Segmented value={view} onChange={(v) => setView(v as 'class' | 'teacher' | 'subject')}
+          options={[{ value: 'class', label: 'Class' }, { value: 'teacher', label: 'Teacher' }, { value: 'subject', label: 'Subject' }]} />
+      </Card>
+
+      {view === 'teacher' && <TeacherView grids={grids} setGrids={setGrids} editable={editable} />}
+      {view === 'subject' && <SubjectView grids={grids} setGrids={setGrids} editable={editable} />}
+
+      {view === 'class' && (<>
       {/* toolbar */}
       <Card>
         <div className="row ai-center jc-between gap12 wrap">
@@ -509,6 +662,7 @@ function TimetableTab({ editable }: { editable: boolean }) {
           </div>
         )}
       </Modal>
+      </>)}
     </div>
   )
 }
