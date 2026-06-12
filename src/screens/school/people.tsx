@@ -12,7 +12,7 @@ import {
   Drawer, Icon, Empty, Progress, DataTable,
   type Column, type BadgeTone,
 } from '@/components/ui'
-import { staff, students, depts } from '@/data/mockDb'
+import { students, depts } from '@/data/mockDb'
 import { fmtMoney } from '@/lib/format'
 import type { Teacher, Staff } from '@/types'
 
@@ -258,22 +258,25 @@ function StaffScreen() {
   const [q, setQ] = useState('')
   const [cat, setCat] = useState('all')
 
+  const editable = can(app.role, 'sis', 'E')
+  const roster = app.staff
+
   const message = (s: Staff) => toast.success('Message sent', `Notified ${s.name}.`)
 
   const counts = useMemo(() => {
     const m: Record<string, number> = {}
-    staff.forEach((s) => { m[s.cat] = (m[s.cat] || 0) + 1 })
+    roster.forEach((s) => { m[s.cat] = (m[s.cat] || 0) + 1 })
     return m
-  }, [])
+  }, [roster])
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
-    return staff.filter((s) => {
+    return roster.filter((s) => {
       if (needle && !(s.name.toLowerCase().includes(needle) || s.role.toLowerCase().includes(needle) || s.id.toLowerCase().includes(needle))) return false
       if (cat !== 'all' && s.cat !== cat) return false
       return true
     })
-  }, [q, cat])
+  }, [q, cat, roster])
 
   const columns: Column<Staff>[] = [
     {
@@ -328,7 +331,13 @@ function StaffScreen() {
 
   return (
     <div>
-      <PageHead title="Staff & support" sub={`${staff.length} non-teaching staff · ${app.school.name}`} />
+      <PageHead
+        title="Staff & support"
+        sub={`${roster.length} non-teaching staff · ${app.school.name}`}
+        actions={editable
+          ? <Btn variant="primary" icon="plus" onClick={() => app.go('school.staff.add')}>Add staff</Btn>
+          : <Badge tone="neutral" icon="eye">View only</Badge>}
+      />
 
       {/* Category summary */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 16, marginBottom: 16 }}>
