@@ -36,7 +36,7 @@ function fillRequired() {
   setText('First name', 'Suresh')
   setText('Last name', 'Naidu')
   setText('Primary contact number', '9876543210')
-  setText('Role', 'Bus Driver')
+  setSelect('Role', 'Driver')
   setSelect('Category', 'transport')
   setSelect('Department', 'Transport')
 }

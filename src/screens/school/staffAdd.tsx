@@ -29,6 +29,7 @@ const CATEGORIES = [
   { value: 'admin', label: 'Admin' },
   { value: 'support', label: 'Support' },
 ]
+const STAFF_ROLES = SEL('Driver', 'Conductor', 'Clerk', 'Cleaner', 'Gardener', 'Security Guard', 'Peon')
 const EMP_TYPES = SEL('Full-time', 'Part-time', 'Contract', 'Visiting', 'Intern')
 const CONTRACT_TYPES = SEL('Permanent', 'Temporary', 'Probation', 'Fixed-term')
 const SHIFTS = SEL('Morning', 'Day', 'Evening', 'Night', 'Rotational')
@@ -210,7 +211,7 @@ function AddStaffScreen() {
         <Card>
           <CardHead title="Employment information" icon="briefcase" />
           <div style={{ marginTop: 12 }}>{fieldGrid(<>
-            {txt('role', 'Role', { required: true, ph: 'e.g. Bus Driver' })}
+            {sel('role', 'Role', STAFF_ROLES, true)}
             {sel('category', 'Category', CATEGORIES, true)}
             {sel('department', 'Department', deptOptions, true)}
             {sel('employeeType', 'Employee type', EMP_TYPES)}
