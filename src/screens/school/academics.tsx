@@ -672,6 +672,81 @@ function HomeworkTab({ editable }: { editable: boolean }) {
 }
 
 /* ============================================================
+   6 · Class tests (created in the teacher app; admin can add)
+   ============================================================ */
+interface Test {
+  id: number
+  cls: string
+  subject: string
+  title: string
+  date: string
+  maxMarks: number
+  teacher: string
+  source: 'teacher_app' | 'admin'
+  status: 'Scheduled' | 'Completed' | 'Graded'
+}
+const testTone: Record<Test['status'], BadgeTone> = { Scheduled: 'brand', Completed: 'info', Graded: 'success' }
+
+function TestsTab({ editable }: { editable: boolean }) {
+  const toast = useToast()
+  const app = useApp()
+  const [rows, setRows] = useState<Test[]>([
+    { id: 1, cls: 'IX-A', subject: 'Mathematics', title: 'Unit Test — Quadratics', date: '2026-06-16', maxMarks: 25, teacher: tName(0), source: 'teacher_app', status: 'Scheduled' },
+    { id: 2, cls: 'X-B', subject: 'Science', title: 'Ch 3 — Chemical reactions quiz', date: '2026-06-11', maxMarks: 20, teacher: tName(1), source: 'teacher_app', status: 'Completed' },
+    { id: 3, cls: 'IX-C', subject: 'English', title: 'Grammar class test', date: '2026-06-06', maxMarks: 15, teacher: tName(2), source: 'teacher_app', status: 'Graded' },
+    { id: 4, cls: 'XI-A', subject: 'Computer', title: 'Loops & arrays test', date: '2026-06-18', maxMarks: 30, teacher: tName(3), source: 'teacher_app', status: 'Scheduled' },
+    { id: 5, cls: 'X-A', subject: 'Social Studies', title: 'Map & rivers test', date: '2026-06-09', maxMarks: 20, teacher: tName(4), source: 'teacher_app', status: 'Completed' },
+  ])
+  const [open, setOpen] = useState(false)
+  const [cls, setCls] = useState(classList[0])
+  const [subject, setSubject] = useState(subjects[0])
+  const [title, setTitle] = useState('')
+  const [date, setDate] = useState('2026-06-20')
+  const [maxMarks, setMaxMarks] = useState('20')
+
+  const add = () => {
+    if (!title.trim()) { toast.danger('Title required', 'Enter a test title.'); return }
+    setRows((r) => [{ id: Date.now(), cls, subject, title: title.trim(), date, maxMarks: Math.max(0, Number(maxMarks) || 0), teacher: app.user?.name ?? 'Admin', source: 'admin', status: 'Scheduled' }, ...r])
+    toast.success('Test added', `${subject} → ${cls}.`); setTitle(''); setOpen(false)
+  }
+
+  const cols: Column<Test>[] = [
+    { key: 'cls', label: 'Class', sortValue: (r) => r.cls, render: (r) => <Badge tone="neutral">{r.cls}</Badge> },
+    { key: 'subject', label: 'Subject', sortValue: (r) => r.subject, render: (r) => <span className="fw6">{r.subject}</span> },
+    { key: 'teacher', label: 'Teacher', sortValue: (r) => r.teacher, render: (r) => (
+      <div className="row ai-center gap8"><span className="t-sm">{r.teacher}</span>{sourceBadge(r.source)}</div>
+    ) },
+    { key: 'title', label: 'Title', sortValue: (r) => r.title },
+    { key: 'date', label: 'Date', sortValue: (r) => r.date, render: (r) => <span className="muted">{r.date}</span> },
+    { key: 'maxMarks', label: 'Max', align: 'center', sortValue: (r) => r.maxMarks, render: (r) => <span className="fw6">{r.maxMarks}</span> },
+    { key: 'status', label: 'Status', align: 'center', sortValue: (r) => r.status, render: (r) => <Badge tone={testTone[r.status]} dot>{r.status}</Badge> },
+  ]
+
+  return (
+    <Card pad={false}>
+      <div className="row ai-center jc-between gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
+        <div><div className="fw6">Class tests</div><div className="t-sm muted">{rows.length} tests · created in the teacher app</div></div>
+        {editable && <Btn variant="primary" icon="plus" onClick={() => setOpen(true)}>Add test</Btn>}
+      </div>
+      <DataTable<Test> columns={cols} rows={rows} rowKey={(r) => r.id} pageSize={10} initialSort={{ key: 'date', dir: 'asc' }}
+        empty={<Empty icon="clipboard" title="No tests yet" body="Class tests created by teachers will show here." />} />
+      <Modal open={open} onClose={() => setOpen(false)} icon="clipboard" title="Add class test"
+        footer={<div className="row gap8 jc-end"><Btn variant="ghost" onClick={() => setOpen(false)}>Cancel</Btn><Btn variant="primary" icon="check" onClick={add}>Add</Btn></div>}>
+        <div className="sm-grid-2 gap12">
+          <Field label="Class"><Select options={classList} value={cls} onChange={(e) => setCls(e.target.value)} /></Field>
+          <Field label="Subject"><Select options={subjects} value={subject} onChange={(e) => setSubject(e.target.value)} /></Field>
+        </div>
+        <Field label="Title" required><Input icon="clipboard" value={title} placeholder="e.g. Unit Test 2" onChange={(e) => setTitle(e.target.value)} /></Field>
+        <div className="sm-grid-2 gap12">
+          <Field label="Date"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+          <Field label="Max marks"><Input type="number" min={0} value={maxMarks} onChange={(e) => setMaxMarks(e.target.value)} /></Field>
+        </div>
+      </Modal>
+    </Card>
+  )
+}
+
+/* ============================================================
    Academics hub — tab shell
    ============================================================ */
 function AcademicsScreen() {
@@ -684,6 +759,7 @@ function AcademicsScreen() {
     { value: 'timetable', label: 'Timetable', icon: 'calendar' },
     { value: 'periods', label: 'Periods', icon: 'clock' },
     { value: 'subjects', label: 'Subjects', icon: 'book' },
+    { value: 'tests', label: 'Tests', icon: 'cap' },
     { value: 'homework', label: 'Homework', icon: 'clipboard' },
   ]
 
@@ -698,6 +774,7 @@ function AcademicsScreen() {
       <div style={{ display: tab === 'timetable' ? 'block' : 'none' }}><TimetableTab editable={editable} /></div>
       <div style={{ display: tab === 'periods' ? 'block' : 'none' }}><PeriodsTab editable={editable} /></div>
       <div style={{ display: tab === 'subjects' ? 'block' : 'none' }}><SubjectsTab editable={editable} /></div>
+      <div style={{ display: tab === 'tests' ? 'block' : 'none' }}><TestsTab editable={editable} /></div>
       <div style={{ display: tab === 'homework' ? 'block' : 'none' }}><HomeworkTab editable={editable} /></div>
     </div>
   )
