@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, fireEvent, within, cleanup } from '@testing-library/react'
 import { AppProvider } from '@/context/AppProvider'
 import { ToastProvider } from '@/context/ToastProvider'
@@ -45,5 +45,19 @@ describe('Timetable teacher/subject views', () => {
     clickTab('Timetable')
     fireEvent.click(seg().getByText('All classes'))
     expect(within(container).getByText(/class-wise overview/i)).toBeInTheDocument()
+  })
+
+  it('prints the timetable via window.print', () => {
+    const printSpy = vi.fn()
+    const original = window.print
+    window.print = printSpy
+    try {
+      const { container, clickTab } = renderScreen()
+      clickTab('Timetable')
+      fireEvent.click(within(container).getByText('Print'))
+      expect(printSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      window.print = original
+    }
   })
 })

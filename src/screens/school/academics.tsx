@@ -457,8 +457,11 @@ function TimetableTab({ editable }: { editable: boolean }) {
   return (
     <div className="col gap16">
       <Card>
-        <Segmented value={view} onChange={(v) => setView(v as 'class' | 'teacher' | 'subject' | 'overview')}
-          options={[{ value: 'class', label: 'Class' }, { value: 'teacher', label: 'Teacher' }, { value: 'subject', label: 'Subject' }, { value: 'overview', label: 'All classes' }]} />
+        <div className="row ai-center jc-between gap12 wrap">
+          <Segmented value={view} onChange={(v) => setView(v as 'class' | 'teacher' | 'subject' | 'overview')}
+            options={[{ value: 'class', label: 'Class' }, { value: 'teacher', label: 'Teacher' }, { value: 'subject', label: 'Subject' }, { value: 'overview', label: 'All classes' }]} />
+          <Btn variant="secondary" size="sm" icon="download" onClick={() => window.print()}>Print</Btn>
+        </div>
       </Card>
 
       {view === 'teacher' && <TeacherView grids={grids} setGrids={setGrids} editable={editable} />}
