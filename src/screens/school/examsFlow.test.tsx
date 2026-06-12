@@ -60,4 +60,19 @@ describe('Exam lifecycle', () => {
     expect(within(dialog).getByText('Parents')).toBeInTheDocument()
     expect(within(dialog).getByText('Students')).toBeInTheDocument()
   })
+
+  it('flags a duplicate subject in the datesheet and disables Save', () => {
+    const { container } = renderScreen()
+    // open the first exam's datesheet
+    fireEvent.click(within(container).getAllByText('Datesheet')[0])
+    const dialog = within(container).getByRole('dialog')
+    // per paper the selects are [Subject, Invigilator 1, Invigilator 2]
+    const combos = within(dialog).getAllByRole('combobox') as HTMLSelectElement[]
+    const firstSubject = combos[0].value
+    // set paper 2's subject (combos[3]) equal to paper 1's subject → duplicate
+    fireEvent.change(combos[3], { target: { value: firstSubject } })
+    expect(within(dialog).getByText(/allocated to two papers/i)).toBeInTheDocument()
+    const saveBtn = within(dialog).getByText('Save datesheet').closest('button')
+    expect(saveBtn).toBeDisabled()
+  })
 })
