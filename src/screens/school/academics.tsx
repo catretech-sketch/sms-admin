@@ -302,10 +302,50 @@ function SubjectView({ grids, setGrids, editable }: ViewProps) {
   )
 }
 
+function ClassOverview({ grids }: { grids: GridsState }) {
+  const built = classList.filter((c) => grids[c] && Object.values(grids[c]).some(Boolean))
+  if (built.length === 0) return <Empty icon="calendar" title="No timetables yet" body="Build class timetables in the Class view first to see the class-wise overview." />
+  return (
+    <div className="col gap16">
+      {built.map((cls) => {
+        const grid = grids[cls] ?? {}
+        const conflicts = conflictsFor(grids, cls)
+        return (
+          <div key={cls} className="col gap8">
+            <div className="row ai-center jc-between">
+              <div className="fw6">{cls}</div>
+              {conflicts.size > 0
+                ? <Badge tone="danger" icon="alert">{conflicts.size} clash{conflicts.size > 1 ? 'es' : ''}</Badge>
+                : <Badge tone="success" icon="checkCircle">No clashes</Badge>}
+            </div>
+            <PivotGrid renderCell={(d, p) => {
+              const key = cellKey(d, p)
+              const cell = grid[key]
+              if (!cell) return <div style={{ minHeight: 56, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)' }} />
+              const isClash = conflicts.has(key)
+              const st = subjStyle(cell.subject)
+              return (
+                <div style={{ minHeight: 56, borderRadius: 8, padding: 6,
+                  border: `${isClash ? '2px' : '1px'} solid ${isClash ? 'var(--danger)' : st.bd}`, background: st.bg,
+                  display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 2 }}>
+                  <span className="fw6 t-xs" style={{ color: st.fg }}>{cell.subject}</span>
+                  <span className="t-xs" style={{ display: 'flex', alignItems: 'center', gap: 3, color: isClash ? 'var(--danger)' : 'var(--text-2)' }}>
+                    {isClash && <Icon name="alert" size={11} />}{teacherName(cell.teacherId)}
+                  </span>
+                </div>
+              )
+            }} />
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function TimetableTab({ editable }: { editable: boolean }) {
   const toast = useToast()
   const [cls, setCls] = useState(classList[0])
-  const [view, setView] = useState<'class' | 'teacher' | 'subject'>('class')
+  const [view, setView] = useState<'class' | 'teacher' | 'subject' | 'overview'>('class')
   const [grids, setGrids] = useState<Record<string, Grid>>({})
   const [mode, setMode] = useState<Record<string, 'choice' | 'build'>>({})
   const [classTeachers, setClassTeachers] = useState<Record<string, string>>(() => {
@@ -417,12 +457,13 @@ function TimetableTab({ editable }: { editable: boolean }) {
   return (
     <div className="col gap16">
       <Card>
-        <Segmented value={view} onChange={(v) => setView(v as 'class' | 'teacher' | 'subject')}
-          options={[{ value: 'class', label: 'Class' }, { value: 'teacher', label: 'Teacher' }, { value: 'subject', label: 'Subject' }]} />
+        <Segmented value={view} onChange={(v) => setView(v as 'class' | 'teacher' | 'subject' | 'overview')}
+          options={[{ value: 'class', label: 'Class' }, { value: 'teacher', label: 'Teacher' }, { value: 'subject', label: 'Subject' }, { value: 'overview', label: 'All classes' }]} />
       </Card>
 
       {view === 'teacher' && <TeacherView grids={grids} setGrids={setGrids} editable={editable} />}
       {view === 'subject' && <SubjectView grids={grids} setGrids={setGrids} editable={editable} />}
+      {view === 'overview' && <ClassOverview grids={grids} />}
 
       {view === 'class' && (<>
       {/* toolbar */}
