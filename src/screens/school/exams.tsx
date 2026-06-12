@@ -14,8 +14,8 @@ import {
 } from '@/components/ui'
 import { students, subjects, grades, sections } from '@/data/mockDb'
 import { reportFor, classRank, gradeFor, studentSubjectMarks } from '@/lib/format'
-import { markKey, attKey, marksProgress } from '@/lib/examData'
-import type { Exam, Student } from '@/types'
+import { markKey, attKey, marksProgress, endTime, findClashes } from '@/lib/examData'
+import type { Exam, Student, PaperSlot } from '@/types'
 
 /* ---------- sample invigilator pool (frontend-only) ---------- */
 const TEACHER_POOL = [
@@ -118,101 +118,121 @@ function DatesheetDrawer({ exam, onClose }: { exam: Exam | null; onClose: () => 
   const toast = useToast()
   const app = useApp()
   const canPublish = can(app.role, 'exams', 'A')
-  const papers = useMemo(() => (exam ? buildPapers(exam) : []), [exam])
+  const canEdit = can(app.role, 'exams', 'E')
 
-  const [rooms, setRooms] = useState<Record<number, string>>({})
-  const [inv1, setInv1] = useState<Record<number, string>>({})
-  const [inv2, setInv2] = useState<Record<number, string>>({})
+  const defaultSlots = (e: Exam): PaperSlot[] =>
+    buildPapers(e).map((p, i) => ({
+      id: p.id, subject: p.subject, date: p.date, start: '09:30', duration: 180,
+      room: 'Hall ' + (i + 1),
+      inv1: TEACHER_POOL[(i * 2) % TEACHER_POOL.length],
+      inv2: TEACHER_POOL[(i * 2 + 1) % TEACHER_POOL.length],
+    }))
 
-  /* seed a sensible, clash-free default whenever the exam changes */
+  const [slots, setSlots] = useState<PaperSlot[]>([])
   useEffect(() => {
     if (!exam) return
-    const r: Record<number, string> = {}
-    const a: Record<number, string> = {}
-    const b: Record<number, string> = {}
-    papers.forEach((p, i) => {
-      r[p.id] = 'Hall ' + (i + 1)
-      a[p.id] = TEACHER_POOL[(i * 2) % TEACHER_POOL.length]
-      b[p.id] = TEACHER_POOL[(i * 2 + 1) % TEACHER_POOL.length]
-    })
-    setRooms(r); setInv1(a); setInv2(b)
-  }, [exam, papers])
+    setSlots(app.datesheets[exam.id] ?? defaultSlots(exam))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exam])
 
-  /* clash detection — a teacher invigilating two slots on the same day */
-  const clashes = useMemo(() => {
-    const seen: Record<string, number> = {}
-    const out: string[] = []
-    papers.forEach((p) => {
-      for (const t of [inv1[p.id], inv2[p.id]]) {
-        if (!t) continue
-        const key = p.date + '|' + t
-        seen[key] = (seen[key] || 0) + 1
-        if (seen[key] === 2) out.push(`${t} — ${fmtDate(p.date)}`)
-      }
+  const setSlot = (id: number, patch: Partial<PaperSlot>) =>
+    setSlots((ss) => ss.map((s) => (s.id === id ? { ...s, ...patch } : s)))
+  const removePaper = (id: number) => setSlots((ss) => ss.filter((s) => s.id !== id))
+  const addPaper = () =>
+    setSlots((ss) => {
+      const nextId = ss.reduce((mx, s) => Math.max(mx, s.id), -1) + 1
+      const used = new Set(ss.map((s) => s.subject))
+      const subj = subjects.find((s) => !used.has(s)) ?? subjects[0]
+      const last = ss[ss.length - 1]
+      return [...ss, { id: nextId, subject: subj, date: last?.date ?? (exam?.from ?? ''), start: '09:30', duration: 180, room: '', inv1: '', inv2: '' }]
     })
-    return out
-  }, [papers, inv1, inv2])
 
+  const clashes = useMemo(() => findClashes(slots), [slots])
   const invigOptions = ['', ...TEACHER_POOL].map((t) => ({ value: t, label: t || '— Select —' }))
 
+  const save = () => {
+    if (!exam || clashes.length) return
+    app.saveDatesheet(exam.id, slots)
+    toast.success('Datesheet saved', `${exam.name} timetable saved.`)
+  }
   const publish = () => {
-    if (clashes.length) return
-    toast.success('Datesheet published', `${exam?.name} datesheet sent to staff & parents.`)
+    if (!exam || clashes.length) return
+    app.saveDatesheet(exam.id, slots)
+    toast.success('Datesheet published', `${exam.name} datesheet sent to staff & parents.`)
     onClose()
   }
 
   return (
     <Drawer
-      open={!!exam} onClose={onClose} width={620} icon="calendar"
-      title="Datesheet" sub={exam ? `${exam.name} · ${exam.grades} · ${papers.length} papers` : ''}
+      open={!!exam} onClose={onClose} width={680} icon="calendar"
+      title="Datesheet" sub={exam ? `${exam.name} · ${exam.grades} · ${slots.length} papers` : ''}
       footer={
         <div className="row gap8 jc-between ai-center">
-          <span className="t-xs muted">{clashes.length ? `${clashes.length} clash(es) to resolve` : 'No invigilator clashes'}</span>
+          <span className="t-xs muted">{clashes.length ? `${clashes.length} clash(es) to resolve` : 'No clashes'}</span>
           <div className="row gap8">
             <Btn variant="ghost" onClick={onClose}>Close</Btn>
-            {canPublish && (
-              <Btn variant="primary" icon="check" disabled={clashes.length > 0} onClick={publish}>Publish datesheet</Btn>
-            )}
+            {canEdit && <Btn variant="secondary" icon="check" disabled={clashes.length > 0} onClick={save}>Save datesheet</Btn>}
+            {canPublish && <Btn variant="primary" icon="check" disabled={clashes.length > 0} onClick={publish}>Publish datesheet</Btn>}
           </div>
         </div>
       }
     >
       {clashes.length > 0 && (
-        <div className="row ai-center gap8" style={{ padding: '10px 12px', borderRadius: 10, marginBottom: 14, background: 'var(--danger-bg, rgba(220,38,38,.1))', color: 'var(--danger)', border: '1px solid var(--danger)' }}>
+        <div className="row ai-start gap8" style={{ padding: '10px 12px', borderRadius: 10, marginBottom: 14, background: 'var(--danger-bg, rgba(220,38,38,.1))', color: 'var(--danger)', border: '1px solid var(--danger)' }}>
           <Icon name="alert" size={16} />
-          <span className="t-sm fw6">Invigilator clash: {clashes.join('; ')} is assigned to two slots on the same day. Resolve to publish.</span>
+          <span className="t-sm fw6">{clashes.join(' · ')}</span>
         </div>
       )}
 
+      <div className="row ai-center jc-between" style={{ marginBottom: 12 }}>
+        <span className="t-sm muted">{slots.length} paper{slots.length === 1 ? '' : 's'}</span>
+        {canEdit && <Btn variant="secondary" size="sm" icon="plus" onClick={addPaper}>Add paper</Btn>}
+      </div>
+
       <div className="col gap12">
-        {papers.map((p) => {
-          const clashed = (inv1[p.id] && inv1[p.id] === inv2[p.id])
-          return (
-            <div key={p.id} style={{ border: `1px solid ${clashed ? 'var(--danger)' : 'var(--border)'}`, borderRadius: 12, padding: 14 }}>
-              <div className="row ai-center jc-between" style={{ marginBottom: 10 }}>
-                <div className="row ai-center gap10">
-                  <span className="sm-card-ic"><Icon name="book" size={16} /></span>
-                  <div>
-                    <div className="fw6">{p.subject}</div>
-                    <div className="t-xs muted">{fmtDate(p.date)} · 09:30 – 12:30</div>
-                  </div>
+        {slots.map((s, i) => (
+          <div key={s.id} style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14 }}>
+            <div className="row ai-center jc-between" style={{ marginBottom: 10 }}>
+              <div className="row ai-center gap10">
+                <span className="sm-card-ic"><Icon name="book" size={16} /></span>
+                <div>
+                  <div className="fw6">{s.subject || '—'}</div>
+                  <div className="t-xs muted">{s.date ? fmtDate(s.date) : '—'} · {s.start} – {endTime(s.start, s.duration)}</div>
                 </div>
-                <Badge tone="neutral">Paper {p.id + 1}</Badge>
               </div>
-              <div className="sm-grid-3 gap12">
-                <Field label="Room / hall">
-                  <Input value={rooms[p.id] ?? ''} placeholder="e.g. Hall 1" onChange={(e) => setRooms((m) => ({ ...m, [p.id]: e.target.value }))} />
-                </Field>
-                <Field label="Invigilator 1" error={clashed ? 'Clash' : undefined}>
-                  <Select options={invigOptions} value={inv1[p.id] ?? ''} onChange={(e) => setInv1((m) => ({ ...m, [p.id]: e.target.value }))} />
-                </Field>
-                <Field label="Invigilator 2" error={clashed ? 'Clash' : undefined}>
-                  <Select options={invigOptions} value={inv2[p.id] ?? ''} onChange={(e) => setInv2((m) => ({ ...m, [p.id]: e.target.value }))} />
-                </Field>
+              <div className="row ai-center gap8">
+                <Badge tone="neutral">Paper {i + 1}</Badge>
+                {canEdit && <Btn variant="ghost" size="sm" onClick={() => removePaper(s.id)}>Remove</Btn>}
               </div>
             </div>
-          )
-        })}
+            <div className="sm-grid-3 gap12">
+              <Field label="Subject">
+                <Select options={subjects} value={s.subject} disabled={!canEdit} onChange={(e) => setSlot(s.id, { subject: e.target.value })} />
+              </Field>
+              <Field label="Date">
+                <Input type="date" value={s.date} disabled={!canEdit} onChange={(e) => setSlot(s.id, { date: e.target.value })} />
+              </Field>
+              <Field label="Start time">
+                <Input type="time" value={s.start} disabled={!canEdit} onChange={(e) => setSlot(s.id, { start: e.target.value })} />
+              </Field>
+              <Field label="Duration (min)">
+                <Input type="number" min={0} value={String(s.duration)} disabled={!canEdit} onChange={(e) => setSlot(s.id, { duration: Math.max(0, Math.round(Number(e.target.value) || 0)) })} />
+              </Field>
+              <Field label="End time">
+                <Input value={endTime(s.start, s.duration)} disabled />
+              </Field>
+              <Field label="Room / hall">
+                <Input value={s.room} placeholder="e.g. Hall 1" disabled={!canEdit} onChange={(e) => setSlot(s.id, { room: e.target.value })} />
+              </Field>
+              <Field label="Invigilator 1">
+                <Select options={invigOptions} value={s.inv1} disabled={!canEdit} onChange={(e) => setSlot(s.id, { inv1: e.target.value })} />
+              </Field>
+              <Field label="Invigilator 2">
+                <Select options={invigOptions} value={s.inv2} disabled={!canEdit} onChange={(e) => setSlot(s.id, { inv2: e.target.value })} />
+              </Field>
+            </div>
+          </div>
+        ))}
       </div>
     </Drawer>
   )
