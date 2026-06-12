@@ -12,7 +12,7 @@ import {
   Modal, Drawer, Icon, Empty, Progress, DataTable,
   type Column, type BadgeTone,
 } from '@/components/ui'
-import { exams, students, subjects, grades, sections } from '@/data/mockDb'
+import { students, subjects, grades, sections } from '@/data/mockDb'
 import { reportFor, classRank, gradeFor, studentSubjectMarks } from '@/lib/format'
 import type { Exam, Student } from '@/types'
 
@@ -53,6 +53,7 @@ function buildPapers(exam: Exam): Paper[] {
    ============================================================ */
 function CreateExamModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const toast = useToast()
+  const app = useApp()
   const [name, setName] = useState('')
   const [type, setType] = useState('Term')
   const [gradeRange, setGradeRange] = useState('VI–XII')
@@ -62,6 +63,12 @@ function CreateExamModal({ open, onClose }: { open: boolean; onClose: () => void
   const submit = () => {
     if (!name.trim()) { toast.danger('Name required', 'Please enter an exam name.'); return }
     if (to < from) { toast.danger('Invalid dates', 'End date cannot be before the start date.'); return }
+    const exam: Exam = {
+      id: 'EX-' + Date.now().toString(36).toUpperCase(),
+      name: name.trim(), type, grades: gradeRange, from, to,
+      subjects: subjects.length, status: 'scheduled', marksEntered: 0, published: false,
+    }
+    app.addExam(exam)
     toast.success('Exam created', `${name} (${type}) scheduled for ${gradeRange}.`)
     setName('')
     onClose()
@@ -265,14 +272,14 @@ function ExamsListTab({ onDatesheet, onReports }: { onDatesheet: (e: Exam) => vo
   return (
     <Card pad={false}>
       <div className="row ai-center jc-between" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
-        <CardHead title="Exam & test schedule" sub={`${exams.length} examinations`} icon="clipboard" />
+        <CardHead title="Exam & test schedule" sub={`${app.exams.length} examinations`} icon="clipboard" />
         {editable
           ? <Btn variant="primary" icon="plus" onClick={() => setCreateOpen(true)}>Create exam</Btn>
           : <Badge tone="neutral" icon="eye">View only</Badge>}
       </div>
       <DataTable<Exam>
         columns={columns}
-        rows={exams}
+        rows={app.exams}
         pageSize={10}
         rowKey={(e) => e.id}
         initialSort={{ key: 'dates', dir: 'asc' }}
