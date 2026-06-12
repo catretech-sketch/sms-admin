@@ -10,7 +10,11 @@ import {
   type Column, type BadgeTone,
 } from '@/components/ui'
 import { grades } from '@/data/mockDb'
-import { reportFor, classRank, attendanceMonths, fmtMoney } from '@/lib/format'
+import {
+  reportFor, classRank, attendanceMonths, fmtMoney,
+  overallToppers, classToppers,
+  type TopperMetric, type ScoredStudent, type ClassTopperGroup,
+} from '@/lib/format'
 import type { Student, FeeStatus } from '@/types'
 
 /* ---------- shared helpers ---------- */
@@ -92,6 +96,108 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
 }
 
 /* ============================================================
+   Toppers — overall leaderboard + class-wise cards
+   ============================================================ */
+const metricLabel: Record<TopperMetric, string> = { exam: 'Exam %', attendance: 'Attendance %' }
+const secondaryHdr: Record<TopperMetric, string> = { exam: 'Attendance', attendance: 'Exam %' }
+
+function RankMedal({ rank }: { rank: number }) {
+  const tone = rank === 1 ? '#d4af37' : rank === 2 ? '#9ca3af' : rank === 3 ? '#cd7f32' : null
+  if (!tone) return <span className="muted fw6" style={{ width: 26, display: 'inline-block', textAlign: 'center' }}>{rank}</span>
+  return (
+    <span className="row ai-center jc-center fw7 t-sm" style={{ width: 26, height: 26, borderRadius: 99, flex: '0 0 auto', background: tone, color: '#fff' }}>{rank}</span>
+  )
+}
+
+function Leaderboard({ rows, metric, onPick }: { rows: ScoredStudent[]; metric: TopperMetric; onPick: (id: string) => void }) {
+  return (
+    <Card pad={false}>
+      <div style={{ padding: 16 }}>
+        <CardHead title="Overall toppers" sub={`Top ${rows.length} · school-wide`} icon="cap" />
+      </div>
+      <table className="sm-table">
+        <thead>
+          <tr>
+            <th style={{ width: 60 }}>Rank</th>
+            <th>Student</th>
+            <th>Class</th>
+            <th className="ta-right">{metricLabel[metric]}</th>
+            <th className="ta-right">{secondaryHdr[metric]}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={r.student.id} style={{ cursor: 'pointer' }} onClick={() => onPick(r.student.id)}>
+              <td><RankMedal rank={i + 1} /></td>
+              <td>
+                <div className="row ai-center gap10">
+                  <Avatar name={r.student.name} hue={r.student.avatarHue} size={30} />
+                  <div>
+                    <div className="fw6">{r.student.name}</div>
+                    <div className="t-xs muted">{r.student.adm}</div>
+                  </div>
+                </div>
+              </td>
+              <td className="fw6">{r.student.cls}</td>
+              <td className="ta-right fw7">{r.score}%</td>
+              <td className="ta-right muted">{r.secondary}%</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Card>
+  )
+}
+
+function ClassToppersGrid({ groups, onPick }: { groups: ClassTopperGroup[]; onPick: (id: string) => void }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+      {groups.map((g) => (
+        <Card key={g.cls}>
+          <CardHead title={`Class ${g.cls}`} sub={`Top ${g.toppers.length}`} icon="users" />
+          <div className="col gap10" style={{ marginTop: 8 }}>
+            {g.toppers.map((r, i) => (
+              <div key={r.student.id} className="row ai-center gap10" style={{ cursor: 'pointer' }} onClick={() => onPick(r.student.id)}>
+                <RankMedal rank={i + 1} />
+                <Avatar name={r.student.name} hue={r.student.avatarHue} size={28} />
+                <div style={{ flex: 1 }}>
+                  <div className="fw6">{r.student.name}</div>
+                  <div className="t-xs muted">{r.student.adm}</div>
+                </div>
+                <span className="fw7 t-sm">{r.score}%</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      ))}
+    </div>
+  )
+}
+
+function ToppersView({ students, onPick }: { students: Student[]; onPick: (id: string) => void }) {
+  const [cat, setCat] = useState<TopperMetric>('exam')
+  const overall = useMemo(() => overallToppers(students, cat, 10), [students, cat])
+  const byClass = useMemo(() => classToppers(students, cat, 3), [students, cat])
+  const catTabs = [
+    { value: 'exam', label: 'Exam toppers', icon: 'cap' },
+    { value: 'attendance', label: 'Attendance toppers', icon: 'calendar' },
+  ]
+  return (
+    <div className="col gap16">
+      <Tabs value={cat} onChange={(v) => setCat(v as TopperMetric)} tabs={catTabs} />
+      {students.length === 0
+        ? <Empty icon="users" title="No students" body="Add students to see toppers." />
+        : (
+          <>
+            <Leaderboard rows={overall} metric={cat} onPick={onPick} />
+            <ClassToppersGrid groups={byClass} onPick={onPick} />
+          </>
+        )}
+    </div>
+  )
+}
+
+/* ============================================================
    StudentsScreen — SIS list
    ============================================================ */
 function StudentsScreen() {
@@ -102,6 +208,7 @@ function StudentsScreen() {
   const [status, setStatus] = useState('all')
   const [fee, setFee] = useState('all')
   const [importOpen, setImportOpen] = useState(false)
+  const [view, setView] = useState<'list' | 'toppers'>('list')
 
   const editable = canEdit(app.role)
   const students = app.students
@@ -188,6 +295,21 @@ function StudentsScreen() {
         ) : <Badge tone="neutral" icon="eye">View only</Badge>}
       />
 
+      <div style={{ margin: '0 0 16px' }}>
+        <Tabs
+          value={view}
+          onChange={(v) => setView(v as 'list' | 'toppers')}
+          tabs={[
+            { value: 'list', label: 'All students', icon: 'users' },
+            { value: 'toppers', label: 'Toppers', icon: 'cap' },
+          ]}
+        />
+      </div>
+
+      {view === 'toppers' ? (
+        <ToppersView students={students} onPick={(id) => app.go('school.student', { focus: id })} />
+      ) : (
+      <>
       <Card pad={false}>
         <div className="row ai-center gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
           <Search value={q} onChange={setQ} placeholder="Search name, admission no, class…" style={{ flex: 1, minWidth: 220 }} />
@@ -216,6 +338,8 @@ function StudentsScreen() {
       </Card>
 
       <ImportDrawer open={importOpen} onClose={() => setImportOpen(false)} />
+      </>
+      )}
     </div>
   )
 }
