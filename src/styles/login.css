@@ -50,12 +50,7 @@
 .sm-login-or::before, .sm-login-or::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 .sm-login-or span { padding: 0 12px; }
 
-.sm-login-otp {
-  border: 1px solid var(--border-2); border-radius: var(--r-xl);
-  background: linear-gradient(180deg, var(--brand-50), var(--surface) 72%);
-  padding: 22px; display: flex; flex-direction: column; gap: 18px;
-  box-shadow: 0 8px 24px -16px rgba(49, 46, 129, .35);
-}
+.sm-login-otp { display: flex; flex-direction: column; gap: 16px; }
 .sm-login-otp-head { display: flex; align-items: center; gap: 13px; }
 .sm-login-otp-ic {
   width: 42px; height: 42px; border-radius: var(--r-md); flex: 0 0 auto;
