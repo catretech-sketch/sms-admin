@@ -3,9 +3,36 @@
    ============================================================ */
 import { useState } from 'react'
 import { useApp } from '@/lib/hooks'
-import { DEMO_ACCOUNTS } from '@/context/AppProvider'
+import { DEMO_ACCOUNTS, type DemoAccount } from '@/context/AppProvider'
 import { ROLE_META } from '@/data/mockDb'
 import { Icon, Field, Input, Btn, Checkbox, Spinner, Avatar } from '@/components/ui'
+
+/* ---------- OTP sign-in helpers (which account an identifier maps to) ---------- */
+
+/** Keep only digits, for tolerant phone matching. */
+export function normalizePhone(s: string): string {
+  return s.replace(/\D/g, '')
+}
+
+/**
+ * Resolve a typed email or mobile number to a seeded demo account.
+ * Email matches case-insensitively; phone matches on the last 10 digits
+ * (so the +91 country code and spaces are optional). Returns null if none.
+ */
+export function findAccountByIdentifier(identifier: string): DemoAccount | null {
+  const id = identifier.trim()
+  if (!id) return null
+  const email = id.toLowerCase()
+  const byEmail = DEMO_ACCOUNTS.find((a) => a.email.toLowerCase() === email)
+  if (byEmail) return byEmail
+  const digits = normalizePhone(id)
+  if (digits.length >= 10) {
+    const tail = digits.slice(-10)
+    const byPhone = DEMO_ACCOUNTS.find((a) => normalizePhone(a.phone).slice(-10) === tail)
+    if (byPhone) return byPhone
+  }
+  return null
+}
 
 const POINTS = [
   { icon: 'users', t: 'Two-console SaaS — Owner + School' },

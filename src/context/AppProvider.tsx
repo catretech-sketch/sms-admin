@@ -8,6 +8,7 @@ import { schools, students as seedStudents, teachers as seedTeachers, staff as s
 
 export interface DemoAccount {
   email: string
+  phone: string
   name: string
   role: Role
   console: ConsoleKind
@@ -17,11 +18,11 @@ export interface DemoAccount {
 /* Five role-locked demo accounts (per the design). Owner email domain
    routes to the Owner console; school accounts lock to their role. */
 export const DEMO_ACCOUNTS: DemoAccount[] = [
-  { email: 'anil@schoolmate.io', name: 'Anil Mehta', role: 'admin', console: 'owner', hue: 250 },
-  { email: 'admin@greenwood.edu', name: 'Ravi Menon', role: 'admin', console: 'school', hue: 200 },
-  { email: 'principal@greenwood.edu', name: 'Sunita Rao', role: 'principal', console: 'school', hue: 330 },
-  { email: 'vp@greenwood.edu', name: 'Arjun Banerjee', role: 'vice_principal', console: 'school', hue: 150 },
-  { email: 'teacher@greenwood.edu', name: 'Meera Krishnan', role: 'teacher', console: 'school', hue: 20 },
+  { email: 'anil@schoolmate.io', phone: '+91 98100 10001', name: 'Anil Mehta', role: 'admin', console: 'owner', hue: 250 },
+  { email: 'admin@greenwood.edu', phone: '+91 98100 10002', name: 'Ravi Menon', role: 'admin', console: 'school', hue: 200 },
+  { email: 'principal@greenwood.edu', phone: '+91 98100 10003', name: 'Sunita Rao', role: 'principal', console: 'school', hue: 330 },
+  { email: 'vp@greenwood.edu', phone: '+91 98100 10004', name: 'Arjun Banerjee', role: 'vice_principal', console: 'school', hue: 150 },
+  { email: 'teacher@greenwood.edu', phone: '+91 98100 10005', name: 'Meera Krishnan', role: 'teacher', console: 'school', hue: 20 },
 ]
 
 export interface AppUser { name: string; email: string; role: Role; hue: number }
