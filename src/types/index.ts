@@ -8,6 +8,11 @@ export type Role = 'admin' | 'principal' | 'vice_principal' | 'teacher'
 export type Cap = 'V' | 'E' | 'A'
 export type ConsoleKind = 'owner' | 'school'
 
+/* ---- Per-user permission overrides (Identity & access) ---- */
+export type CellState = 'inherit' | 'grant' | 'revoke'
+/* module key -> cap -> explicit grant/revoke. Absent entry = inherit from role. */
+export type UserOverrides = Record<string, Partial<Record<Cap, 'grant' | 'revoke'>>>
+
 export type SchoolStatus = 'active' | 'trial' | 'past_due'
 export type FeeStatus = 'paid' | 'partial' | 'due'
 export type FeeType = 'academic' | 'transport' | 'other'
