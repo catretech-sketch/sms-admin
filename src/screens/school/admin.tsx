@@ -12,14 +12,14 @@
    ============================================================ */
 import { useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast, useTheme } from '@/lib/hooks'
-import { tierIncludes } from '@/lib/gating'
+import { tierIncludes, caps, effectiveCaps, cellState, overrideCount, NEXT_CELL_STATE } from '@/lib/gating'
 import {
   PageHead, Tabs, Card, CardHead, Btn, Badge, TierPill, Avatar, Search, Select,
   Field, Input, Toggle, Icon, Empty, DataTable,
   type Column, type BadgeTone,
 } from '@/components/ui'
 import { ROLES, ROLE_META, PERMS, TIER_META, teachers, staff } from '@/data/mockDb'
-import type { Role, Cap, Tier } from '@/types'
+import type { Role, Cap, Tier, CellState, UserOverrides } from '@/types'
 
 /* ============================================================
    Reports
@@ -307,6 +307,12 @@ const SCHOOL_USERS: SchoolUser[] = (() => {
   return out
 })()
 
+/* A couple of users ship with per-user overrides so the feature is visible on load. */
+const SAMPLE_OVERRIDES: Record<string, UserOverrides> = {
+  [SCHOOL_USERS[3].id]: { fees: { V: 'grant' } },        // a teacher granted fee visibility
+  [SCHOOL_USERS[4].id]: { attendance: { E: 'revoke' } }, // a teacher with attendance edit removed
+}
+
 const userStatus: Record<SchoolUser['status'], { tone: BadgeTone; label: string }> = {
   active: { tone: 'success', label: 'Active' },
   invited: { tone: 'warning', label: 'Invited' },
@@ -354,6 +360,8 @@ function UsersTab() {
   const [q, setQ] = useState('')
   const [roleF, setRoleF] = useState('all')
   const [inviting, setInviting] = useState(false)
+  const [overrides, setOverrides] = useState<Record<string, UserOverrides>>(SAMPLE_OVERRIDES)
+  const [editing, setEditing] = useState<SchoolUser | null>(null)
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
@@ -379,7 +387,15 @@ function UsersTab() {
     },
     {
       key: 'role', label: 'Role', sortValue: (u) => u.role,
-      render: (u) => <Badge tone={roleTone(u.role)}>{ROLE_META[u.role].label}</Badge>,
+      render: (u) => {
+        const n = overrideCount(overrides[u.id] ?? {})
+        return (
+          <div className="row ai-center gap6">
+            <Badge tone={roleTone(u.role)}>{ROLE_META[u.role].label}</Badge>
+            {n > 0 && <Badge tone="neutral">{n} custom</Badge>}
+          </div>
+        )
+      },
     },
     {
       key: 'status', label: 'Status', align: 'center', sortValue: (u) => u.status,
@@ -393,7 +409,7 @@ function UsersTab() {
       key: 'actions', label: '', align: 'right',
       render: (u) => (
         <div className="row gap6 jc-end">
-          <Btn variant="secondary" size="sm" icon="edit" onClick={() => toast.info('Edit access', `Adjust role for ${u.name}.`)}>Edit</Btn>
+          <Btn variant="secondary" size="sm" icon="edit" onClick={() => setEditing(u)}>Edit</Btn>
           {u.status === 'suspended'
             ? <Btn variant="secondary" size="sm" icon="refresh" onClick={() => toast.success('User reactivated', `${u.name} can sign in again.`)}>Restore</Btn>
             : <Btn variant="ghost" size="sm" icon="lock" onClick={() => toast.danger('User suspended', `${u.name} can no longer sign in.`)}>Suspend</Btn>}
@@ -403,6 +419,14 @@ function UsersTab() {
   ]
 
   if (inviting) return <InviteModalContent onDone={() => setInviting(false)} />
+  if (editing) return (
+    <UserAccessEditor
+      user={editing}
+      initial={overrides[editing.id] ?? {}}
+      onSave={(ov) => { setOverrides((m) => ({ ...m, [editing.id]: ov })); setEditing(null) }}
+      onCancel={() => setEditing(null)}
+    />
+  )
 
   return (
     <Card pad={false}>
@@ -458,6 +482,133 @@ function CapChip({ cap, active, locked, onClick }: { cap: Cap; active: boolean; 
     >
       {cap}
     </button>
+  )
+}
+
+function OverrideChip({ cap, state, onClick }: { cap: Cap; state: CellState; onClick: () => void }) {
+  const granted = state === 'grant'
+  const revoked = state === 'revoke'
+  const color = CAP_COLOR[cap]
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={`${CAP_LABEL[cap]} — ${state}`}
+      style={{
+        width: 30, height: 26, borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+        border: `1px solid ${granted ? color : revoked ? 'var(--danger)' : 'var(--border)'}`,
+        background: granted ? color : 'transparent',
+        color: granted ? '#fff' : revoked ? 'var(--danger)' : 'var(--text-2)',
+        textDecoration: revoked ? 'line-through' : 'none',
+        transition: 'all .12s ease',
+      }}
+    >
+      {cap}
+    </button>
+  )
+}
+
+function UserAccessEditor({ user, initial, onSave, onCancel }: {
+  user: SchoolUser
+  initial: UserOverrides
+  onSave: (ov: UserOverrides) => void
+  onCancel: () => void
+}) {
+  const toast = useToast()
+  const [ov, setOv] = useState<UserOverrides>(initial)
+
+  const cycle = (mod: string, cap: Cap) => {
+    setOv((prev) => {
+      const next = NEXT_CELL_STATE[cellState(mod, cap, prev)]
+      const modOv = { ...(prev[mod] ?? {}) }
+      if (next === 'inherit') delete modOv[cap]
+      else modOv[cap] = next
+      const out = { ...prev }
+      if (Object.keys(modOv).length === 0) delete out[mod]
+      else out[mod] = modOv
+      return out
+    })
+  }
+
+  const count = overrideCount(ov)
+  const reset = () => { setOv(initial); toast.info('Overrides reset', 'Reverted to the last saved overrides.') }
+  const save = () => {
+    onSave(ov)
+    toast.success('Permissions saved', `${count} override${count === 1 ? '' : 's'} for ${user.name}.`)
+  }
+
+  return (
+    <div className="col gap16">
+      <Card>
+        <div className="row ai-center gap12 wrap">
+          <Avatar name={user.name} hue={user.hue} size={40} />
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div className="fw7">{user.name}</div>
+            <div className="t-sm muted">{user.email}</div>
+          </div>
+          <Badge tone={roleTone(user.role)}>{ROLE_META[user.role].label}</Badge>
+          <Btn variant="ghost" size="sm" icon="arrowLeft" onClick={onCancel}>Back</Btn>
+        </div>
+      </Card>
+
+      <Card pad={false}>
+        <CardHead
+          title="Per-user access"
+          sub="Tap V / E / A to cycle inherit → grant → revoke for this user"
+          icon="user"
+          action={
+            <div className="row ai-center gap8">
+              <Badge tone="neutral">{count} override{count === 1 ? '' : 's'}</Badge>
+              <Btn variant="ghost" size="sm" icon="refresh" onClick={reset}>Reset</Btn>
+              <Btn variant="primary" size="sm" icon="check" onClick={save}>Save changes</Btn>
+            </div>
+          }
+        />
+        <div style={{ overflowX: 'auto' }}>
+          <table className="sm-table">
+            <thead>
+              <tr>
+                <th style={{ minWidth: 180 }}>Module</th>
+                <th className="ta-center">Role default</th>
+                <th className="ta-center">This user</th>
+                <th className="ta-center">Effective</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.keys(PERMS).map((mod) => {
+                const roleCaps = caps(user.role, mod)
+                const eff = effectiveCaps(user.role, mod, ov)
+                return (
+                  <tr key={mod}>
+                    <td>
+                      <div className="fw6">{MODULE_LABEL[mod] ?? mod}</div>
+                      <div className="t-xs muted">{mod}</div>
+                    </td>
+                    <td className="ta-center">
+                      <span className="t-xs muted">{roleCaps.length ? roleCaps.join(' · ') : '—'}</span>
+                    </td>
+                    <td className="ta-center">
+                      <div className="row gap4" style={{ justifyContent: 'center' }}>
+                        {CAPS.map((c) => (
+                          <OverrideChip key={c} cap={c} state={cellState(mod, c, ov)} onClick={() => cycle(mod, c)} />
+                        ))}
+                      </div>
+                    </td>
+                    <td className="ta-center">
+                      <div className="row gap4" style={{ justifyContent: 'center' }}>
+                        {eff.length
+                          ? eff.map((c) => <Badge key={c} tone={CAP_TONE[c]}>{c}</Badge>)
+                          : <span className="t-xs muted">No access</span>}
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
   )
 }
 
@@ -599,6 +750,7 @@ function InvitationsTab() {
 /* ---------- Audit log ---------- */
 interface AuditRow { id: string; who: string; hue: number; action: string; target: string; module: string; when: string; tone: BadgeTone }
 const AUDIT: AuditRow[] = [
+  { id: 'A-0', who: 'Ravi Menon', hue: 200, action: 'Granted View', target: 'Neha Joshi · Fees', module: 'identity', when: 'Just now', tone: 'success' },
   { id: 'A-1', who: 'Ravi Menon', hue: 200, action: 'Granted Approve', target: 'Principal · Fees', module: 'fees', when: 'Just now', tone: 'success' },
   { id: 'A-2', who: 'Ravi Menon', hue: 200, action: 'Invited user', target: 'neha.joshi@school.edu', module: 'identity', when: '12m ago', tone: 'info' },
   { id: 'A-3', who: 'Sunita Rao', hue: 330, action: 'Published results', target: 'Term 1 · Grade X', module: 'exams', when: '1h ago', tone: 'success' },
