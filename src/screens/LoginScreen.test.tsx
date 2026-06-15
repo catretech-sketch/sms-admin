@@ -76,6 +76,28 @@ describe('LoginScreen — OTP sign-in', () => {
     fireEvent.click(getByText(/^Sign in$/))
     expect(await findByText('LOGGED_IN:admin@greenwood.edu')).toBeInTheDocument()
   })
+
+  it('resolves a mobile number with country code (14 digits) and signs in', () => {
+    const { container, getByText } = renderLogin()
+    fireEvent.change(getByLabelText(container, 'Email or mobile number'), {
+      target: { value: '00919810010002' }, // 00 + 91 + admin's 10-digit number
+    })
+    fireEvent.click(getByText('Send one-time code'))
+    const code = ((getByText(/Demo code:/i).textContent || '').match(/\d{6}/) || [''])[0]
+    fireEvent.change(getByLabelText(container, 'Enter the 6-digit code'), { target: { value: code } })
+    fireEvent.click(getByText(/Verify & sign in/i))
+    expect(getByText('LOGGED_IN:admin@greenwood.edu')).toBeInTheDocument()
+  })
+
+  it('a malformed email (missing @) shows a clear identifier error, not a phone error', () => {
+    const { container, getByText, queryByText } = renderLogin()
+    fireEvent.change(getByLabelText(container, 'Email or mobile number'), {
+      target: { value: 'ravikumar.menon' },
+    })
+    fireEvent.click(getByText('Send one-time code'))
+    expect(getByText(/Enter a valid email or mobile number/i)).toBeInTheDocument()
+    expect(queryByText(/Demo code:/i)).toBeNull()
+  })
 })
 
 /* Helper: resolve a Field's <input> by its visible label text. */

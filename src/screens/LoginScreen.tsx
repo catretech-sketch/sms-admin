@@ -6,7 +6,7 @@ import { useApp } from '@/lib/hooks'
 import { DEMO_ACCOUNTS, type DemoAccount } from '@/context/AppProvider'
 import { ROLE_META } from '@/data/mockDb'
 import { Icon, Field, Input, Btn, Checkbox, Spinner, Avatar } from '@/components/ui'
-import { validateEmail, validatePhone } from '@/lib/validation'
+import { validateEmail } from '@/lib/validation'
 
 /* ---------- Sign-in identifier helpers (which account an email/mobile maps to) ---------- */
 
@@ -65,8 +65,9 @@ export function LoginScreen() {
   const sendCode = () => {
     const v = otpId.trim()
     if (!v) { setOtpErr('Enter your email or mobile number.'); return }
-    const err = v.includes('@') ? validateEmail(v) : validatePhone(v)
-    if (err) { setOtpErr(err); return }
+    // Route by shape: digits/+/-/spaces/parens look like a phone; anything else is treated as an email.
+    const looksPhone = /^[\d+\-\s()]+$/.test(v)
+    if (!looksPhone && validateEmail(v)) { setOtpErr('Enter a valid email or mobile number.'); return }
     const acc = findAccountByIdentifier(v)
     if (!acc) { setOtpErr('No account found for that email or mobile.'); return }
     const code = String(Math.floor(100000 + Math.random() * 900000))
@@ -80,10 +81,12 @@ export function LoginScreen() {
   const verifyCode = () => {
     if (otpInput.trim() !== sentCode) { setOtpErr('Incorrect code.'); return }
     if (otpAcc) app.login(otpAcc.email)
+    else setOtpErr('Something went wrong — please request a new code.')
   }
 
   const backToRequest = () => {
     setOtpStep('request')
+    setOtpAcc(null)
     setSentCode('')
     setOtpInput('')
     setOtpErr(null)
@@ -140,7 +143,7 @@ export function LoginScreen() {
               <Field label="Email or mobile number" error={otpErr ?? undefined}>
                 <Input icon="phone" value={otpId} onChange={(e) => { setOtpId(e.target.value); setOtpErr(null) }} placeholder="you@school.edu or +91…" />
               </Field>
-              <Btn type="submit" variant="secondary" size="lg" style={{ width: '100%' }}>
+              <Btn type="submit" variant="secondary" size="lg" style={{ width: '100%' }} disabled={busy}>
                 Send one-time code <Icon name="arrowRight" size={16} />
               </Btn>
             </form>
@@ -150,7 +153,7 @@ export function LoginScreen() {
               <Field label="Enter the 6-digit code" error={otpErr ?? undefined}>
                 <Input icon="key" inputMode="numeric" maxLength={6} value={otpInput} onChange={(e) => { setOtpInput(e.target.value); setOtpErr(null) }} placeholder="••••••" />
               </Field>
-              <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }}>
+              <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy}>
                 Verify & sign in <Icon name="arrowRight" size={16} />
               </Btn>
               <button type="button" className="sm-login-link" onClick={backToRequest}>
