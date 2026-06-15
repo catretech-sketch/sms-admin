@@ -68,8 +68,10 @@ export function LoginScreen() {
     // Route by shape: digits/+/-/spaces/parens look like a phone; anything else is treated as an email.
     const looksPhone = /^[\d+\-\s()]+$/.test(v)
     if (!looksPhone && validateEmail(v)) { setOtpErr('Enter a valid email or mobile number.'); return }
+    // OTP is sign-in only: the identifier must already exist in the accounts data.
+    // Unknown email/mobile is rejected here — it never registers a new user.
     const acc = findAccountByIdentifier(v)
-    if (!acc) { setOtpErr('No account found for that email or mobile.'); return }
+    if (!acc) { setOtpErr('This email or mobile isn’t registered. Ask your admin for access.'); return }
     const code = String(Math.floor(100000 + Math.random() * 900000))
     setOtpAcc(acc)
     setSentCode(code)

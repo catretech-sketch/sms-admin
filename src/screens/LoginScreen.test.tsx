@@ -59,7 +59,7 @@ describe('LoginScreen — OTP sign-in', () => {
     expect(getByText('LOGGED_IN:principal@greenwood.edu')).toBeInTheDocument()
   })
 
-  it('an unknown identifier shows an error and no verify step', () => {
+  it('an unregistered identifier is rejected (no code, no registration)', () => {
     const { container, getByText, queryByText } = renderLogin()
 
     fireEvent.change(getByLabelText(container, 'Email or mobile number'), {
@@ -67,7 +67,7 @@ describe('LoginScreen — OTP sign-in', () => {
     })
     fireEvent.click(getByText('Send one-time code'))
 
-    expect(getByText(/No account found/i)).toBeInTheDocument()
+    expect(getByText(/isn’t registered/i)).toBeInTheDocument()
     expect(queryByText(/Demo code:/i)).toBeNull()
   })
 
