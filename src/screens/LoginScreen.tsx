@@ -152,7 +152,7 @@ export function LoginScreen() {
                 <Field label="Email or mobile number" error={otpErr ?? undefined}>
                   <Input icon="phone" value={otpId} onChange={(e) => { setOtpId(e.target.value); setOtpErr(null) }} placeholder="you@school.edu or +91…" />
                 </Field>
-                <Btn type="submit" variant="secondary" size="lg" style={{ width: '100%' }} disabled={busy}>
+                <Btn type="submit" variant="secondary" size="lg" className="sm-login-otp-send" style={{ width: '100%' }} disabled={busy}>
                   Send one-time code <Icon name="arrowRight" size={16} />
                 </Btn>
               </form>
