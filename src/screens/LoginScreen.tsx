@@ -136,31 +136,44 @@ export function LoginScreen() {
             </Btn>
           </form>
 
-          <div className="sm-login-or"><span>or sign in with a one-time code</span></div>
+          <div className="sm-login-or"><span>or</span></div>
 
-          {otpStep === 'request' ? (
-            <form className="col gap10" onSubmit={(e) => { e.preventDefault(); sendCode() }}>
-              <Field label="Email or mobile number" error={otpErr ?? undefined}>
-                <Input icon="phone" value={otpId} onChange={(e) => { setOtpId(e.target.value); setOtpErr(null) }} placeholder="you@school.edu or +91…" />
-              </Field>
-              <Btn type="submit" variant="secondary" size="lg" style={{ width: '100%' }} disabled={busy}>
-                Send one-time code <Icon name="arrowRight" size={16} />
-              </Btn>
-            </form>
-          ) : (
-            <form className="col gap10" onSubmit={(e) => { e.preventDefault(); verifyCode() }}>
-              <div className="sm-login-otp-hint">Demo code: <b>{sentCode}</b></div>
-              <Field label="Enter the 6-digit code" error={otpErr ?? undefined}>
-                <Input icon="key" inputMode="numeric" maxLength={6} value={otpInput} onChange={(e) => { setOtpInput(e.target.value); setOtpErr(null) }} placeholder="••••••" />
-              </Field>
-              <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy}>
-                Verify & sign in <Icon name="arrowRight" size={16} />
-              </Btn>
-              <button type="button" className="sm-login-link" onClick={backToRequest}>
-                <Icon name="arrowLeft" size={13} /> Use a different email/mobile
-              </button>
-            </form>
-          )}
+          <div className="sm-login-otp">
+            <div className="sm-login-otp-head">
+              <span className="sm-login-otp-ic"><Icon name="key" size={15} /></span>
+              <div>
+                <div className="sm-login-otp-title">Passwordless sign-in</div>
+                <div className="sm-login-otp-desc">We’ll send a one-time code to your email or mobile.</div>
+              </div>
+            </div>
+
+            {otpStep === 'request' ? (
+              <form className="col gap10" onSubmit={(e) => { e.preventDefault(); sendCode() }}>
+                <Field label="Email or mobile number" error={otpErr ?? undefined}>
+                  <Input icon="phone" value={otpId} onChange={(e) => { setOtpId(e.target.value); setOtpErr(null) }} placeholder="you@school.edu or +91…" />
+                </Field>
+                <Btn type="submit" variant="secondary" size="lg" style={{ width: '100%' }} disabled={busy}>
+                  Send one-time code <Icon name="arrowRight" size={16} />
+                </Btn>
+              </form>
+            ) : (
+              <form className="col gap10" onSubmit={(e) => { e.preventDefault(); verifyCode() }}>
+                <div className="sm-login-otp-hint">
+                  <Icon name="message" size={14} />
+                  <span>Demo code: <b>{sentCode}</b></span>
+                </div>
+                <Field label="Enter the 6-digit code" error={otpErr ?? undefined}>
+                  <Input icon="key" inputMode="numeric" maxLength={6} value={otpInput} onChange={(e) => { setOtpInput(e.target.value); setOtpErr(null) }} placeholder="••••••" />
+                </Field>
+                <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy}>
+                  Verify & sign in <Icon name="arrowRight" size={16} />
+                </Btn>
+                <button type="button" className="sm-login-link" onClick={backToRequest}>
+                  <Icon name="arrowLeft" size={13} /> Use a different email/mobile
+                </button>
+              </form>
+            )}
+          </div>
 
           <div className="sm-demos">
             <div className="sm-demos-label">or try a demo account</div>
