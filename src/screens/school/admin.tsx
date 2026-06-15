@@ -494,6 +494,7 @@ function OverrideChip({ cap, state, onClick }: { cap: Cap; state: CellState; onC
       type="button"
       onClick={onClick}
       title={`${CAP_LABEL[cap]} — ${state}`}
+      aria-label={`${CAP_LABEL[cap]}: ${state}`}
       style={{
         width: 30, height: 26, borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: 'pointer',
         border: `1px solid ${granted ? color : revoked ? 'var(--danger)' : 'var(--border)'}`,
@@ -750,7 +751,7 @@ function InvitationsTab() {
 /* ---------- Audit log ---------- */
 interface AuditRow { id: string; who: string; hue: number; action: string; target: string; module: string; when: string; tone: BadgeTone }
 const AUDIT: AuditRow[] = [
-  { id: 'A-0', who: 'Ravi Menon', hue: 200, action: 'Granted View', target: 'Neha Joshi · Fees', module: 'identity', when: 'Just now', tone: 'success' },
+  { id: 'A-0', who: 'Ravi Menon', hue: 200, action: 'Granted View', target: 'Neha Joshi · Fees', module: 'fees', when: 'Just now', tone: 'success' },
   { id: 'A-1', who: 'Ravi Menon', hue: 200, action: 'Granted Approve', target: 'Principal · Fees', module: 'fees', when: 'Just now', tone: 'success' },
   { id: 'A-2', who: 'Ravi Menon', hue: 200, action: 'Invited user', target: 'neha.joshi@school.edu', module: 'identity', when: '12m ago', tone: 'info' },
   { id: 'A-3', who: 'Sunita Rao', hue: 330, action: 'Published results', target: 'Term 1 · Grade X', module: 'exams', when: '1h ago', tone: 'success' },
