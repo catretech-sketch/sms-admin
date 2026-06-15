@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { render, fireEvent, within, cleanup } from '@testing-library/react'
 import { AppProvider } from '@/context/AppProvider'
 import { ToastProvider } from '@/context/ToastProvider'
-import { workspaceScreens } from './workspace'
+import { workspaceScreens, ALL_SCHOOLS, isAllSchools, scopeLabel, toggleScope } from './workspace'
 
 const OwnerUsers = workspaceScreens['owner.users']
 
@@ -63,5 +63,32 @@ describe('owner Users & roles — edit user', () => {
     expect(within(container).queryByRole('dialog')).toBeNull()
     // Role badge unchanged because Cancel discards edits.
     expect(within(row).getByText(roleBefore as string)).toBeInTheDocument()
+  })
+})
+
+describe('scope helpers', () => {
+  it('isAllSchools detects the All sentinel', () => {
+    expect(isAllSchools([ALL_SCHOOLS])).toBe(true)
+    expect(isAllSchools(['Greenwood Valley School'])).toBe(false)
+  })
+  it('scopeLabel summarises the scope', () => {
+    expect(scopeLabel([ALL_SCHOOLS])).toBe('All schools')
+    expect(scopeLabel(['Greenwood Valley School'])).toBe('Greenwood Valley School')
+    expect(scopeLabel(['Greenwood Valley School', 'Delhi Public Academy'])).toBe('2 schools')
+  })
+  it('toggleScope: picking a specific school replaces All', () => {
+    expect(toggleScope([ALL_SCHOOLS], 'Greenwood Valley School')).toEqual(['Greenwood Valley School'])
+  })
+  it('toggleScope: picking All replaces specifics', () => {
+    expect(toggleScope(['Greenwood Valley School', 'Delhi Public Academy'], ALL_SCHOOLS)).toEqual([ALL_SCHOOLS])
+  })
+  it('toggleScope: adds and removes specific schools', () => {
+    expect(toggleScope(['Greenwood Valley School'], 'Delhi Public Academy'))
+      .toEqual(['Greenwood Valley School', 'Delhi Public Academy'])
+    expect(toggleScope(['Greenwood Valley School', 'Delhi Public Academy'], 'Delhi Public Academy'))
+      .toEqual(['Greenwood Valley School'])
+  })
+  it('toggleScope: removing the last specific falls back to All (never empty)', () => {
+    expect(toggleScope(['Greenwood Valley School'], 'Greenwood Valley School')).toEqual([ALL_SCHOOLS])
   })
 })

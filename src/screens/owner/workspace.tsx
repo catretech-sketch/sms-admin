@@ -42,6 +42,31 @@ const MODULE_LABEL: Record<string, string> = {
 const roleTone = (r: Role): BadgeTone =>
   r === 'principal' ? 'success' : r === 'vice_principal' ? 'brand' : r === 'admin' ? 'info' : 'neutral'
 
+/* ---------- scope (which schools a user can access) ---------- */
+export const ALL_SCHOOLS = 'All schools'
+
+/** True when the scope grants every tenant. */
+export function isAllSchools(scope: string[]): boolean {
+  return scope.includes(ALL_SCHOOLS)
+}
+
+/** Compact label for the table: "All schools" | "<name>" | "N schools". */
+export function scopeLabel(scope: string[]): string {
+  if (isAllSchools(scope)) return ALL_SCHOOLS
+  if (scope.length === 1) return scope[0]
+  return `${scope.length} schools`
+}
+
+/** Toggle a school in the working scope, enforcing All-vs-specific + non-empty. */
+export function toggleScope(scope: string[], school: string): string[] {
+  if (school === ALL_SCHOOLS) return [ALL_SCHOOLS]
+  const specifics = scope.filter((s) => s !== ALL_SCHOOLS)
+  const next = specifics.includes(school)
+    ? specifics.filter((s) => s !== school)
+    : [...specifics, school]
+  return next.length === 0 ? [ALL_SCHOOLS] : next
+}
+
 /* ============================================================
    Team
    ============================================================ */
