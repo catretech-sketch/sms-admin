@@ -25,11 +25,15 @@ function moduleRow(container: HTMLElement, label: string): HTMLElement {
 }
 
 describe('per-user access editor', () => {
-  it('opens from a user row, cycles a capability, saves, and shows the override badge', () => {
+  it('opens from a user row, cycles a capability, saves, and shows the override badge on that user', () => {
     const { container } = renderScreen()
 
-    // Open the editor for the first user.
-    fireEvent.click(within(container).getAllByText('Edit')[0])
+    // Open the editor for the first user, capturing their name so we can find
+    // their row again after saving. (Several users are unseeded, so picking the
+    // first row gives a deterministic subject thanks to the seeded mock data.)
+    const editBtn = within(container).getAllByText('Edit')[0]
+    const userName = (editBtn.closest('tr') as HTMLElement).querySelector('.fw6')!.textContent!
+    fireEvent.click(editBtn)
     expect(within(container).getByText('Per-user access')).toBeInTheDocument()
 
     // The "Fees & finance" module row exists with three V/E/A chips.
@@ -44,8 +48,9 @@ describe('per-user access editor', () => {
     fireEvent.click(within(container).getByText('Save changes'))
     expect(within(container).getByText(/Permissions saved/i)).toBeInTheDocument()
 
-    // Back on the list, the user shows a "custom" override badge.
-    expect(within(container).getAllByText(/custom/i).length).toBeGreaterThan(0)
+    // The edited user's own row now shows a "custom" override badge.
+    const savedRow = within(container).getByText(userName).closest('tr') as HTMLElement
+    expect(within(savedRow).getByText(/\d+ custom/i)).toBeInTheDocument()
   })
 
   it('cycles a cell through grant, revoke, and back to inherit', () => {
