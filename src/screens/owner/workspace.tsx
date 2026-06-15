@@ -75,25 +75,25 @@ interface TeamUser {
   name: string
   email: string
   role: Role
-  scope: string
+  scope: string[]
   hue: number
   status: 'active' | 'invited' | 'suspended'
   last: string
 }
 
 const TEAM: TeamUser[] = [
-  { id: 'U-01', name: 'Anil Mehta', email: 'anil@schoolmate.io', role: 'admin', scope: 'All schools', hue: 250, status: 'active', last: 'Just now' },
-  { id: 'U-02', name: 'Sunita Rao', email: 'sunita.rao@schoolmate.io', role: 'principal', scope: 'Greenwood Valley School', hue: 330, status: 'active', last: '12m ago' },
-  { id: 'U-03', name: 'Arjun Banerjee', email: 'arjun.b@schoolmate.io', role: 'vice_principal', scope: 'Greenwood Valley School', hue: 150, status: 'active', last: '1h ago' },
-  { id: 'U-04', name: 'Ravi Menon', email: 'ravi.menon@schoolmate.io', role: 'admin', scope: 'St. Xavier’s High School', hue: 200, status: 'active', last: '3h ago' },
-  { id: 'U-05', name: 'Meera Krishnan', email: 'meera.k@schoolmate.io', role: 'teacher', scope: 'Greenwood Valley School', hue: 20, status: 'active', last: 'Yesterday' },
-  { id: 'U-06', name: 'Priya Iyer', email: 'priya.iyer@schoolmate.io', role: 'principal', scope: 'Delhi Public Academy', hue: 290, status: 'active', last: 'Yesterday' },
-  { id: 'U-07', name: 'Kabir Sharma', email: 'kabir.s@schoolmate.io', role: 'admin', scope: 'Sunrise International', hue: 40, status: 'active', last: '2d ago' },
-  { id: 'U-08', name: 'Fatima Khan', email: 'fatima.khan@schoolmate.io', role: 'vice_principal', scope: 'Al-Manar Academy', hue: 175, status: 'active', last: '2d ago' },
-  { id: 'U-09', name: 'Rohan Das', email: 'rohan.das@schoolmate.io', role: 'teacher', scope: 'Horizon World School', hue: 110, status: 'suspended', last: '6d ago' },
-  { id: 'U-10', name: 'Anika Reddy', email: 'anika.reddy@schoolmate.io', role: 'admin', scope: 'Lotus Montessori', hue: 320, status: 'active', last: '1w ago' },
-  { id: 'U-11', name: 'Vivaan Gupta', email: 'vivaan.gupta@schoolmate.io', role: 'principal', scope: 'St. Xavier’s High School', hue: 215, status: 'active', last: '1w ago' },
-  { id: 'U-12', name: 'Diya Nair', email: 'diya.nair@schoolmate.io', role: 'teacher', scope: 'Delhi Public Academy', hue: 80, status: 'invited', last: 'Pending' },
+  { id: 'U-01', name: 'Anil Mehta', email: 'anil@schoolmate.io', role: 'admin', scope: [ALL_SCHOOLS], hue: 250, status: 'active', last: 'Just now' },
+  { id: 'U-02', name: 'Sunita Rao', email: 'sunita.rao@schoolmate.io', role: 'principal', scope: ['Greenwood Valley School'], hue: 330, status: 'active', last: '12m ago' },
+  { id: 'U-03', name: 'Arjun Banerjee', email: 'arjun.b@schoolmate.io', role: 'vice_principal', scope: ['Greenwood Valley School'], hue: 150, status: 'active', last: '1h ago' },
+  { id: 'U-04', name: 'Ravi Menon', email: 'ravi.menon@schoolmate.io', role: 'admin', scope: ['St. Xavier’s High School', 'Greenwood Valley School'], hue: 200, status: 'active', last: '3h ago' },
+  { id: 'U-05', name: 'Meera Krishnan', email: 'meera.k@schoolmate.io', role: 'teacher', scope: ['Greenwood Valley School'], hue: 20, status: 'active', last: 'Yesterday' },
+  { id: 'U-06', name: 'Priya Iyer', email: 'priya.iyer@schoolmate.io', role: 'principal', scope: ['Delhi Public Academy'], hue: 290, status: 'active', last: 'Yesterday' },
+  { id: 'U-07', name: 'Kabir Sharma', email: 'kabir.s@schoolmate.io', role: 'admin', scope: ['Sunrise International'], hue: 40, status: 'active', last: '2d ago' },
+  { id: 'U-08', name: 'Fatima Khan', email: 'fatima.khan@schoolmate.io', role: 'vice_principal', scope: ['Al-Manar Academy'], hue: 175, status: 'active', last: '2d ago' },
+  { id: 'U-09', name: 'Rohan Das', email: 'rohan.das@schoolmate.io', role: 'teacher', scope: ['Horizon World School'], hue: 110, status: 'suspended', last: '6d ago' },
+  { id: 'U-10', name: 'Anika Reddy', email: 'anika.reddy@schoolmate.io', role: 'admin', scope: ['Lotus Montessori'], hue: 320, status: 'active', last: '1w ago' },
+  { id: 'U-11', name: 'Vivaan Gupta', email: 'vivaan.gupta@schoolmate.io', role: 'principal', scope: ['St. Xavier’s High School'], hue: 215, status: 'active', last: '1w ago' },
+  { id: 'U-12', name: 'Diya Nair', email: 'diya.nair@schoolmate.io', role: 'teacher', scope: ['Delhi Public Academy'], hue: 80, status: 'invited', last: 'Pending' },
 ]
 
 const userStatus: Record<TeamUser['status'], { tone: BadgeTone; label: string }> = {
@@ -102,20 +102,45 @@ const userStatus: Record<TeamUser['status'], { tone: BadgeTone; label: string }>
   suspended: { tone: 'danger', label: 'Suspended' },
 }
 
+/* Multi-school scope selector shared by the Invite and Edit modals. */
+function ScopePicker({ scope, onChange }: { scope: string[]; onChange: (next: string[]) => void }) {
+  const all = isAllSchools(scope)
+  return (
+    <Field label="Scope" required hint="Grant access to all tenants, or pick one or more specific schools.">
+      <div className="col gap8" style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 10 }}>
+        <label className="row ai-center gap8" style={{ cursor: 'pointer' }}>
+          <input type="checkbox" checked={all} onChange={() => onChange(toggleScope(scope, ALL_SCHOOLS))} />
+          <span className="fw6">All schools</span>
+        </label>
+        {schools.map((s) => (
+          <label key={s.id} className="row ai-center gap8" style={{ cursor: 'pointer', opacity: all ? 0.6 : 1 }}>
+            <input
+              type="checkbox"
+              checked={!all && scope.includes(s.name)}
+              onChange={() => onChange(toggleScope(scope, s.name))}
+            />
+            <span>{s.name}</span>
+          </label>
+        ))}
+      </div>
+    </Field>
+  )
+}
+
 function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const toast = useToast()
   const [email, setEmail] = useState('')
   const [role, setRole] = useState<Role>('admin')
-  const [scope, setScope] = useState('all')
+  const [scope, setScope] = useState<string[]>([ALL_SCHOOLS])
 
-  const reset = () => { setEmail(''); setRole('admin'); setScope('all') }
+  const reset = () => { setEmail(''); setRole('admin'); setScope([ALL_SCHOOLS]) }
 
   const submit = () => {
     if (!email.trim() || !email.includes('@')) {
       toast.danger('Valid email required', 'Enter the teammate’s work email address.')
       return
     }
-    const where = scope === 'all' ? 'all schools' : schools.find((s) => s.id === scope)?.name ?? scope
+    const where = scopeLabel(scope)
     toast.success('Invitation sent', `${email} invited as ${ROLE_META[role].label} · ${where}.`)
     reset()
     onClose()
@@ -142,26 +167,21 @@ function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) 
             value={role} onChange={(e) => setRole(e.target.value as Role)}
           />
         </Field>
-        <Field label="Scope" required hint="Limit this user to one school, or grant access across all tenants.">
-          <Select
-            options={[{ value: 'all', label: 'All schools' }, ...schools.map((s) => ({ value: s.id, label: s.name }))]}
-            value={scope} onChange={(e) => setScope(e.target.value)}
-          />
-        </Field>
+        <ScopePicker scope={scope} onChange={setScope} />
       </div>
     </Modal>
   )
 }
 
-/* Edit a teammate's role & scope. Mounted only while a user is selected, keyed
+/* Edit a teammatete's role & scope. Mounted only while a user is selected, keyed
    by id so the selects initialise from the current user without an effect. */
 function EditUserModal({ user, onClose, onSave }: {
   user: TeamUser
   onClose: () => void
-  onSave: (id: string, role: Role, scope: string) => void
+  onSave: (id: string, role: Role, scope: string[]) => void
 }) {
   const [role, setRole] = useState<Role>(user.role)
-  const [scope, setScope] = useState(user.scope)
+  const [scope, setScope] = useState<string[]>(user.scope)
 
   return (
     <Modal
@@ -181,12 +201,7 @@ function EditUserModal({ user, onClose, onSave }: {
             value={role} onChange={(e) => setRole(e.target.value as Role)}
           />
         </Field>
-        <Field label="Scope" required hint="Limit this user to one school, or grant access across all tenants.">
-          <Select
-            options={[{ value: 'All schools', label: 'All schools' }, ...schools.map((s) => ({ value: s.name, label: s.name }))]}
-            value={scope} onChange={(e) => setScope(e.target.value)}
-          />
-        </Field>
+        <ScopePicker scope={scope} onChange={setScope} />
       </div>
     </Modal>
   )
@@ -209,7 +224,11 @@ function TeamTab() {
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
     return team.filter((u) => {
-      if (needle && !(u.name.toLowerCase().includes(needle) || u.email.toLowerCase().includes(needle) || u.scope.toLowerCase().includes(needle))) return false
+      if (needle && !(
+        u.name.toLowerCase().includes(needle) ||
+        u.email.toLowerCase().includes(needle) ||
+        u.scope.some((s) => s.toLowerCase().includes(needle))
+      )) return false
       if (roleF !== 'all' && u.role !== roleF) return false
       return true
     })
@@ -233,11 +252,11 @@ function TeamTab() {
       render: (u) => <Badge tone={roleTone(u.role)}>{ROLE_META[u.role].label}</Badge>,
     },
     {
-      key: 'scope', label: 'Scope', sortValue: (u) => u.scope,
+      key: 'scope', label: 'Scope', sortValue: (u) => scopeLabel(u.scope),
       render: (u) => (
-        <span className="row ai-center gap6 t-sm">
-          <Icon name={u.scope === 'All schools' ? 'globe' : 'building'} size={14} />
-          {u.scope}
+        <span className="row ai-center gap6 t-sm" title={u.scope.join(', ')}>
+          <Icon name={isAllSchools(u.scope) ? 'globe' : 'building'} size={14} />
+          {scopeLabel(u.scope)}
         </span>
       ),
     },
@@ -298,7 +317,7 @@ function TeamTab() {
           onClose={() => setEditing(null)}
           onSave={(id, role, scope) => {
             setTeam((list) => list.map((x) => (x.id === id ? { ...x, role, scope } : x)))
-            toast.success('Access updated', `${editing.name} is now ${ROLE_META[role].label} · ${scope}.`)
+            toast.success('Access updated', `${editing.name} is now ${ROLE_META[role].label} · ${scopeLabel(scope)}.`)
             setEditing(null)
           }}
         />
