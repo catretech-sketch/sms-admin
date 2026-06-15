@@ -128,26 +128,67 @@ function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) 
   )
 }
 
+/* Edit a teammate's role & scope. Mounted only while a user is selected, keyed
+   by id so the selects initialise from the current user without an effect. */
+function EditUserModal({ user, onClose, onSave }: {
+  user: TeamUser
+  onClose: () => void
+  onSave: (id: string, role: Role, scope: string) => void
+}) {
+  const [role, setRole] = useState<Role>(user.role)
+  const [scope, setScope] = useState(user.scope)
+
+  return (
+    <Modal
+      open onClose={onClose} icon="user"
+      title="Edit access" sub={`Adjust role & scope for ${user.name}`}
+      footer={
+        <div className="row gap8 jc-end">
+          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn variant="primary" icon="check" onClick={() => onSave(user.id, role, scope)}>Save changes</Btn>
+        </div>
+      }
+    >
+      <div className="col gap16">
+        <Field label="Role" required hint={ROLE_META[role].desc}>
+          <Select
+            options={ROLES.map((r) => ({ value: r, label: `${ROLE_META[r].label} — ${ROLE_META[r].short}` }))}
+            value={role} onChange={(e) => setRole(e.target.value as Role)}
+          />
+        </Field>
+        <Field label="Scope" required hint="Limit this user to one school, or grant access across all tenants.">
+          <Select
+            options={[{ value: 'All schools', label: 'All schools' }, ...schools.map((s) => ({ value: s.name, label: s.name }))]}
+            value={scope} onChange={(e) => setScope(e.target.value)}
+          />
+        </Field>
+      </div>
+    </Modal>
+  )
+}
+
 function TeamTab() {
   const toast = useToast()
   const [q, setQ] = useState('')
   const [roleF, setRoleF] = useState('all')
   const [inviteOpen, setInviteOpen] = useState(false)
+  const [team, setTeam] = useState<TeamUser[]>(TEAM)
+  const [editing, setEditing] = useState<TeamUser | null>(null)
 
   const kpis = useMemo(() => ({
-    total: TEAM.length,
-    admins: TEAM.filter((u) => u.role === 'admin').length,
-    active: TEAM.filter((u) => u.status === 'active').length,
-  }), [])
+    total: team.length,
+    admins: team.filter((u) => u.role === 'admin').length,
+    active: team.filter((u) => u.status === 'active').length,
+  }), [team])
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
-    return TEAM.filter((u) => {
+    return team.filter((u) => {
       if (needle && !(u.name.toLowerCase().includes(needle) || u.email.toLowerCase().includes(needle) || u.scope.toLowerCase().includes(needle))) return false
       if (roleF !== 'all' && u.role !== roleF) return false
       return true
     })
-  }, [q, roleF])
+  }, [q, roleF, team])
 
   const columns: Column<TeamUser>[] = [
     {
@@ -187,7 +228,7 @@ function TeamTab() {
       key: 'actions', label: '', align: 'right',
       render: (u) => (
         <div className="row gap6 jc-end">
-          <Btn variant="secondary" size="sm" icon="edit" onClick={() => toast.info('Edit access', `Adjust role & scope for ${u.name}.`)}>Edit</Btn>
+          <Btn variant="secondary" size="sm" icon="edit" onClick={() => setEditing(u)}>Edit</Btn>
           {u.status === 'suspended'
             ? <Btn variant="secondary" size="sm" icon="refresh" onClick={() => toast.success('User reactivated', `${u.name} can sign in again.`)}>Restore</Btn>
             : <Btn variant="ghost" size="sm" icon="lock" onClick={() => toast.danger('User suspended', `${u.name} can no longer sign in.`)}>Suspend</Btn>}
@@ -225,6 +266,18 @@ function TeamTab() {
       </Card>
 
       <InviteModal open={inviteOpen} onClose={() => setInviteOpen(false)} />
+      {editing && (
+        <EditUserModal
+          key={editing.id}
+          user={editing}
+          onClose={() => setEditing(null)}
+          onSave={(id, role, scope) => {
+            setTeam((list) => list.map((x) => (x.id === id ? { ...x, role, scope } : x)))
+            toast.success('Access updated', `${editing.name} is now ${ROLE_META[role].label} · ${scope}.`)
+            setEditing(null)
+          }}
+        />
+      )}
     </div>
   )
 }
