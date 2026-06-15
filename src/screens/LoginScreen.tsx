@@ -7,7 +7,7 @@ import { DEMO_ACCOUNTS, type DemoAccount } from '@/context/AppProvider'
 import { ROLE_META } from '@/data/mockDb'
 import { Icon, Field, Input, Btn, Checkbox, Spinner, Avatar } from '@/components/ui'
 
-/* ---------- OTP sign-in helpers (which account an identifier maps to) ---------- */
+/* ---------- Sign-in identifier helpers (which account an email/mobile maps to) ---------- */
 
 /** Keep only digits, for tolerant phone matching. */
 export function normalizePhone(s: string): string {

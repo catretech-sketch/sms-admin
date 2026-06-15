@@ -17,9 +17,11 @@ describe('LoginScreen helpers', () => {
     expect(findAccountByIdentifier('9810010003')?.name).toBe('Sunita Rao')
   })
 
-  it('findAccountByIdentifier returns null for an unknown identifier', () => {
+  it('findAccountByIdentifier honours the 10-digit guard and tail-matches', () => {
     expect(findAccountByIdentifier('nobody@nowhere.com')).toBeNull()
     expect(findAccountByIdentifier('0000000000')).toBeNull()
     expect(findAccountByIdentifier('')).toBeNull()
+    expect(findAccountByIdentifier('981001000')).toBeNull()            // 9 digits — below the 10-digit guard
+    expect(findAccountByIdentifier('00919810010002')?.name).toBe('Ravi Menon') // 14 digits, last-10 tail matches admin
   })
 })
