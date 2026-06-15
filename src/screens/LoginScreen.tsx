@@ -6,6 +6,7 @@ import { useApp } from '@/lib/hooks'
 import { DEMO_ACCOUNTS, type DemoAccount } from '@/context/AppProvider'
 import { ROLE_META } from '@/data/mockDb'
 import { Icon, Field, Input, Btn, Checkbox, Spinner, Avatar } from '@/components/ui'
+import { validateEmail, validatePhone } from '@/lib/validation'
 
 /* ---------- Sign-in identifier helpers (which account an email/mobile maps to) ---------- */
 
@@ -53,6 +54,41 @@ export function LoginScreen() {
     setTimeout(() => { app.login(e); setBusy(false) }, 450)
   }
 
+  /* OTP sign-in (mock): request a code, then verify it. */
+  const [otpId, setOtpId] = useState('')
+  const [otpStep, setOtpStep] = useState<'request' | 'verify'>('request')
+  const [otpAcc, setOtpAcc] = useState<DemoAccount | null>(null)
+  const [sentCode, setSentCode] = useState('')
+  const [otpInput, setOtpInput] = useState('')
+  const [otpErr, setOtpErr] = useState<string | null>(null)
+
+  const sendCode = () => {
+    const v = otpId.trim()
+    if (!v) { setOtpErr('Enter your email or mobile number.'); return }
+    const err = v.includes('@') ? validateEmail(v) : validatePhone(v)
+    if (err) { setOtpErr(err); return }
+    const acc = findAccountByIdentifier(v)
+    if (!acc) { setOtpErr('No account found for that email or mobile.'); return }
+    const code = String(Math.floor(100000 + Math.random() * 900000))
+    setOtpAcc(acc)
+    setSentCode(code)
+    setOtpInput('')
+    setOtpErr(null)
+    setOtpStep('verify')
+  }
+
+  const verifyCode = () => {
+    if (otpInput.trim() !== sentCode) { setOtpErr('Incorrect code.'); return }
+    if (otpAcc) app.login(otpAcc.email)
+  }
+
+  const backToRequest = () => {
+    setOtpStep('request')
+    setSentCode('')
+    setOtpInput('')
+    setOtpErr(null)
+  }
+
   return (
     <div className="sm-login">
       <div className="sm-login-brand">
@@ -70,11 +106,11 @@ export function LoginScreen() {
       </div>
 
       <div className="sm-login-panel">
-        <form className="sm-login-form" onSubmit={(e) => { e.preventDefault(); signIn(email) }}>
+        <div className="sm-login-form">
           <h2>Welcome back</h2>
           <p className="lead">Sign in to your SchoolMate workspace.</p>
 
-          <div className="col gap14">
+          <form className="col gap14" onSubmit={(e) => { e.preventDefault(); signIn(email) }}>
             <Field label="Email address">
               <Input icon="user" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@school.edu" />
             </Field>
@@ -86,16 +122,42 @@ export function LoginScreen() {
                 </button>
               </div>
             </Field>
-          </div>
 
-          <div className="sm-login-row">
-            <Checkbox checked={remember} onChange={setRemember} label="Remember me" />
-            <button type="button" className="sm-login-link">Forgot password?</button>
-          </div>
+            <div className="sm-login-row">
+              <Checkbox checked={remember} onChange={setRemember} label="Remember me" />
+              <button type="button" className="sm-login-link">Forgot password?</button>
+            </div>
 
-          <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy}>
-            {busy ? <><Spinner size={16} /> Signing in…</> : <>Sign in <Icon name="arrowRight" size={16} /></>}
-          </Btn>
+            <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy}>
+              {busy ? <><Spinner size={16} /> Signing in…</> : <>Sign in <Icon name="arrowRight" size={16} /></>}
+            </Btn>
+          </form>
+
+          <div className="sm-login-or"><span>or sign in with a one-time code</span></div>
+
+          {otpStep === 'request' ? (
+            <form className="col gap10" onSubmit={(e) => { e.preventDefault(); sendCode() }}>
+              <Field label="Email or mobile number" error={otpErr ?? undefined}>
+                <Input icon="phone" value={otpId} onChange={(e) => { setOtpId(e.target.value); setOtpErr(null) }} placeholder="you@school.edu or +91…" />
+              </Field>
+              <Btn type="submit" variant="secondary" size="lg" style={{ width: '100%' }}>
+                Send one-time code <Icon name="arrowRight" size={16} />
+              </Btn>
+            </form>
+          ) : (
+            <form className="col gap10" onSubmit={(e) => { e.preventDefault(); verifyCode() }}>
+              <div className="sm-login-otp-hint">Demo code: <b>{sentCode}</b></div>
+              <Field label="Enter the 6-digit code" error={otpErr ?? undefined}>
+                <Input icon="key" inputMode="numeric" maxLength={6} value={otpInput} onChange={(e) => { setOtpInput(e.target.value); setOtpErr(null) }} placeholder="••••••" />
+              </Field>
+              <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }}>
+                Verify &amp; sign in <Icon name="arrowRight" size={16} />
+              </Btn>
+              <button type="button" className="sm-login-link" onClick={backToRequest}>
+                <Icon name="arrowLeft" size={13} /> Use a different email/mobile
+              </button>
+            </form>
+          )}
 
           <div className="sm-demos">
             <div className="sm-demos-label">or try a demo account</div>
@@ -114,7 +176,7 @@ export function LoginScreen() {
               })}
             </div>
           </div>
-        </form>
+        </div>
       </div>
     </div>
   )

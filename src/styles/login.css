@@ -44,3 +44,10 @@
   .sm-login { grid-template-columns: 1fr; }
   .sm-login-brand { display: none; }
 }
+
+/* OTP sign-in block */
+.sm-login-or { display: flex; align-items: center; text-align: center; color: var(--text-2); font-size: 12px; margin: 22px 0; }
+.sm-login-or::before, .sm-login-or::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+.sm-login-or span { padding: 0 12px; }
+.sm-login-otp-hint { border: 1px dashed var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; color: var(--text-2); }
+.sm-login-otp-hint b { color: var(--text-1); letter-spacing: .14em; }
