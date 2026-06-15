@@ -173,7 +173,7 @@ function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) 
   )
 }
 
-/* Edit a teammatete's role & scope. Mounted only while a user is selected, keyed
+/* Edit a teammate's role & scope. Mounted only while a user is selected, keyed
    by id so the selects initialise from the current user without an effect. */
 function EditUserModal({ user, onClose, onSave }: {
   user: TeamUser
