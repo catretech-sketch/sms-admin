@@ -84,3 +84,40 @@ describe('scope helpers', () => {
     expect(toggleScope(['Greenwood Valley School'], 'Greenwood Valley School')).toEqual([ALL_SCHOOLS])
   })
 })
+
+describe('owner Users & roles — multi-school scope', () => {
+  it('assigns two specific schools and the row shows "2 schools"', () => {
+    const { container } = renderScreen()
+
+    const editBtn = within(container).getAllByText('Edit')[0]
+    const userName = (editBtn.closest('tr') as HTMLElement).querySelector('.fw6')!.textContent!
+
+    fireEvent.click(editBtn)
+    const dialog = within(container).getByRole('dialog')
+
+    // Normalise to a known starting point, then pick exactly two specific schools.
+    fireEvent.click(within(dialog).getByLabelText('All schools'))                 // scope = [All]
+    fireEvent.click(within(dialog).getByLabelText('Greenwood Valley School'))      // scope = [GVS]
+    fireEvent.click(within(dialog).getByLabelText('Delhi Public Academy'))         // scope = [GVS, DPA]
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /save/i }))
+
+    expect(within(container).queryByRole('dialog')).toBeNull()
+    const savedRow = within(container).getByText(userName).closest('tr') as HTMLElement
+    expect(within(savedRow).getByText('2 schools')).toBeInTheDocument()
+  })
+
+  it('picking a specific school clears All schools', () => {
+    const { container } = renderScreen()
+    fireEvent.click(within(container).getAllByText('Edit')[0])
+    const dialog = within(container).getByRole('dialog')
+
+    const allBox = within(dialog).getByLabelText('All schools') as HTMLInputElement
+    fireEvent.click(allBox)                                                        // ensure All on
+    expect(allBox.checked).toBe(true)
+
+    fireEvent.click(within(dialog).getByLabelText('Greenwood Valley School'))
+    expect((within(dialog).getByLabelText('All schools') as HTMLInputElement).checked).toBe(false)
+    expect((within(dialog).getByLabelText('Greenwood Valley School') as HTMLInputElement).checked).toBe(true)
+  })
+})
