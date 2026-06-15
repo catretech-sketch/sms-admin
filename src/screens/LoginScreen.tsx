@@ -151,7 +151,7 @@ export function LoginScreen() {
                 <Input icon="key" inputMode="numeric" maxLength={6} value={otpInput} onChange={(e) => { setOtpInput(e.target.value); setOtpErr(null) }} placeholder="••••••" />
               </Field>
               <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }}>
-                Verify &amp; sign in <Icon name="arrowRight" size={16} />
+                Verify & sign in <Icon name="arrowRight" size={16} />
               </Btn>
               <button type="button" className="sm-login-link" onClick={backToRequest}>
                 <Icon name="arrowLeft" size={13} /> Use a different email/mobile
