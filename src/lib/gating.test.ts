@@ -51,6 +51,8 @@ describe('per-user overrides', () => {
   })
   it('keeps caps ordered V -> E -> A', () => {
     const ov: UserOverrides = { academics: { A: 'grant' } }
+    // teacher already has V + E for academics in mockDb; granting A appends in order.
+    expect(effectiveCaps('teacher', 'academics', {})).toEqual(['V', 'E'])
     expect(effectiveCaps('teacher', 'academics', ov)).toEqual(['V', 'E', 'A'])
   })
   it('cellState reports the override or inherit', () => {

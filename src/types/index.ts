@@ -9,6 +9,7 @@ export type Cap = 'V' | 'E' | 'A'
 export type ConsoleKind = 'owner' | 'school'
 
 /* ---- Per-user permission overrides (Identity & access) ---- */
+/* UI tri-state. 'inherit' is never stored in UserOverrides — it means "no override entry". */
 export type CellState = 'inherit' | 'grant' | 'revoke'
 /* module key -> cap -> explicit grant/revoke. Absent entry = inherit from role. */
 export type UserOverrides = Record<string, Partial<Record<Cap, 'grant' | 'revoke'>>>
