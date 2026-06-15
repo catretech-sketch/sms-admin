@@ -141,14 +141,6 @@ export function LoginScreen() {
           <div className="sm-login-or"><span>or</span></div>
 
           <div className="sm-login-otp">
-            <div className="sm-login-otp-head">
-              <span className="sm-login-otp-ic"><Icon name="key" size={15} /></span>
-              <div>
-                <div className="sm-login-otp-title">Passwordless sign-in</div>
-                <div className="sm-login-otp-desc">We’ll send a one-time code to your email or mobile.</div>
-              </div>
-            </div>
-
             {otpStep === 'request' ? (
               <form className="col gap10" onSubmit={(e) => { e.preventDefault(); sendCode() }}>
                 <Field label="Email or mobile number" error={otpErr ?? undefined}>

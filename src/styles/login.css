@@ -51,15 +51,6 @@
 .sm-login-or span { padding: 0 12px; }
 
 .sm-login-otp { display: flex; flex-direction: column; gap: 16px; }
-.sm-login-otp-head { display: flex; align-items: center; gap: 13px; }
-.sm-login-otp-ic {
-  width: 42px; height: 42px; border-radius: var(--r-md); flex: 0 0 auto;
-  display: flex; align-items: center; justify-content: center;
-  background: var(--brand-100); color: var(--brand-600);
-}
-.sm-login-otp-ic svg { width: 20px; height: 20px; }
-.sm-login-otp-title { font-size: 16px; font-weight: 800; letter-spacing: -.015em; }
-.sm-login-otp-desc { font-size: 12.5px; color: var(--text-3); margin-top: 3px; line-height: 1.45; }
 
 /* Branded "Send one-time code" CTA — prominent without competing with the primary password button. */
 .sm-login-otp-send.sm-btn {
