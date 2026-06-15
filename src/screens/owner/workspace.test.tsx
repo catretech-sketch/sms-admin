@@ -112,8 +112,8 @@ describe('owner Users & roles — multi-school scope', () => {
     fireEvent.click(within(container).getAllByText('Edit')[0])
     const dialog = within(container).getByRole('dialog')
 
+    // The first Team user (Anil Mehta) starts with All-schools scope.
     const allBox = within(dialog).getByLabelText('All schools') as HTMLInputElement
-    fireEvent.click(allBox)                                                        // ensure All on
     expect(allBox.checked).toBe(true)
 
     fireEvent.click(within(dialog).getByLabelText('Greenwood Valley School'))
