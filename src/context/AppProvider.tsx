@@ -157,7 +157,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const finishLogin = async (email: string) => {
     const profile = await fetchMe()
-    applySession(email, (profile.roles[0] ?? 'admin') as Role)
+    // The backend may return roles outside the UI union (e.g. "school_admin");
+    // map anything unknown to a safe default so ROLE_META lookups never crash.
+    const known: Role[] = ['admin', 'principal', 'vice_principal', 'teacher']
+    const raw = profile.roles[0]
+    applySession(email, known.includes(raw as Role) ? (raw as Role) : 'admin')
   }
 
   const loginWithPassword = async (email: string, password: string) => {

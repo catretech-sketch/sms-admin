@@ -30,4 +30,37 @@ describe('AppProvider auth', () => {
     expect(result.current.loggedIn).toBe(false)
     expect(result.current.authError).toBe('Wrong email or password.')
   })
+
+  it('owner-domain email routes to the owner console', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: null, roles: ['admin'] } })))
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await act(async () => { await result.current.loginWithPassword('anil@schoolmate.io', 'pw') })
+    await waitFor(() => expect(result.current.loggedIn).toBe(true))
+    expect(result.current.consoleKind).toBe('owner')
+    expect(result.current.view).toBe('owner.dashboard')
+  })
+
+  it('an unknown backend role falls back to admin (no crash)', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: 't1', roles: ['school_admin'] } })))
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await act(async () => { await result.current.loginWithPassword('admin@greenwood.edu', 'pw') })
+    await waitFor(() => expect(result.current.loggedIn).toBe(true))
+    expect(result.current.role).toBe('admin')
+  })
+
+  it('logout clears the session and returns to the login screen', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: 't1', roles: ['admin'] } }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 })))
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await act(async () => { await result.current.loginWithPassword('admin@greenwood.edu', 'pw') })
+    await waitFor(() => expect(result.current.loggedIn).toBe(true))
+    await act(async () => { await result.current.logout() })
+    expect(result.current.loggedIn).toBe(false)
+  })
 })
