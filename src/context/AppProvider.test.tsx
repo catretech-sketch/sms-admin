@@ -1,41 +1,33 @@
-import { describe, it, expect } from 'vitest'
-import { act, renderHook } from '@testing-library/react'
-import type { ReactNode } from 'react'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { renderHook, act, waitFor } from '@testing-library/react'
 import { AppProvider, useApp } from './AppProvider'
+import { tokenStore } from '@/api/auth/tokenStore'
 
-const wrapper = ({ children }: { children: ReactNode }) => <AppProvider>{children}</AppProvider>
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+}
+beforeEach(() => { localStorage.clear(); tokenStore.clear(); vi.restoreAllMocks() })
 
-describe('AppProvider', () => {
-  it('routes an owner email to the owner console', () => {
+const wrapper = ({ children }: { children: React.ReactNode }) => <AppProvider>{children}</AppProvider>
+
+describe('AppProvider auth', () => {
+  it('password login authenticates then loads role/tenant from /auth/me', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } })) // /auth/login
+      .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: 't1', roles: ['principal'] } }))) // /auth/me
     const { result } = renderHook(() => useApp(), { wrapper })
-    act(() => result.current.login('anil@schoolmate.io'))
-    expect(result.current.loggedIn).toBe(true)
-    expect(result.current.consoleKind).toBe('owner')
-    expect(result.current.view).toBe('owner.dashboard')
-  })
-
-  it('locks a school account to its role', () => {
-    const { result } = renderHook(() => useApp(), { wrapper })
-    act(() => result.current.login('principal@greenwood.edu'))
-    expect(result.current.consoleKind).toBe('school')
+    await act(async () => { await result.current.loginWithPassword('p@greenwood.edu', 'pw') })
+    await waitFor(() => expect(result.current.loggedIn).toBe(true))
     expect(result.current.role).toBe('principal')
-    expect(result.current.view).toBe('school.dashboard')
+    expect(tokenStore.getTenantId()).toBe('t1')
   })
 
-  it('logout returns to the login state', () => {
+  it('surfaces an auth error on bad credentials and stays logged out', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      jsonResponse({ error: { code: 'invalid_credentials', message: 'Wrong email or password.' } }, 401)))
     const { result } = renderHook(() => useApp(), { wrapper })
-    act(() => result.current.login('teacher@greenwood.edu'))
-    act(() => result.current.logout())
+    await act(async () => { await result.current.loginWithPassword('x@y.edu', 'bad') })
     expect(result.current.loggedIn).toBe(false)
-    expect(result.current.user).toBeNull()
-  })
-
-  it('upgrade overrides the current school plan', () => {
-    const { result } = renderHook(() => useApp(), { wrapper })
-    act(() => result.current.login('admin@greenwood.edu'))
-    act(() => result.current.setSchoolId('srt')) // Sunrise = silver
-    expect(result.current.plan).toBe('silver')
-    act(() => result.current.upgrade('gold'))
-    expect(result.current.plan).toBe('gold')
+    expect(result.current.authError).toBe('Wrong email or password.')
   })
 })

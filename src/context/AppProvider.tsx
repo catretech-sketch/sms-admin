@@ -2,7 +2,10 @@
    SchoolMate — App state: auth, console/role, current school,
    plan, language, view navigation.
    ============================================================ */
-import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { ApiError, setOnAuthFailure } from '@/api/client'
+import { login as passwordLogin, otpVerify, me as fetchMe, logout as apiLogout } from '@/api/auth'
+import { tokenStore } from '@/api/auth/tokenStore'
 import type { ConsoleKind, Exam, FeePayment, PaperSlot, Role, School, Staff, Student, Teacher, Tier } from '@/types'
 import { schools, students as seedStudents, teachers as seedTeachers, staff as seedStaff, exams as seedExams } from '@/data/mockDb'
 
@@ -72,8 +75,12 @@ interface AppState {
   feeStructure: Record<string, Record<string, number>>
   saveFeeStructure: (heads: string[], structure: Record<string, Record<string, number>>) => void
   /* actions */
-  login: (email: string) => void
-  logout: () => void
+  authBusy: boolean
+  authError: string | null
+  clearAuthError: () => void
+  loginWithPassword: (email: string, password: string) => Promise<void>
+  loginWithOtp: (identifier: string, code: string) => Promise<void>
+  logout: () => Promise<void>
   go: (view: string, opts?: { focus?: string; intent?: string }) => void
   clearIntent: () => void
   setSchoolId: (id: string) => void
@@ -129,30 +136,62 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setFeeHeads(heads)
     setFeeStructureState(structure)
   }
+  const [authBusy, setAuthBusy] = useState(false)
+  const [authError, setAuthError] = useState<string | null>(null)
+  const clearAuthError = () => setAuthError(null)
 
   const school = useMemo(() => schools.find((s) => s.id === schoolId) ?? schools[0], [schoolId])
   const plan: Tier = planOverride[schoolId] ?? school.plan
   const dir: 'ltr' | 'rtl' = RTL_LANGS.includes(lang) ? 'rtl' : 'ltr'
 
-  const login = (email: string) => {
-    const acc = DEMO_ACCOUNTS.find((a) => a.email === email)
-      ?? (email.endsWith('@schoolmate.io')
-        ? { email, name: 'Owner', role: 'admin' as Role, console: 'owner' as ConsoleKind, hue: 250 }
-        : { email, name: email.split('@')[0], role: 'admin' as Role, console: 'school' as ConsoleKind, hue: 210 })
-    setUser({ name: acc.name, email: acc.email, role: acc.role, hue: acc.hue })
-    setConsoleKind(acc.console)
-    setRole(acc.role)
+  /** Apply the identity from /auth/me to console/role/view state. */
+  const applySession = (email: string, role: Role) => {
+    const isOwner = email.endsWith('@schoolmate.io')
+    setUser({ name: email.split('@')[0], email, role, hue: isOwner ? 250 : 210 })
+    setConsoleKind(isOwner ? 'owner' : 'school')
+    setRole(role)
     setOwnerViewing(false)
-    setView(acc.console === 'owner' ? 'owner.dashboard' : 'school.dashboard')
+    setView(isOwner ? 'owner.dashboard' : 'school.dashboard')
     setLoggedIn(true)
   }
 
-  const logout = () => {
-    setLoggedIn(false)
-    setUser(null)
-    setOwnerViewing(false)
-    setView('school.dashboard')
-    setMobileNav(false)
+  const finishLogin = async (email: string) => {
+    const profile = await fetchMe()
+    applySession(email, (profile.roles[0] ?? 'admin') as Role)
+  }
+
+  const loginWithPassword = async (email: string, password: string) => {
+    setAuthBusy(true); setAuthError(null)
+    try {
+      await passwordLogin(email, password)
+      await finishLogin(email)
+    } catch (e) {
+      setAuthError(e instanceof ApiError ? e.message : 'Sign-in failed. Please try again.')
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+
+  const loginWithOtp = async (identifier: string, code: string) => {
+    setAuthBusy(true); setAuthError(null)
+    try {
+      await otpVerify(identifier, code)
+      await finishLogin(identifier)
+    } catch (e) {
+      setAuthError(e instanceof ApiError ? e.message : 'Verification failed. Please try again.')
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+
+  const logout = async () => {
+    try { await apiLogout() } finally {
+      setLoggedIn(false)
+      setUser(null)
+      setOwnerViewing(false)
+      setView('school.dashboard')
+      setMobileNav(false)
+    }
   }
 
   const go = (v: string, opts?: { focus?: string; intent?: string }) => {
@@ -181,6 +220,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     document.documentElement.setAttribute('lang', l)
   }
 
+  useEffect(() => { setOnAuthFailure(() => { tokenStore.clear(); logout() }) }, [])
+
   const value: AppState = {
     loggedIn, user, consoleKind, role, schoolId, ownerViewingSchool, lang, dir, view, mobileNav,
     focus, intent,
@@ -192,7 +233,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     datesheets, saveDatesheet,
     feePayments, addFeePayment,
     feeHeads, feeStructure, saveFeeStructure,
-    login, logout, go, clearIntent, setSchoolId, enterSchool, exitToOwner, upgrade, setLang, setMobileNav,
+    authBusy, authError, clearAuthError, loginWithPassword, loginWithOtp,
+    logout, go, clearIntent, setSchoolId, enterSchool, exitToOwner, upgrade, setLang, setMobileNav,
   }
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>
