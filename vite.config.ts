@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config'
+import { defineConfig, configDefaults } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { fileURLToPath, URL } from 'node:url'
 
@@ -14,5 +14,7 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    // Never collect SDD scratch artifacts (briefs/targets live under .superpowers/).
+    exclude: [...configDefaults.exclude, '.superpowers/**'],
   },
 })
