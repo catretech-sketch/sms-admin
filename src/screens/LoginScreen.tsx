@@ -7,6 +7,7 @@ import { DEMO_ACCOUNTS, type DemoAccount } from '@/context/AppProvider'
 import { ROLE_META } from '@/data/mockDb'
 import { Icon, Field, Input, Btn, Checkbox, Spinner, Avatar } from '@/components/ui'
 import { validateEmail } from '@/lib/validation'
+import { otpRequest } from '@/api/auth'
 
 /* ---------- Sign-in identifier helpers (which account an email/mobile maps to) ---------- */
 
@@ -47,49 +48,40 @@ export function LoginScreen() {
   const [pw, setPw] = useState('demo1234')
   const [showPw, setShowPw] = useState(false)
   const [remember, setRemember] = useState(true)
-  const [busy, setBusy] = useState(false)
+  const busy = app.authBusy
 
-  const signIn = (e: string) => {
-    setBusy(true)
-    setTimeout(() => { app.login(e); setBusy(false) }, 450)
-  }
+  const signIn = (e: string) => { void app.loginWithPassword(e, pw) }
 
-  /* OTP sign-in (mock): request a code, then verify it. */
+  /* OTP sign-in: hidden until the user opts in, then request a code from the API and verify it. */
+  const [otpOpen, setOtpOpen] = useState(false)
   const [otpId, setOtpId] = useState('')
   const [otpStep, setOtpStep] = useState<'request' | 'verify'>('request')
-  const [otpAcc, setOtpAcc] = useState<DemoAccount | null>(null)
-  const [sentCode, setSentCode] = useState('')
+  const [otpId2, setOtpId2] = useState('')
   const [otpInput, setOtpInput] = useState('')
   const [otpErr, setOtpErr] = useState<string | null>(null)
 
-  const sendCode = () => {
+  const sendCode = async () => {
     const v = otpId.trim()
     if (!v) { setOtpErr('Enter your email or mobile number.'); return }
     // Route by shape: digits/+/-/spaces/parens look like a phone; anything else is treated as an email.
     const looksPhone = /^[\d+\-\s()]+$/.test(v)
     if (!looksPhone && validateEmail(v)) { setOtpErr('Enter a valid email or mobile number.'); return }
-    // OTP is sign-in only: the identifier must already exist in the accounts data.
-    // Unknown email/mobile is rejected here — it never registers a new user.
-    const acc = findAccountByIdentifier(v)
-    if (!acc) { setOtpErr('This email or mobile isn’t registered. Ask your admin for access.'); return }
-    const code = String(Math.floor(100000 + Math.random() * 900000))
-    setOtpAcc(acc)
-    setSentCode(code)
-    setOtpInput('')
     setOtpErr(null)
-    setOtpStep('verify')
+    try {
+      await otpRequest(v)
+      setOtpId2(v)         // remember the identifier for the verify step
+      setOtpInput('')
+      setOtpStep('verify')
+    } catch (e) {
+      setOtpErr(e instanceof Error ? e.message : 'Could not send a code. Try again.')
+    }
   }
 
-  const verifyCode = () => {
-    if (otpInput.trim() !== sentCode) { setOtpErr('Incorrect code.'); return }
-    if (otpAcc) app.login(otpAcc.email)
-    else setOtpErr('Something went wrong — please request a new code.')
-  }
+  const verifyCode = () => { void app.loginWithOtp(otpId2, otpInput.trim()) }
 
   const backToRequest = () => {
     setOtpStep('request')
-    setOtpAcc(null)
-    setSentCode('')
+    setOtpId2('')
     setOtpInput('')
     setOtpErr(null)
   }
@@ -119,7 +111,7 @@ export function LoginScreen() {
             <Field label="Email address">
               <Input icon="user" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@school.edu" />
             </Field>
-            <Field label="Password">
+            <Field label="Password" error={app.authError ?? undefined}>
               <div style={{ position: 'relative' }}>
                 <Input icon="lock" type={showPw ? 'text' : 'password'} value={pw} onChange={(e) => setPw(e.target.value)} placeholder="••••••••" />
                 <button type="button" className="sm-login-pw-toggle" onClick={() => setShowPw((s) => !s)} aria-label="Toggle password">
@@ -141,8 +133,12 @@ export function LoginScreen() {
           <div className="sm-login-or"><span>or</span></div>
 
           <div className="sm-login-otp">
-            {otpStep === 'request' ? (
-              <form className="col gap10" onSubmit={(e) => { e.preventDefault(); sendCode() }}>
+            {!otpOpen ? (
+              <Btn type="button" variant="secondary" size="lg" style={{ width: '100%' }} onClick={() => setOtpOpen(true)} disabled={busy}>
+                <Icon name="key" size={16} /> OTP login
+              </Btn>
+            ) : otpStep === 'request' ? (
+              <form className="col gap10" onSubmit={(e) => { e.preventDefault(); void sendCode() }}>
                 <Field label="Email or mobile number" error={otpErr ?? undefined}>
                   <Input icon="phone" value={otpId} onChange={(e) => { setOtpId(e.target.value); setOtpErr(null) }} placeholder="you@school.edu or +91…" />
                 </Field>
@@ -154,9 +150,9 @@ export function LoginScreen() {
               <form className="col gap10" onSubmit={(e) => { e.preventDefault(); verifyCode() }}>
                 <div className="sm-login-otp-hint">
                   <Icon name="message" size={14} />
-                  <span>Demo code: <b>{sentCode}</b></span>
+                  <span>We sent a 6-digit code to {otpId2}.</span>
                 </div>
-                <Field label="Enter the 6-digit code" error={otpErr ?? undefined}>
+                <Field label="Enter the 6-digit code" error={(otpErr ?? app.authError) ?? undefined}>
                   <Input icon="key" inputMode="numeric" maxLength={6} value={otpInput} onChange={(e) => { setOtpInput(e.target.value); setOtpErr(null) }} placeholder="••••••" />
                 </Field>
                 <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy}>
