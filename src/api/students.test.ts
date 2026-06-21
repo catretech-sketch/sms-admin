@@ -21,8 +21,8 @@ describe('listStudents', () => {
       id: 's1', adm: 'A-100', cls: '10-A', name: 'Asha',
       feeStatus: 'paid', feeDue: 0, avatarHue: 210,
     })
-    expect((rows[0] as Record<string, unknown>).admission_no).toBeUndefined()
-    expect((rows[0] as Record<string, unknown>).class_label).toBeUndefined()
+    expect((rows[0] as unknown as Record<string, unknown>).admission_no).toBeUndefined()
+    expect((rows[0] as unknown as Record<string, unknown>).class_label).toBeUndefined()
   })
 
   it('forwards q/grade/status/fee as query params and drops "all"', async () => {
