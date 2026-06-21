@@ -1,5 +1,6 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { render, fireEvent, within, cleanup } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AppProvider } from '@/context/AppProvider'
 import { ToastProvider } from '@/context/ToastProvider'
 import { academicsScreens } from './academics'
@@ -8,13 +9,20 @@ const AcademicsScreen = academicsScreens['school.academics']
 
 afterEach(cleanup)
 
+beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [], next_cursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+})
+
 function renderScreen() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const u = render(
-    <AppProvider>
-      <ToastProvider>
-        <AcademicsScreen />
-      </ToastProvider>
-    </AppProvider>,
+    <QueryClientProvider client={qc}>
+      <AppProvider>
+        <ToastProvider>
+          <AcademicsScreen />
+        </ToastProvider>
+      </AppProvider>
+    </QueryClientProvider>,
   )
   const tabBar = within(u.container.querySelector('.sm-tabs') as HTMLElement)
   const clickTab = (label: string) => fireEvent.click(tabBar.getByText(label))

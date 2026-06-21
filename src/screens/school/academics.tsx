@@ -13,6 +13,8 @@ import {
 } from '@/components/ui'
 import { teachers, subjects, grades, sections } from '@/data/mockDb'
 import type { Teacher } from '@/types'
+import { useClasses, useCreateClass } from '@/api/hooks/useClasses'
+import { useSubjects, useCreateSubject } from '@/api/hooks/useSubjects'
 import { cellKey, clashingClass, clashingClasses, pickTeacher, conflictsFor, teacherLoads, clashingTeachers, teacherSchedule, subjectSchedule, type Cell, type Grid } from '@/lib/timetable'
 
 /* ---------- shared helpers / constants ---------- */
@@ -48,17 +50,9 @@ interface ClassRow { name: string; grade: string; section: string; teacherId: st
 function ClassesTab({ editable }: { editable: boolean }) {
   const toast = useToast()
 
-  const initial = useMemo<ClassRow[]>(() => {
-    const ctMap: Record<string, string> = {}
-    teachers.forEach((t) => { if (t.classTeacher && !ctMap[t.classTeacher]) ctMap[t.classTeacher] = t.id })
-    return classList.map((name, i) => {
-      const hash = [...name].reduce((a, c) => a + c.charCodeAt(0), 0)
-      const [grade, section] = name.split('-')
-      return { name, grade, section, teacherId: ctMap[name] ?? '', students: 30 + (hash % 16), room: `Room ${101 + i}` }
-    })
-  }, [])
-
-  const [rows, setRows] = useState<ClassRow[]>(initial)
+  const { data: classesData } = useClasses()
+  const rows = classesData ?? []
+  const createClass = useCreateClass()
   const [pick, setPick] = useState<ClassRow | null>(null)
   const [pickSel, setPickSel] = useState('')
   const [addOpen, setAddOpen] = useState(false)
@@ -69,16 +63,19 @@ function ClassesTab({ editable }: { editable: boolean }) {
   const openPicker = (r: ClassRow) => { setPick(r); setPickSel(r.teacherId || teachers[0].id) }
   const assign = () => {
     if (!pick) return
-    setRows((rs) => rs.map((r) => r.name === pick.name ? { ...r, teacherId: pickSel } : r))
     toast.success('Class teacher assigned', `${teacherName(pickSel)} → ${pick.name}.`)
     setPick(null)
   }
   const addClass = () => {
     const name = `${aGrade}-${aSec}`
     if (rows.some((r) => r.name === name)) { toast.danger('Class exists', `${name} is already in the list.`); return }
-    setRows((rs) => [...rs, { name, grade: aGrade, section: aSec, teacherId: '', students: 0, room: aRoom.trim() || '—' }])
-    toast.success('Class added', `${name} created.`)
-    setAddOpen(false); setARoom('')
+    createClass.mutate(
+      { name, grade: aGrade, section: aSec, teacherId: '', students: 0, room: aRoom.trim() || '—' },
+      {
+        onSuccess: () => { toast.success('Class added', `${name} created.`); setAddOpen(false); setARoom('') },
+        onError: (err) => { toast.danger('Could not add class', err instanceof Error ? err.message : 'Please try again.') },
+      },
+    )
   }
 
   const cols: Column<ClassRow>[] = [
@@ -767,7 +764,9 @@ function PeriodsTab({ editable }: { editable: boolean }) {
    ============================================================ */
 function SubjectsTab({ editable }: { editable: boolean }) {
   const toast = useToast()
-  const [list, setList] = useState<string[]>(subjects)
+  const { data: subjectsData } = useSubjects()
+  const list = subjectsData ?? []
+  const createSubject = useCreateSubject()
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
 
@@ -775,7 +774,10 @@ function SubjectsTab({ editable }: { editable: boolean }) {
     const n = name.trim()
     if (!n) { toast.danger('Name required', 'Enter a subject name.'); return }
     if (list.includes(n)) { toast.danger('Already exists', `${n} is already a subject.`); return }
-    setList((l) => [...l, n]); toast.success('Subject added', `${n} created.`); setName(''); setOpen(false)
+    createSubject.mutate(n, {
+      onSuccess: () => { toast.success('Subject added', `${n} created.`); setName(''); setOpen(false) },
+      onError: (err) => { toast.danger('Could not add subject', err instanceof Error ? err.message : 'Please try again.') },
+    })
   }
 
   return (
