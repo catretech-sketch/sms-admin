@@ -17,7 +17,10 @@ import {
   DataTable, type Column, type BadgeTone,
 } from '@/components/ui'
 import { TierGate } from '@/components/shell/gates'
-import { buses, complaints, threads, students, teachers, staff, grades } from '@/data/mockDb'
+import { buses, threads, students, teachers, staff, grades } from '@/data/mockDb'
+import { useComplaints } from '@/api/hooks/useComplaints'
+import { useThreads } from '@/api/hooks/useThreads'
+import { useAnnouncements, useCreateAnnouncement } from '@/api/hooks/useAnnouncements'
 import type { Bus, Complaint, ThreadMsg } from '@/types'
 
 /* ---------- shared meta ---------- */
@@ -67,7 +70,9 @@ function MessengerTab() {
   const [newOpen, setNewOpen] = useState(false)
   const [contactQ, setContactQ] = useState('')
 
-  const allThreads: ChatThread[] = [...localThreads, ...(threads as ChatThread[])]
+  const { data: threadsData } = useThreads()
+  const apiThreads = threadsData ?? []
+  const allThreads: ChatThread[] = [...localThreads, ...(apiThreads as ChatThread[])]
   const thread = allThreads.find((t) => t.id === activeId)
   const msgs: ThreadMsg[] = thread ? [...thread.msgs, ...(drafts[activeId] || [])] : []
 
@@ -201,6 +206,8 @@ function ComplaintsTab() {
   const toast = useToast()
   const [resolved, setResolved] = useState<Set<string>>(new Set())
 
+  const { data: complaintsData } = useComplaints()
+  const complaints = complaintsData ?? []
   const rows: Complaint[] = complaints.map((c) => resolved.has(c.id) ? { ...c, status: 'resolved' } : c)
 
   const resolve = (c: Complaint) => {
@@ -251,11 +258,8 @@ function ComplaintsTab() {
 /* ---------- Announcements ---------- */
 function AnnouncementsTab() {
   const [open, setOpen] = useState(false)
-  const sent = [
-    { id: 'AN-220', title: 'Annual Day rehearsal schedule', audience: 'Parents · Grade VI–XII', when: 'Today 9:10 AM', reach: 1842, ch: 'Push · SMS' },
-    { id: 'AN-218', title: 'Fee reminder — Term 2 dues', audience: 'Fee defaulters', when: 'Yesterday', reach: 128, ch: 'SMS · Email' },
-    { id: 'AN-214', title: 'Staff meeting — Friday 4 PM', audience: 'Teachers · Support staff', when: '2 days ago', reach: 104, ch: 'Push' },
-  ]
+  const { data: sentData } = useAnnouncements()
+  const sent = sentData ?? []
   return (
     <div className="col gap16">
       <Card>
@@ -303,6 +307,7 @@ type AudienceKey = 'parents' | 'students' | 'teachers' | 'staff' | 'everyone' | 
 
 function AnnouncementModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const toast = useToast()
+  const createAnnouncement = useCreateAnnouncement()
   const [step, setStep] = useState(0)
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
@@ -362,8 +367,10 @@ function AnnouncementModal({ open, onClose }: { open: boolean; onClose: () => vo
     : true
 
   const send = () => {
-    toast.success('Announcement sent', `"${title}" delivered to ${recipients.toLocaleString()} recipient${recipients === 1 ? '' : 's'}`)
-    onClose()
+    createAnnouncement.mutate({ title, audience: String(recipients) }, {
+      onSuccess: () => { toast.success('Announcement sent', `"${title}" delivered to ${recipients.toLocaleString()} recipient${recipients === 1 ? '' : 's'}.`); onClose() },
+      onError: (err) => { toast.danger('Could not send', err instanceof Error ? err.message : 'Please try again.') },
+    })
   }
 
   const STEPS = ['Compose', 'Audience', 'Channels', 'Review']
