@@ -14,4 +14,10 @@ export const queryKeys = {
     all: ['staff'] as const,
     list: (opts: ListStaffOpts = {}) => ['staff', 'list', opts] as const,
   },
+  notifications: {
+    all: ['notifications'] as const,
+  },
+  approvals: {
+    all: ['approvals'] as const,
+  },
 }
