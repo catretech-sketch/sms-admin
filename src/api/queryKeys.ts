@@ -32,4 +32,7 @@ export const queryKeys = {
   attendance: {
     forClass: (classId: string) => ['attendance', classId] as const,
   },
+  exams: {
+    all: ['exams'] as const,
+  },
 }
