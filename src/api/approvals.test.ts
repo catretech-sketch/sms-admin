@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { listApprovals } from './approvals'
+import { listApprovals, actOnApproval } from './approvals'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -21,5 +21,17 @@ describe('listApprovals', () => {
     vi.stubGlobal('fetch', fetchMock)
     await listApprovals()
     expect(fetchMock.mock.calls[0][0]).toContain('/approvals')
+  })
+})
+
+describe('actOnApproval', () => {
+  it('PATCHes /approvals/{id} with the status', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { ok: true } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await actOnApproval('A1', 'approved')
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toContain('/approvals/A1')
+    expect((init as RequestInit).method).toBe('PATCH')
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ status: 'approved' })
   })
 })

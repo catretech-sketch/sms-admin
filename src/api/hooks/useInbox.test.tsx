@@ -3,6 +3,7 @@ import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useNotifications } from './useNotifications'
 import { useApprovals } from './useApprovals'
+import { useActOnApproval } from './useApprovalMutations'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -28,5 +29,18 @@ describe('useApprovals', () => {
     const { result } = renderHook(() => useApprovals(), { wrapper: makeWrapper() })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(result.current.data?.[0]).toMatchObject({ id: 'A1', forRoles: ['admin'] })
+  })
+})
+
+describe('useActOnApproval', () => {
+  it('PATCHes and invalidates the approvals list', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    const invalidate = vi.spyOn(qc, 'invalidateQueries')
+    const wrapper = ({ children }: { children: React.ReactNode }) => <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: {} }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+    const { result } = renderHook(() => useActOnApproval(), { wrapper })
+    result.current.mutate({ id: 'A1', status: 'approved' })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['approvals'] })
   })
 })

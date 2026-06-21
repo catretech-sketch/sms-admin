@@ -10,6 +10,7 @@ import {
 import type { BadgeTone } from '@/components/ui'
 import { grades } from '@/data/mockDb'
 import { useApprovals } from '@/api/hooks/useApprovals'
+import { useActOnApproval } from '@/api/hooks/useApprovalMutations'
 import { fmtMoney, fmtNum } from '@/lib/format'
 import type { Approval } from '@/types'
 
@@ -313,6 +314,7 @@ function ApprovalsInbox() {
   const app = useApp()
   const toast = useToast()
   const [acted, setActed] = useState<Set<string>>(new Set())
+  const actOn = useActOnApproval()
 
   const { data: approvalsData } = useApprovals()
   const approvals = approvalsData ?? []
@@ -320,6 +322,7 @@ function ApprovalsInbox() {
 
   const act = (a: Approval, kind: 'approve' | 'reject') => {
     setActed((prev) => new Set(prev).add(a.id))
+    actOn.mutate({ id: a.id, status: kind === 'approve' ? 'approved' : 'rejected' })
     if (kind === 'approve') toast.success('Approved', `${a.title} — ${a.id}`)
     else toast.danger('Rejected', `${a.title} — ${a.id}`)
   }
