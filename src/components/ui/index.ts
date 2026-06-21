@@ -2,6 +2,7 @@
 export { Icon } from './Icon'
 export type { IconProps } from './Icon'
 export { Btn, IconBtn, Badge, TierPill, Avatar, Progress, Skeleton, Spinner } from './primitives'
+export { DemoBadge } from './DemoBadge'
 export type { BtnProps, IconBtnProps, BadgeTone } from './primitives'
 export { Field, Input, Textarea, Select, Toggle, Checkbox, Search, FileUpload } from './forms'
 export type { InputProps, TextareaProps, SelectProps, SelectOption } from './forms'
