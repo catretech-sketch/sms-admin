@@ -11,6 +11,7 @@ import { can } from '@/lib/gating'
 import {
   PageHead, Card, CardHead, Kpi, Btn, Badge, Avatar, Search, Select, Field, Input,
   Modal, Tabs, Icon, Empty, Bars, DataTable, type Column, type BadgeTone,
+  DemoBadge,
 } from '@/components/ui'
 import { TierGate } from '@/components/shell/gates'
 import { students, teachers, staff, grades } from '@/data/mockDb'
@@ -242,7 +243,7 @@ function FeeStructureTab({ cur, editable }: { cur: string; editable: boolean }) 
   return (
     <Card pad={false}>
       <div className="row ai-center jc-between gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
-        <div><div className="fw6">Fee structure</div><div className="t-sm muted">Per-grade amounts by fee head · {cur}</div></div>
+        <div className="row ai-center gap8"><div><div className="fw6">Fee structure</div><div className="t-sm muted">Per-grade amounts by fee head · {cur}</div></div><DemoBadge /></div>
         <div className="row ai-center gap8 wrap">
           {editable && (
             <div className="row ai-center gap6">
@@ -552,6 +553,7 @@ function PayrollBody() {
         sub={`${app.school.name} · June 2026 cycle · Prepared by Admin office`}
         actions={
           <div className="row ai-center gap8 wrap">
+            <DemoBadge />
             {statusBadge}
             <Btn variant="primary" icon="refresh" disabled={!canRun || ran} onClick={runPayroll}>{ran ? 'Payroll run' : 'Run payroll'}</Btn>
             <Btn variant="success" icon="check" disabled={!canApprove || !ran || approved} onClick={approve}>Approve</Btn>

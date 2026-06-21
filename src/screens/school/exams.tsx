@@ -12,6 +12,7 @@ import {
   PageHead, Tabs, Card, CardHead, Btn, Badge, Select, Field, Input,
   Modal, Drawer, Icon, Empty, Progress, DataTable,
   type Column, type BadgeTone,
+  DemoBadge,
 } from '@/components/ui'
 import { students, subjects, grades, sections } from '@/data/mockDb'
 import { reportFor, classRank, gradeFor, studentSubjectMarks } from '@/lib/format'
@@ -170,7 +171,7 @@ function DatesheetDrawer({ exam, onClose }: { exam: Exam | null; onClose: () => 
   return (
     <Drawer
       open={!!exam} onClose={onClose} width={680} icon="calendar"
-      title="Datesheet" sub={exam ? `${exam.name} · ${exam.grades} · ${slots.length} papers` : ''}
+      title={<span className="row ai-center gap8">Datesheet<DemoBadge /></span>} sub={exam ? `${exam.name} · ${exam.grades} · ${slots.length} papers` : ''}
       footer={
         <div className="row gap8 jc-between ai-center">
           <span className="t-xs muted">{clashes.length ? `${clashes.length} clash(es) to resolve` : 'No clashes'}</span>
@@ -375,7 +376,7 @@ function MarksEntryTab() {
   return (
     <Card pad={false}>
       <div className="row ai-center gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
-        <CardHead title="Marks entry" sub={`${cls} · ${subject} · ${roster.length} students`} icon="edit" />
+        <CardHead title={<span className="row ai-center gap8">Marks entry<DemoBadge /></span>} sub={`${cls} · ${subject} · ${roster.length} students`} icon="edit" />
         <div className="row gap8 ai-center wrap" style={{ marginLeft: 'auto' }}>
           <Select options={app.exams.map((e) => ({ value: e.id, label: e.name }))} value={examId} onChange={(e) => setExamId(e.target.value)} />
           <Select options={grades.slice(4)} value={grade} onChange={(e) => setGrade(e.target.value)} />
@@ -475,7 +476,7 @@ function ExamAttendanceTab() {
   return (
     <Card pad={false}>
       <div className="row ai-center gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
-        <CardHead title="Exam attendance" sub={`${cls} · ${subject} · ${roster.length} students`} icon="calendar" />
+        <CardHead title={<span className="row ai-center gap8">Exam attendance<DemoBadge /></span>} sub={`${cls} · ${subject} · ${roster.length} students`} icon="calendar" />
         <div className="row gap8 ai-center wrap" style={{ marginLeft: 'auto' }}>
           <Select options={app.exams.map((e) => ({ value: e.id, label: e.name }))} value={examId} onChange={(e) => setExamId(e.target.value)} />
           <Select options={grades.slice(4)} value={grade} onChange={(e) => setGrade(e.target.value)} />

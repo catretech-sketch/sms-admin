@@ -11,6 +11,7 @@ import { can } from '@/lib/gating'
 import {
   PageHead, Card, CardHead, Btn, Badge, Avatar, Search, Select, Segmented,
   Icon, Empty, DataTable, type Column, type BadgeTone,
+  DemoBadge,
 } from '@/components/ui'
 import { TierGate } from '@/components/shell/gates'
 import { students, teachers, staff, grades, sections, subjects } from '@/data/mockDb'
@@ -213,7 +214,7 @@ function Roster({ group, editable }: { group: Person['group']; editable: boolean
   return (
     <Card pad={false}>
       <CardHead
-        title={`${GROUP_NAME[group]} roster`}
+        title={<span className="row ai-center gap8">{GROUP_NAME[group]} roster<DemoBadge /></span>}
         sub={isStudents
           ? `${grade === 'all' ? 'All grades' : `Grade ${grade}`}${section === 'all' ? '' : ` · Sec ${section}`} · ${presentTotal} of ${scoped.length} present`
           : `${presentTotal} of ${scoped.length} present today`}
@@ -395,7 +396,7 @@ function GeoFence() {
     <TierGate feature="attendance.geofence" title="Geo-fenced check-in">
       <Card pad={false}>
         <CardHead
-          title="Geo-fenced check-in"
+          title={<span className="row ai-center gap8">Geo-fenced check-in<DemoBadge /></span>}
           sub="Auto check-in for teachers & staff entering campus"
           icon="pin"
           action={<Badge tone="info" icon="globe">Live</Badge>}

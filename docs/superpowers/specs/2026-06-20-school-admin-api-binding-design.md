@@ -143,5 +143,17 @@ Static reference data (`grades`, `sections`, `depts`, `ROLE_META`, `ROLES`, `PER
   school-settings PATCH, report-card/rank endpoints — no School Admin endpoint today; remain mock.
 - Payments stubbed server-side; SMS OTP stubbed (use email OTP in dev).
 - Cursor paging may return a single page until the server emits cursors.
+
+## Live vs Demo — final binding status (Phases 0–6)
+
+**Live-bound (real API):**
+- Auth: OTP + password login, /auth/me, refresh, logout (Phase 0)
+- Reads: students + Student 360, teachers, staff, approvals, notifications, complaints, threads, announcements, fee payments, classes, subjects, exams (Phases 1, 3, 4, 5)
+- Mutations: add student/teacher/staff (POST), approvals act-on (PATCH), user invite (POST), create class/subject (POST), submit attendance (POST), create/update exam (POST/PUT), create announcement (POST), pay invoice (POST) (Phases 2–5)
+
+**Demo data (no live endpoint — flagged with DemoBadge):**
+- Dashboard synthetic KPI counts; timetable builder, bell-schedule periods, homework, class tests, class-teacher assign; exam marks-entry grid, per-student grades, exam-papers, exam attendance, datesheet, report cards/ranks; attendance status pre-fill / bulk roster / geo-fence; messenger send + new-thread + unread badge; complaint resolve; fee waiver; fee-structure config; payroll run/approve; payslips + leave (no UI); bus fleet + live GPS; calendar; owner console.
+
+**Deferred for a dedicated effort (needs real backend contract + sanctioned UI changes):** the exam-papers + grades model pivot (marks grid → paper-picker), and AppProvider seed-state removal (still consumed by the demo surfaces above).
 </content>
 </invoke>
