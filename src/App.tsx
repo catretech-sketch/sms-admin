@@ -1,6 +1,7 @@
 /* ============================================================
    SchoolMate — App root: providers + shell
    ============================================================ */
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ToastProvider } from '@/context/ToastProvider'
 import { ThemeProvider } from '@/context/ThemeProvider'
 import { AppProvider } from '@/context/AppProvider'
@@ -10,6 +11,10 @@ import { Topbar } from '@/components/shell/Topbar'
 import { Tweaks } from '@/components/shell/Tweaks'
 import { LoginScreen } from '@/screens/LoginScreen'
 import { Router } from '@/router'
+
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
+})
 
 function Shell() {
   const app = useApp()
@@ -33,12 +38,14 @@ function Shell() {
 
 export default function App() {
   return (
-    <ToastProvider>
-      <ThemeProvider>
-        <AppProvider>
-          <Shell />
-        </AppProvider>
-      </ThemeProvider>
-    </ToastProvider>
+    <QueryClientProvider client={queryClient}>
+      <ToastProvider>
+        <ThemeProvider>
+          <AppProvider>
+            <Shell />
+          </AppProvider>
+        </ThemeProvider>
+      </ToastProvider>
+    </QueryClientProvider>
   )
 }
