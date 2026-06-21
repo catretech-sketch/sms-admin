@@ -10,7 +10,7 @@ import {
   type Column, type BadgeTone,
 } from '@/components/ui'
 import { grades } from '@/data/mockDb'
-import { useStudents, useStudent } from '@/api/hooks/useStudents'
+import { useStudents } from '@/api/hooks/useStudents'
 import {
   reportFor, classRank, attendanceMonths, fmtMoney,
   overallToppers, classToppers,
