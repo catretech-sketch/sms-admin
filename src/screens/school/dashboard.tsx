@@ -8,7 +8,8 @@ import {
   Donut, Bars, LineChart, Legend, Empty,
 } from '@/components/ui'
 import type { BadgeTone } from '@/components/ui'
-import { approvals, grades } from '@/data/mockDb'
+import { grades } from '@/data/mockDb'
+import { useApprovals } from '@/api/hooks/useApprovals'
 import { fmtMoney, fmtNum } from '@/lib/format'
 import type { Approval } from '@/types'
 
@@ -313,6 +314,8 @@ function ApprovalsInbox() {
   const toast = useToast()
   const [acted, setActed] = useState<Set<string>>(new Set())
 
+  const { data: approvalsData } = useApprovals()
+  const approvals = approvalsData ?? []
   const list = approvals.filter((a) => a.forRoles.includes(app.role) && !acted.has(a.id))
 
   const act = (a: Approval, kind: 'approve' | 'reject') => {

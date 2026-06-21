@@ -5,8 +5,9 @@
 import { useState } from 'react'
 import { useApp, useTheme } from '@/lib/hooks'
 import { Icon, IconBtn, Avatar, Badge, Popover, MenuItem, MenuSep, MenuLabel, TierPill } from '@/components/ui'
-import { schools, notifications } from '@/data/mockDb'
+import { schools } from '@/data/mockDb'
 import { ROLE_META } from '@/data/mockDb'
+import { useNotifications } from '@/api/hooks/useNotifications'
 
 const LANGS = [{ v: 'en', l: 'English' }, { v: 'hi', l: 'हिन्दी Hindi' }, { v: 'ar', l: 'العربية (RTL)' }, { v: 'ta', l: 'தமிழ் Tamil' }]
 
@@ -15,6 +16,8 @@ export function Topbar() {
   const theme = useTheme()
   const [q, setQ] = useState('')
   const isOwner = app.consoleKind === 'owner'
+  const { data: notifData } = useNotifications()
+  const notifications = notifData ?? []
   const unread = notifications.filter((n) => n.unread).length
 
   return (
