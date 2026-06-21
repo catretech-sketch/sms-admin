@@ -6,6 +6,7 @@
    ============================================================ */
 import { useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
+import { useFeePayments, usePayInvoice } from '@/api/hooks/useFeePayments'
 import { can } from '@/lib/gating'
 import {
   PageHead, Card, CardHead, Kpi, Btn, Badge, Avatar, Search, Select, Field, Input,
@@ -50,7 +51,7 @@ function buildFeeRow(s: Student): FeeRow {
 /* ---------- Record-payment modal ---------- */
 function PaymentModal({ row, cur, onClose }: { row: FeeRow; cur: string; onClose: () => void }) {
   const toast = useToast()
-  const app = useApp()
+  const payInvoice = usePayInvoice()
   const [amount, setAmount] = useState(String(row.due || row.term))
   const [mode, setMode] = useState(PAY_MODES[1])
   const [ref, setRef] = useState('')
@@ -64,9 +65,10 @@ function PaymentModal({ row, cur, onClose }: { row: FeeRow; cur: string; onClose
       feeType, amount: n, mode, ref: ref.trim(),
       date: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
     }
-    app.addFeePayment(payment)
-    toast.success('Payment recorded', `${fmtMoney(n, cur)} · ${feeTypeMeta[feeType].label} · ${mode} · ${row.stu.name} (${row.stu.cls})`)
-    onClose()
+    payInvoice.mutate({ invoiceId: row.stu.id, payment }, {
+      onSuccess: () => { toast.success('Payment recorded', `${fmtMoney(n, cur)} · ${feeTypeMeta[feeType].label} · ${mode} · ${row.stu.name} (${row.stu.cls})`); onClose() },
+      onError: (err) => { toast.danger('Payment failed', err instanceof Error ? err.message : 'Please try again.') },
+    })
   }
 
   return (
@@ -140,18 +142,19 @@ function WaiverModal({ row, cur, onClose }: { row: FeeRow; cur: string; onClose:
 
 /* ---------- Fee history (saved payments) ---------- */
 function FeeHistoryTab({ cur }: { cur: string }) {
-  const app = useApp()
+  const { data: paymentsData } = useFeePayments()
+  const feePayments = paymentsData ?? []
   const [q, setQ] = useState('')
   const [type, setType] = useState('all')
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
-    return app.feePayments.filter((p) => {
+    return feePayments.filter((p) => {
       if (needle && !(p.studentName.toLowerCase().includes(needle) || p.cls.toLowerCase().includes(needle) || p.ref.toLowerCase().includes(needle))) return false
       if (type !== 'all' && p.feeType !== type) return false
       return true
     })
-  }, [app.feePayments, q, type])
+  }, [feePayments, q, type])
 
   const columns: Column<FeePayment>[] = [
     { key: 'date', label: 'Date', sortValue: (p) => p.id, render: (p) => <span className="muted">{p.date}</span> },
