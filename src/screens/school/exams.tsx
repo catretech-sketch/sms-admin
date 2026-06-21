@@ -6,6 +6,7 @@
    ============================================================ */
 import { useEffect, useMemo, useState } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
+import { useExams, useCreateExam, useUpdateExam } from '@/api/hooks/useExams'
 import { can } from '@/lib/gating'
 import {
   PageHead, Tabs, Card, CardHead, Btn, Badge, Select, Field, Input,
@@ -54,7 +55,7 @@ function buildPapers(exam: Exam): Paper[] {
    ============================================================ */
 function CreateExamModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const toast = useToast()
-  const app = useApp()
+  const createExam = useCreateExam()
   const [name, setName] = useState('')
   const [type, setType] = useState('Term')
   const [gradeRange, setGradeRange] = useState('VI–XII')
@@ -69,10 +70,14 @@ function CreateExamModal({ open, onClose }: { open: boolean; onClose: () => void
       name: name.trim(), type, grades: gradeRange, from, to,
       subjects: subjects.length, status: 'scheduled', marksEntered: 0, published: false,
     }
-    app.addExam(exam)
-    toast.success('Exam created', `${name} (${type}) scheduled for ${gradeRange}.`)
-    setName('')
-    onClose()
+    createExam.mutate(exam, {
+      onSuccess: () => {
+        toast.success('Exam created', `${name} (${type}) scheduled for ${gradeRange}.`)
+        setName('')
+        onClose()
+      },
+      onError: (err) => toast.danger('Could not create exam', err instanceof Error ? err.message : 'Please try again.'),
+    })
   }
 
   return (
@@ -243,6 +248,8 @@ function DatesheetDrawer({ exam, onClose }: { exam: Exam | null; onClose: () => 
    ============================================================ */
 function ExamsListTab({ onDatesheet, onPublish }: { onDatesheet: (e: Exam) => void; onPublish: (e: Exam) => void }) {
   const app = useApp()
+  const { data: examsData } = useExams()
+  const exams = examsData ?? []
   const [createOpen, setCreateOpen] = useState(false)
   const editable = can(app.role, 'exams', 'E') || can(app.role, 'exams', 'A')
 
@@ -293,14 +300,14 @@ function ExamsListTab({ onDatesheet, onPublish }: { onDatesheet: (e: Exam) => vo
   return (
     <Card pad={false}>
       <div className="row ai-center jc-between" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
-        <CardHead title="Exam & test schedule" sub={`${app.exams.length} examinations`} icon="clipboard" />
+        <CardHead title="Exam & test schedule" sub={`${exams.length} examinations`} icon="clipboard" />
         {editable
           ? <Btn variant="primary" icon="plus" onClick={() => setCreateOpen(true)}>Create exam</Btn>
           : <Badge tone="neutral" icon="eye">View only</Badge>}
       </div>
       <DataTable<Exam>
         columns={columns}
-        rows={app.exams}
+        rows={exams}
         pageSize={10}
         rowKey={(e) => e.id}
         initialSort={{ key: 'dates', dir: 'asc' }}
@@ -318,6 +325,7 @@ function ExamsListTab({ onDatesheet, onPublish }: { onDatesheet: (e: Exam) => vo
 function MarksEntryTab() {
   const app = useApp()
   const toast = useToast()
+  const updateExam = useUpdateExam()
   const editable = can(app.role, 'exams', 'E')
 
   const [examId, setExamId] = useState(app.exams[0]?.id ?? '')
@@ -360,7 +368,7 @@ function MarksEntryTab() {
     roster.forEach((s) => { entries[markKey(examId, s.id, subject)] = marks[s.id] ?? 0 })
     app.saveExamMarks(entries)
     const merged = { ...app.examMarks, ...entries }
-    app.updateExam(examId, { status: 'marks_entry', marksEntered: marksProgress(merged, examId, exam.subjects) })
+    updateExam.mutate({ id: examId, patch: { status: 'marks_entry', marksEntered: marksProgress(merged, examId, exam.subjects) } })
     toast.success('Marks saved', `${roster.length} entries saved for ${cls} · ${subject} · ${exam.name}.`)
   }
 
@@ -691,6 +699,7 @@ function firstClassOfExam(): string {
 function PublishResultsModal({ exam, onClose }: { exam: Exam | null; onClose: () => void }) {
   const app = useApp()
   const toast = useToast()
+  const updateExam = useUpdateExam()
   const canPublish = can(app.role, 'exams', 'A')
   if (!exam) return null
 
@@ -705,7 +714,7 @@ function PublishResultsModal({ exam, onClose }: { exam: Exam | null; onClose: ()
   const classPass = roster.filter((s) => reportFor(s, exam.id, getMark).result === 'PASS').length
 
   const publish = () => {
-    app.updateExam(exam.id, { published: true, status: 'completed' })
+    updateExam.mutate({ id: exam.id, patch: { published: true, status: 'completed' } })
     toast.success('Results published', `${exam.name} released to teachers, parents & students.`)
     onClose()
   }
