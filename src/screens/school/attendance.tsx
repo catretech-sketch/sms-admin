@@ -14,6 +14,8 @@ import {
 } from '@/components/ui'
 import { TierGate } from '@/components/shell/gates'
 import { students, teachers, staff, grades, sections, subjects } from '@/data/mockDb'
+import { useClasses } from '@/api/hooks/useClasses'
+import { useSaveAttendance } from '@/api/hooks/useAttendance'
 
 /* ---------- group model ---------- */
 type Group = 'students' | 'teachers' | 'staff' | 'period' | 'geo'
@@ -250,7 +252,6 @@ function Roster({ group, editable }: { group: Person['group']; editable: boolean
    class's published timetable. Mark each student and submit.
    ============================================================ */
 const PERIODS = 8
-const classList = grades.slice(8).flatMap((g) => sections.map((s) => `${g}-${s}`))
 const STATUS_OPTS = [
   { value: 'present', label: 'Present' },
   { value: 'late', label: 'Late' },
@@ -278,6 +279,9 @@ function classTimetable(cls: string): TtSlot[] {
 
 function SubjectWise({ editable }: { editable: boolean }) {
   const toast = useToast()
+  const { data: classesData } = useClasses()
+  const classList = (classesData ?? []).map((c) => c.name)
+  const saveAttendance = useSaveAttendance()
   const [cls, setCls] = useState(students[0]?.cls ?? classList[0])
   const [period, setPeriod] = useState(1)
   const [marks, setMarks] = useState<Record<string, AttStatus>>({})
@@ -352,7 +356,16 @@ function SubjectWise({ editable }: { editable: boolean }) {
           <div className="row ai-center jc-between" style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
             <span className="t-sm muted">{presentCount} present · {roster.length - presentCount} absent</span>
             <Btn variant="primary" icon="check" disabled={!editable}
-              onClick={() => toast.success('Attendance submitted', `${cls} · P${slot.period} ${slot.subject} · ${presentCount}/${roster.length} present`)}>
+              onClick={() => {
+                const payload = roster.map((r) => ({ studentId: r.id, status: marks[markKey(r.id)] ?? 'present' as const }))
+                saveAttendance.mutate(
+                  { classId: cls, period: slot.period, marks: payload },
+                  {
+                    onSuccess: () => { toast.success('Attendance submitted', `${cls} · P${slot.period} ${slot.subject} · ${presentCount}/${roster.length} present`) },
+                    onError: (err) => { toast.danger('Could not submit', err instanceof Error ? err.message : 'Please try again.') },
+                  },
+                )
+              }}>
               Submit attendance
             </Btn>
           </div>
