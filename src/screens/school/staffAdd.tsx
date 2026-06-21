@@ -7,6 +7,7 @@
    ============================================================ */
 import { useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
+import { useCreateStaff } from '@/api/hooks/useStaffMutations'
 import { PageHead, Card, CardHead, Btn, Badge, useFormKit } from '@/components/ui'
 import { depts } from '@/data/mockDb'
 import {
@@ -70,6 +71,7 @@ const INITIAL_FILES: Files = {
 function AddStaffScreen() {
   const app = useApp()
   const toast = useToast()
+  const createStaff = useCreateStaff()
   const [f, setForm] = useState<Form>(INITIAL_FORM)
   const [files, setFiles] = useState<Files>(INITIAL_FILES)
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -166,9 +168,15 @@ function AddStaffScreen() {
       },
     }
 
-    app.addStaff(staffMember)
-    toast.success('Staff added', `${name} added to ${f.department}.`)
-    app.go('school.staff')
+    createStaff.mutate(staffMember, {
+      onSuccess: () => {
+        toast.success('Staff added', `${name} added to ${f.department}.`)
+        app.go('school.staff')
+      },
+      onError: (err) => {
+        toast.danger('Could not save', err instanceof Error ? err.message : 'Please try again.')
+      },
+    })
   }
 
   return (
