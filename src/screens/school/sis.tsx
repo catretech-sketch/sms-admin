@@ -10,7 +10,7 @@ import {
   type Column, type BadgeTone,
 } from '@/components/ui'
 import { grades } from '@/data/mockDb'
-import { useStudents } from '@/api/hooks/useStudents'
+import { useStudents, useStudent } from '@/api/hooks/useStudents'
 import {
   reportFor, classRank, attendanceMonths, fmtMoney,
   overallToppers, classToppers,
@@ -366,7 +366,8 @@ function Student360() {
   const toast = useToast()
   const [tab, setTab] = useState('overview')
 
-  const stu = app.students.find((s) => s.id === app.focus) ?? app.students[0]
+  const { data: fetched } = useStudent(app.focus)
+  const stu = fetched ?? app.students.find((s) => s.id === app.focus) ?? app.students[0]
   const report = reportFor(stu)
   const rank = classRank(stu)
   const months = attendanceMonths(stu)

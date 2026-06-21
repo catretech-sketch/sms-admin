@@ -1,18 +1,22 @@
 import { describe, it, expect } from 'vitest'
 import { render } from '@testing-library/react'
 import type { ReactNode } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ToastProvider } from '@/context/ToastProvider'
 import { ThemeProvider } from '@/context/ThemeProvider'
 import { AppProvider } from '@/context/AppProvider'
 import { screenRegistry } from './registry'
 
 function Wrap({ children }: { children: ReactNode }) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return (
-    <ToastProvider>
-      <ThemeProvider>
-        <AppProvider>{children}</AppProvider>
-      </ThemeProvider>
-    </ToastProvider>
+    <QueryClientProvider client={queryClient}>
+      <ToastProvider>
+        <ThemeProvider>
+          <AppProvider>{children}</AppProvider>
+        </ThemeProvider>
+      </ToastProvider>
+    </QueryClientProvider>
   )
 }
 
