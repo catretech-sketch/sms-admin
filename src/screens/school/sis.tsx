@@ -10,6 +10,7 @@ import {
   type Column, type BadgeTone,
 } from '@/components/ui'
 import { grades } from '@/data/mockDb'
+import { useStudents, useStudent } from '@/api/hooks/useStudents'
 import {
   reportFor, classRank, attendanceMonths, fmtMoney,
   overallToppers, classToppers,
@@ -211,7 +212,8 @@ function StudentsScreen() {
   const [view, setView] = useState<'list' | 'toppers'>('list')
 
   const editable = canEdit(app.role)
-  const students = app.students
+  const { data } = useStudents()
+  const students = data ?? []
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
