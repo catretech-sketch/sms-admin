@@ -23,4 +23,10 @@ export const queryKeys = {
   users: {
     all: ['users'] as const,
   },
+  classes: {
+    all: ['classes'] as const,
+  },
+  subjects: {
+    all: ['subjects'] as const,
+  },
 }
