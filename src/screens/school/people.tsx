@@ -15,6 +15,8 @@ import {
 import { students, depts } from '@/data/mockDb'
 import { fmtMoney } from '@/lib/format'
 import type { Teacher, Staff } from '@/types'
+import { useTeachers } from '@/api/hooks/useTeachers'
+import { useStaff } from '@/api/hooks/useStaff'
 
 /* ---------- shared helpers ---------- */
 const attColor = (v: number): string => (v >= 90 ? 'var(--success)' : v >= 80 ? 'var(--brand-600)' : v >= 75 ? 'var(--warning)' : 'var(--danger)')
@@ -100,7 +102,8 @@ function TeachersScreen() {
   const [profile, setProfile] = useState<Teacher | null>(null)
 
   const editable = can(app.role, 'sis', 'E')
-  const teachers = app.teachers
+  const { data: teachersData } = useTeachers()
+  const teachers = teachersData ?? []
 
   const message = (t: Teacher) => toast.success('Message sent', `Notified ${t.name}.`)
 
@@ -259,7 +262,8 @@ function StaffScreen() {
   const [cat, setCat] = useState('all')
 
   const editable = can(app.role, 'sis', 'E')
-  const roster = app.staff
+  const { data: staffData } = useStaff()
+  const roster = staffData ?? []
 
   const message = (s: Staff) => toast.success('Message sent', `Notified ${s.name}.`)
 
