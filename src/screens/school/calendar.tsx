@@ -8,7 +8,7 @@ import { useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import { can } from '@/lib/gating'
 import {
-  PageHead, Card, CardHead, Btn, Badge, Select, Field, Input, Textarea, Checkbox, Modal, Icon, Empty, Segmented,
+  PageHead, Card, CardHead, Btn, Badge, Select, Field, Input, Textarea, Checkbox, Modal, Icon, Empty, Segmented, DemoBadge,
 } from '@/components/ui'
 
 type EvType = 'holiday' | 'exam' | 'fee' | 'ptm' | 'event'
@@ -112,7 +112,7 @@ function CalendarScreen() {
       <PageHead
         title="Calendar"
         sub={`${app.school.name} · academic year`}
-        actions={editable ? <Btn variant="primary" icon="plus" onClick={() => setAddOpen(true)}>Add event</Btn> : undefined}
+        actions={editable ? <><DemoBadge /><Btn variant="primary" icon="plus" onClick={() => setAddOpen(true)}>Add event</Btn></> : <DemoBadge />}
       />
 
       {/* toolbar */}

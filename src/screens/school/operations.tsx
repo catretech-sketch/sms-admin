@@ -14,7 +14,7 @@ import { useApp, useToast } from '@/lib/hooks'
 import {
   PageHead, Tabs, Card, CardHead, Kpi, Btn, IconBtn, Badge, Avatar, Search,
   Select, Field, Input, Textarea, Modal, Icon, Empty, Checkbox, TierPill,
-  DataTable, type Column, type BadgeTone,
+  DataTable, type Column, type BadgeTone, DemoBadge,
 } from '@/components/ui'
 import { TierGate } from '@/components/shell/gates'
 import { buses, threads, students, teachers, staff, grades } from '@/data/mockDb'
@@ -662,6 +662,7 @@ function BusFleet() {
         <div className="row ai-center gap10">
           <span className="sm-dot-live" /><span className="fw7 t-lg">Fleet &amp; live status</span>
           <Badge tone="success" soft>{active} active now</Badge>
+          <DemoBadge />
         </div>
         <Btn size="sm" variant="secondary" icon="plus" onClick={() => setAddOpen(true)}>Add vehicle</Btn>
       </div>
@@ -806,7 +807,7 @@ function GpsScreen() {
     <div>
       <PageHead title="Live bus tracking"
         sub="GPS fleet monitoring · live speed & ETA"
-        actions={app.plan !== 'platinum' ? <Btn variant="platinum" icon="sparkle" onClick={() => app.upgrade('platinum')}>Upgrade to Platinum</Btn> : <Badge tone="success" soft dot>Live</Badge>} />
+        actions={<><DemoBadge />{app.plan !== 'platinum' ? <Btn variant="platinum" icon="sparkle" onClick={() => app.upgrade('platinum')}>Upgrade to Platinum</Btn> : <Badge tone="success" soft dot>Live</Badge>}</>} />
       <div className="col gap16">
         <div className="sm-kpi-grid" style={{ gridTemplateColumns: 'repeat(4,1fr)' }}>
           <Kpi icon="bus" label="Vehicles" value={buses.length} />

@@ -8,7 +8,7 @@ import { useMemo, useState, type ComponentType } from 'react'
 import { useToast } from '@/lib/hooks'
 import {
   PageHead, Tabs, Card, CardHead, Kpi, Btn, Badge, TierPill, Segmented, Select, Field, Input,
-  Modal, Icon, HBars, LineChart, Legend, Donut, DataTable, type Column, type BadgeTone,
+  Modal, Icon, HBars, LineChart, Legend, Donut, DataTable, type Column, type BadgeTone, DemoBadge,
 } from '@/components/ui'
 import { schools, TIERS, TIER_META } from '@/data/mockDb'
 import { fmtMoney, fmtNum } from '@/lib/format'
@@ -500,7 +500,7 @@ function OwnerBilling() {
 
   return (
     <div>
-      <PageHead title="Subscriptions & billing" sub={`${schools.length} tenants · per-student pricing`} />
+      <PageHead title="Subscriptions & billing" sub={`${schools.length} tenants · per-student pricing`} actions={<DemoBadge />} />
 
       <div className="sm-kpi-grid" style={{ marginBottom: 16 }}>
         <Kpi icon="rupee" iconBg="var(--brand-50)" iconColor="var(--brand-600)" label="MRR" value={fmtMoney(kpis.mrr)} foot="Monthly recurring revenue" />

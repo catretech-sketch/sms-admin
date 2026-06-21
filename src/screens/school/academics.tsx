@@ -9,7 +9,7 @@ import { useApp, useToast } from '@/lib/hooks'
 import { can } from '@/lib/gating'
 import {
   PageHead, Tabs, Segmented, Card, CardHead, Btn, Badge, Select, Field, Input,
-  Modal, Icon, Empty, DataTable, type Column, type BadgeTone,
+  Modal, Icon, Empty, DataTable, type Column, type BadgeTone, DemoBadge,
 } from '@/components/ui'
 import { teachers, subjects, grades, sections } from '@/data/mockDb'
 import type { Teacher } from '@/types'
@@ -457,7 +457,10 @@ function TimetableTab({ editable }: { editable: boolean }) {
         <div className="row ai-center jc-between gap12 wrap">
           <Segmented value={view} onChange={(v) => setView(v as 'class' | 'teacher' | 'subject' | 'overview')}
             options={[{ value: 'class', label: 'Class' }, { value: 'teacher', label: 'Teacher' }, { value: 'subject', label: 'Subject' }, { value: 'overview', label: 'All classes' }]} />
-          <Btn variant="secondary" size="sm" icon="download" onClick={() => window.print()}>Print</Btn>
+          <div className="row ai-center gap8">
+            <DemoBadge />
+            <Btn variant="secondary" size="sm" icon="download" onClick={() => window.print()}>Print</Btn>
+          </div>
         </div>
       </Card>
 
@@ -737,7 +740,10 @@ function PeriodsTab({ editable }: { editable: boolean }) {
   return (
     <Card pad={false}>
       <div className="row ai-center jc-between gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
-        <div><div className="fw6">Daily bell schedule</div><div className="t-sm muted">{rows.length} periods · {durOf(rows[0]?.start ?? '08:00', rows[rows.length - 1]?.end ?? '08:00')} school day</div></div>
+        <div className="row ai-center gap10">
+          <div><div className="fw6">Daily bell schedule</div><div className="t-sm muted">{rows.length} periods · {durOf(rows[0]?.start ?? '08:00', rows[rows.length - 1]?.end ?? '08:00')} school day</div></div>
+          <DemoBadge />
+        </div>
         {editable && <div className="row gap8"><Btn variant="secondary" icon="plus" onClick={add}>Add period</Btn><Btn variant="primary" icon="check" onClick={() => toast.success('Schedule saved', `${rows.length} periods saved.`)}>Save</Btn></div>}
       </div>
       <table className="sm-table">
@@ -853,7 +859,10 @@ function HomeworkTab({ editable }: { editable: boolean }) {
   return (
     <Card pad={false}>
       <div className="row ai-center jc-between gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
-        <div><div className="fw6">Homework tracker</div><div className="t-sm muted">{rows.length} assignments</div></div>
+        <div className="row ai-center gap10">
+          <div><div className="fw6">Homework tracker</div><div className="t-sm muted">{rows.length} assignments</div></div>
+          <DemoBadge />
+        </div>
         {editable && <Btn variant="primary" icon="plus" onClick={() => setOpen(true)}>Assign homework</Btn>}
       </div>
       <DataTable<Hw> columns={cols} rows={rows} rowKey={(r) => r.id} pageSize={10} initialSort={{ key: 'due', dir: 'asc' }}
@@ -925,7 +934,10 @@ function TestsTab({ editable }: { editable: boolean }) {
   return (
     <Card pad={false}>
       <div className="row ai-center jc-between gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
-        <div><div className="fw6">Class tests</div><div className="t-sm muted">{rows.length} tests · created in the teacher app</div></div>
+        <div className="row ai-center gap10">
+          <div><div className="fw6">Class tests</div><div className="t-sm muted">{rows.length} tests · created in the teacher app</div></div>
+          <DemoBadge />
+        </div>
         {editable && <Btn variant="primary" icon="plus" onClick={() => setOpen(true)}>Add test</Btn>}
       </div>
       <DataTable<Test> columns={cols} rows={rows} rowKey={(r) => r.id} pageSize={10} initialSort={{ key: 'date', dir: 'asc' }}

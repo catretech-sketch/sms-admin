@@ -7,7 +7,7 @@ import { useApp, useToast } from '@/lib/hooks'
 import {
   PageHead, Card, CardHead, Kpi, Btn, Badge, TierPill, Avatar, Search, Select, Segmented,
   Field, Input, Modal, Icon, Empty, Donut, Bars, LineChart, Legend, DataTable,
-  type Column, type BadgeTone,
+  type Column, type BadgeTone, DemoBadge,
 } from '@/components/ui'
 import { schools, TIERS, TIER_META } from '@/data/mockDb'
 import { fmtMoney, fmtNum } from '@/lib/format'
@@ -89,6 +89,7 @@ function OwnerDashboard() {
         sub="Consolidated performance across all schools"
         actions={
           <div className="row gap8">
+            <DemoBadge />
             <Btn icon="building" onClick={() => app.go('owner.schools')}>All schools</Btn>
             <Btn variant="primary" icon="plus" onClick={() => app.go('owner.create')}>Create school</Btn>
           </div>
