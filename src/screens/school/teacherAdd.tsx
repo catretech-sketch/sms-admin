@@ -8,6 +8,7 @@
    ============================================================ */
 import { useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
+import { useCreateTeacher } from '@/api/hooks/useTeacherMutations'
 import { PageHead, Card, CardHead, Btn, Badge, useFormKit } from '@/components/ui'
 import { depts, grades, sections } from '@/data/mockDb'
 import {
@@ -70,6 +71,7 @@ const INITIAL_FILES: Files = {
 function AddTeacherScreen() {
   const app = useApp()
   const toast = useToast()
+  const createTeacher = useCreateTeacher()
   const [f, setForm] = useState<Form>(INITIAL_FORM)
   const [files, setFiles] = useState<Files>(INITIAL_FILES)
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -167,9 +169,15 @@ function AddTeacherScreen() {
       },
     }
 
-    app.addTeacher(teacher)
-    toast.success('Teacher added', `${name} added to ${f.department}.`)
-    app.go('school.teachers')
+    createTeacher.mutate(teacher, {
+      onSuccess: () => {
+        toast.success('Teacher added', `${name} added to ${f.department}.`)
+        app.go('school.teachers')
+      },
+      onError: (err) => {
+        toast.danger('Could not save', err instanceof Error ? err.message : 'Please try again.')
+      },
+    })
   }
 
   return (

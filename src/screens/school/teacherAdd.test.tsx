@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest'
-import { render, screen, fireEvent, within } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AppProvider, useApp } from '@/context/AppProvider'
 import { ToastProvider } from '@/context/ToastProvider'
 import { teacherAddScreens } from './teacherAdd'
@@ -11,19 +12,25 @@ function Probe() {
   return <div data-testid="probe">{app.teachers.length}|{app.view}</div>
 }
 
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+}
+
 function renderForm() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return render(
-    <AppProvider>
-      <ToastProvider>
-        <Probe />
-        <AddTeacherScreen />
-      </ToastProvider>
-    </AppProvider>,
+    <QueryClientProvider client={qc}>
+      <AppProvider>
+        <ToastProvider>
+          <Probe />
+          <AddTeacherScreen />
+        </ToastProvider>
+      </AppProvider>
+    </QueryClientProvider>,
   )
 }
 
 const probe = () => screen.getByTestId('probe').textContent ?? ''
-const count = () => Number(probe().split('|')[0])
 const view = () => probe().split('|')[1]
 
 const fieldOf = (label: string) => screen.getByText(label).closest('.sm-field') as HTMLElement
@@ -46,9 +53,9 @@ function fillRequired() {
 describe('Add Teacher form', () => {
   it('blocks save and shows errors when required fields are empty', () => {
     renderForm()
-    const start = count()
+    const start = Number(probe().split('|')[0])
     fireEvent.click(screen.getByText('Save teacher'))
-    expect(count()).toBe(start)
+    expect(Number(probe().split('|')[0])).toBe(start)
     expect(view()).not.toBe('school.teachers')
     expect(screen.getAllByText('This field is required').length).toBeGreaterThan(0)
   })
@@ -63,12 +70,21 @@ describe('Add Teacher form', () => {
     expect(view()).not.toBe('school.teachers')
   })
 
-  it('adds the teacher and navigates back when valid', () => {
+  it('adds the teacher and navigates back when valid', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: {
+        id: 'srv', name: 'Rajesh Kumar', gender: 'M',
+        department: 'Mathematics', designation: 'Teacher', attendance_pct: 0,
+      },
+    })))
+
     renderForm()
-    const start = count()
     fillRequired()
     fireEvent.click(screen.getByText('Save teacher'))
-    expect(count()).toBe(start + 1)
-    expect(view()).toBe('school.teachers')
+
+    await waitFor(() => expect(view()).toBe('school.teachers'))
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('/teachers')
+
+    vi.unstubAllGlobals()
   })
 })
