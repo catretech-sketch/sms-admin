@@ -12,6 +12,7 @@
    ============================================================ */
 import { useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast, useTheme } from '@/lib/hooks'
+import { useInviteUser } from '@/api/hooks/useUserMutations'
 import { tierIncludes, caps, effectiveCaps, cellState, overrideCount, NEXT_CELL_STATE } from '@/lib/gating'
 import {
   PageHead, Tabs, Card, CardHead, Btn, Badge, TierPill, Avatar, Search, Select,
@@ -323,14 +324,22 @@ function InviteModalContent({ onDone }: { onDone: () => void }) {
   const toast = useToast()
   const [email, setEmail] = useState('')
   const [role, setRole] = useState<Role>('teacher')
+  const invite = useInviteUser()
 
   const submit = () => {
     if (!email.trim() || !email.includes('@')) {
       toast.danger('Valid email required', 'Enter the staff member’s work email address.')
       return
     }
-    toast.success('Invitation sent', `${email} invited as ${ROLE_META[role].label}.`)
-    onDone()
+    invite.mutate({ email: email.trim(), role }, {
+      onSuccess: () => {
+        toast.success('Invitation sent', `${email} invited as ${ROLE_META[role].label}.`)
+        onDone()
+      },
+      onError: (err) => {
+        toast.danger('Could not send invite', err instanceof Error ? err.message : 'Please try again.')
+      },
+    })
   }
 
   return (
