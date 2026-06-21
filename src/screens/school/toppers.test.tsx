@@ -69,4 +69,30 @@ describe('Students Toppers view', () => {
     fireEvent.click(screen.getByText('All students'))
     expect(screen.getByPlaceholderText(/Search name/i)).toBeInTheDocument()
   })
+
+  it('renders students from the live API, not the mock seed', async () => {
+    const liveStudent = {
+      id: 'live-api-student-001',
+      admission_no: 'LIVE-API-0001',
+      name: 'ZZ Live-API Only',
+      gender: 'M' as const,
+      grade: '10',
+      section: 'Z',
+      class_label: '10-Z',
+      roll: 99,
+      guardian: 'Live Guardian',
+      phone: '9999999999',
+      attendance: 85,
+      fee_status: 'paid' as const,
+      fee_due: 0,
+      status: 'active' as const,
+      house: 'Red',
+      avatar_hue: 200,
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      jsonResponse({ data: [liveStudent], next_cursor: null })
+    ))
+    renderScreen()
+    expect(await screen.findByText('ZZ Live-API Only')).toBeInTheDocument()
+  })
 })
