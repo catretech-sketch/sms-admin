@@ -1,5 +1,5 @@
 import { request, listRequest } from './client'
-import { snakeToCamel } from './mapper'
+import { snakeToCamel, camelToSnake } from './mapper'
 import type { Student, ListStudentsOpts } from '@/types'
 
 interface ListEnvelope { data: Record<string, unknown>[]; next_cursor: string | null }
@@ -25,5 +25,18 @@ export async function listStudents(opts: ListStudentsOpts = {}): Promise<Student
 
 export async function getStudent(id: string): Promise<Student> {
   const wire = await request<Record<string, unknown>>(`/students/${id}`)
+  return toStudent(wire)
+}
+
+/** Map the UI `Student` to a snake_case POST body. `camelToSnake` leaves the
+ *  single-token `adm`/`cls` as-is; rename them to their wire names explicitly. */
+export function fromStudent(s: Student): Record<string, unknown> {
+  const snake = camelToSnake(s) as Record<string, unknown>
+  const { adm, cls, ...rest } = snake
+  return { ...rest, admission_no: adm, class_label: cls }
+}
+
+export async function createStudent(s: Student): Promise<Student> {
+  const wire = await request<Record<string, unknown>>('/students', { method: 'POST', body: fromStudent(s) })
   return toStudent(wire)
 }
