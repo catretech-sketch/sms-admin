@@ -6,6 +6,7 @@
    ============================================================ */
 import { useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
+import { useCreateStudent } from '@/api/hooks/useStudentMutations'
 import { PageHead, Card, CardHead, Btn, Badge, Icon, useFormKit } from '@/components/ui'
 import { grades, sections } from '@/data/mockDb'
 import { required, validateAadhaar, validateEmail, validatePhone, validateFile } from '@/lib/validation'
@@ -49,6 +50,7 @@ function AddStudentScreen() {
   const [errors, setErrors] = useState<Record<string, string>>({})
 
   const { txt, sel, area, upload, fieldGrid } = useFormKit(f, setForm, files, setFiles, errors)
+  const createStudent = useCreateStudent()
 
   const clsOptions = useMemo(
     () => [{ value: '', label: 'Select…' }, ...grades.slice(4).map((g) => ({ value: g, label: g }))],
@@ -142,9 +144,15 @@ function AddStudentScreen() {
       },
     }
 
-    app.addStudent(student)
-    toast.success('Student added', `${name} enrolled in ${cls}.`)
-    app.go('school.sis')
+    createStudent.mutate(student, {
+      onSuccess: () => {
+        toast.success('Student added', `${name} enrolled in ${cls}.`)
+        app.go('school.sis')
+      },
+      onError: (err) => {
+        toast.danger('Could not save', err instanceof Error ? err.message : 'Please try again.')
+      },
+    })
   }
 
   return (
