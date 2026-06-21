@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { listStaff } from './staff'
+import { listStaff, createStaff } from './staff'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -39,5 +39,22 @@ describe('listStaff', () => {
     await listStaff({ cat: 'all' })
     const url2 = fetchMock.mock.calls[0][0] as string
     expect(url2).not.toContain('cat=')
+  })
+})
+
+describe('createStaff', () => {
+  it('POSTs snake_case (dept->department, cat->category, attendance->attendance_pct) and maps the response', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { id: 'srvS', name: 'New S', gender: 'M', role: 'Clerk', category: 'admin', department: 'Office', phone: '1', shift: 'Day', route: null, attendance_pct: 0, status: 'active', avatar_hue: 3 } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const created = await createStaff({ id: 'tmp', name: 'New S', gender: 'M', role: 'Clerk', cat: 'admin', dept: 'Office', phone: '1', shift: 'Day', route: null, attendance: 0, status: 'active', avatarHue: 3 } as Parameters<typeof createStaff>[0])
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toContain('/staff')
+    expect((init as RequestInit).method).toBe('POST')
+    const body = JSON.parse((init as RequestInit).body as string)
+    expect(body.department).toBe('Office')
+    expect(body.category).toBe('admin')
+    expect(body.attendance_pct).toBe(0)
+    expect(body.cat).toBeUndefined()
+    expect(created).toMatchObject({ cat: 'admin', dept: 'Office' })
   })
 })

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { listTeachers } from './teachers'
+import { listTeachers, createTeacher } from './teachers'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -42,5 +42,23 @@ describe('listTeachers', () => {
     const url2 = fetchMock.mock.calls[0][0] as string
     expect(url2).not.toContain('dept=')
     expect(url2).not.toContain('status=')
+  })
+})
+
+describe('createTeacher', () => {
+  it('POSTs snake_case (dept->department, desig->designation, attendance->attendance_pct) and maps the response', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { id: 'srvT', name: 'New T', gender: 'F', department: 'Math', designation: 'Teacher', subjects: [], class_teacher: null, phone: '1', email: 'e', exp: 0, rating: 0, attendance_pct: 0, result: 0, load: 0, status: 'active', avatar_hue: 9, top: false } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const created = await createTeacher({ id: 'tmp', name: 'New T', gender: 'F', dept: 'Math', desig: 'Teacher', subjects: [], classTeacher: null, phone: '1', email: 'e', exp: 0, rating: 0, attendance: 0, result: 0, load: 0, status: 'active', avatarHue: 9, top: false } as Parameters<typeof createTeacher>[0])
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toContain('/teachers')
+    expect((init as RequestInit).method).toBe('POST')
+    const body = JSON.parse((init as RequestInit).body as string)
+    expect(body.department).toBe('Math')
+    expect(body.designation).toBe('Teacher')
+    expect(body.attendance_pct).toBe(0)
+    expect(body.dept).toBeUndefined()
+    expect(body.desig).toBeUndefined()
+    expect(created).toMatchObject({ dept: 'Math', desig: 'Teacher' })
   })
 })

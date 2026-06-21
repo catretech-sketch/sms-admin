@@ -1,5 +1,5 @@
-import { listRequest } from './client'
-import { snakeToCamel } from './mapper'
+import { listRequest, request } from './client'
+import { snakeToCamel, camelToSnake } from './mapper'
 import type { Staff, ListStaffOpts } from '@/types'
 
 interface ListEnvelope { data: Record<string, unknown>[]; next_cursor: string | null }
@@ -19,4 +19,15 @@ export async function listStaff(opts: ListStaffOpts = {}): Promise<Staff[]> {
   if (opts.cat && opts.cat !== 'all') query.cat = opts.cat
   const env = await listRequest<ListEnvelope>('/staff', { query })
   return env.data.map(toStaff)
+}
+
+export function fromStaff(s: Staff): Record<string, unknown> {
+  const snake = camelToSnake(s) as Record<string, unknown>
+  const { dept, cat, attendance, ...rest } = snake
+  return { ...rest, department: dept, category: cat, attendance_pct: attendance }
+}
+
+export async function createStaff(s: Staff): Promise<Staff> {
+  const wire = await request<Record<string, unknown>>('/staff', { method: 'POST', body: fromStaff(s) })
+  return toStaff(wire)
 }
