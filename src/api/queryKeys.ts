@@ -35,4 +35,16 @@ export const queryKeys = {
   exams: {
     all: ['exams'] as const,
   },
+  complaints: {
+    all: ['complaints'] as const,
+  },
+  threads: {
+    all: ['threads'] as const,
+  },
+  announcements: {
+    all: ['announcements'] as const,
+  },
+  feePayments: {
+    all: ['feePayments'] as const,
+  },
 }
