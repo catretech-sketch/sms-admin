@@ -130,7 +130,7 @@ export function LoginScreen() {
 
   const resetVerify = async () => {
     const code = resetCode.trim()
-    if (code.length < 4) { setResetErr('Enter the code we sent you.'); return }
+    if (code.length < 6) { setResetErr('Enter the code we sent you.'); return }
     setResetErr(null)
     try {
       await otpVerify(resetId.trim(), code)  // deposits tokens in tokenStore
