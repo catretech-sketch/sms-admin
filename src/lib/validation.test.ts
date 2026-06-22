@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   required, validateAadhaar, validateFile, validateEmail, validatePhone, MAX_FILE_MB,
-  validatePAN, validateIFSC, validateURL, passwordsMatch,
+  validatePAN, validateIFSC, validateURL, passwordsMatch, validatePassword,
 } from './validation'
 
 describe('required', () => {
@@ -137,5 +137,20 @@ describe('passwordsMatch', () => {
   })
   it('fails when one side is blank', () => {
     expect(passwordsMatch('secret1', '')).not.toBeNull()
+  })
+})
+
+describe('validatePassword', () => {
+  it('accepts 8 or more characters', () => {
+    expect(validatePassword('12345678')).toBeNull()
+    expect(validatePassword('a-longer-password')).toBeNull()
+  })
+  it('rejects fewer than 8 characters', () => {
+    expect(validatePassword('1234567')).not.toBeNull()
+    expect(validatePassword('short')).not.toBeNull()
+  })
+  it('treats empty as valid (required enforced separately)', () => {
+    expect(validatePassword('')).toBeNull()
+    expect(validatePassword(undefined)).toBeNull()
   })
 })

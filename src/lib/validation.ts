@@ -83,3 +83,10 @@ export function passwordsMatch(
   if (isBlank(password) && isBlank(confirm)) return null
   return password === confirm ? null : 'Passwords do not match'
 }
+
+/** Password strength: minimum 8 characters. Empty is allowed (required
+ *  enforced separately at the call site). */
+export function validatePassword(value: string | null | undefined): string | null {
+  if (isBlank(value)) return null
+  return (value as string).length >= 8 ? null : 'Password must be at least 8 characters'
+}
