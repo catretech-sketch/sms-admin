@@ -80,6 +80,7 @@ interface AppState {
   clearAuthError: () => void
   loginWithPassword: (email: string, password: string) => Promise<void>
   loginWithOtp: (identifier: string, code: string) => Promise<void>
+  establishSession: (identifier: string) => Promise<void>
   logout: () => Promise<void>
   go: (view: string, opts?: { focus?: string; intent?: string }) => void
   clearIntent: () => void
@@ -164,29 +165,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
     applySession(email, known.includes(raw as Role) ? (raw as Role) : 'admin')
   }
 
-  const loginWithPassword = async (email: string, password: string) => {
+  /** Shared busy/error wrapper for the auth flows. */
+  const runAuth = async (fn: () => Promise<void>, fallback: string) => {
     setAuthBusy(true); setAuthError(null)
     try {
-      await passwordLogin(email, password)
-      await finishLogin(email)
+      await fn()
     } catch (e) {
-      setAuthError(e instanceof ApiError ? e.message : 'Sign-in failed. Please try again.')
+      setAuthError(e instanceof ApiError ? e.message : fallback)
     } finally {
       setAuthBusy(false)
     }
   }
 
-  const loginWithOtp = async (identifier: string, code: string) => {
-    setAuthBusy(true); setAuthError(null)
-    try {
+  const loginWithPassword = (email: string, password: string) =>
+    runAuth(async () => {
+      await passwordLogin(email, password)
+      await finishLogin(email)
+    }, 'Sign-in failed. Please try again.')
+
+  const loginWithOtp = (identifier: string, code: string) =>
+    runAuth(async () => {
       await otpVerify(identifier, code)
       await finishLogin(identifier)
-    } catch (e) {
-      setAuthError(e instanceof ApiError ? e.message : 'Verification failed. Please try again.')
-    } finally {
-      setAuthBusy(false)
-    }
-  }
+    }, 'Verification failed. Please try again.')
+
+  /** Establish the logged-in session from an already-verified identifier
+   *  (used after the OTP password-reset flow sets tokens via otpVerify). */
+  const establishSession = (identifier: string) =>
+    runAuth(() => finishLogin(identifier), 'Could not load your profile. Please try again.')
 
   const logout = async () => {
     try { await apiLogout() } finally {
@@ -237,7 +243,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     datesheets, saveDatesheet,
     feePayments, addFeePayment,
     feeHeads, feeStructure, saveFeeStructure,
-    authBusy, authError, clearAuthError, loginWithPassword, loginWithOtp,
+    authBusy, authError, clearAuthError, loginWithPassword, loginWithOtp, establishSession,
     logout, go, clearIntent, setSchoolId, enterSchool, exitToOwner, upgrade, setLang, setMobileNav,
   }
 
