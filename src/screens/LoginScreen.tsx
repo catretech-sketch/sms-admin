@@ -83,9 +83,10 @@ export function LoginScreen() {
   const [resetErr, setResetErr] = useState<string | null>(null)
   const [resetBusy, setResetBusy] = useState(false)
   const [resetDone, setResetDone] = useState(false)
+  const [showResetPw, setShowResetPw] = useState(false)
 
   const openReset = () => {
-    setResetOpen(true); setResetStep('id'); setResetDone(false)
+    setResetOpen(true); setResetStep('id'); setResetDone(false); setShowResetPw(false)
     setResetId(''); setResetCode(''); setResetPw(''); setResetPw2('')
     setResetErr(null)
   }
@@ -195,15 +196,36 @@ export function LoginScreen() {
                 <form className="col gap10" onSubmit={(e) => { e.preventDefault(); void resetSubmit() }}>
                   <h2>Choose a new password</h2>
                   <p className="lead">Enter the 6-digit code we sent to {resetId.trim()}, then set a new password (at least 8 characters).</p>
-                  <Field label="6-digit code" error={resetErr ?? undefined}>
-                    <Input icon="key" inputMode="numeric" maxLength={6} value={resetCode} onChange={(e) => { setResetCode(e.target.value); setResetErr(null) }} placeholder="••••••" />
+                  <Field
+                    label="6-digit code"
+                    error={resetCode.length > 0 && resetCode.length < 6 ? 'Enter all 6 digits of the code.' : undefined}
+                    hint={resetCode.length > 0 && resetCode.length < 6 ? undefined : 'Enter all 6 digits of the code.'}
+                  >
+                    <Input icon="key" inputMode="numeric" maxLength={6} value={resetCode}
+                      onChange={(e) => { setResetCode(e.target.value.replace(/\D/g, '').slice(0, 6)); setResetErr(null) }}
+                      placeholder="••••••" style={{ letterSpacing: '4px' }} />
                   </Field>
-                  <Field label="New password">
-                    <Input icon="lock" type="password" value={resetPw} onChange={(e) => { setResetPw(e.target.value); setResetErr(null) }} placeholder="At least 8 characters" />
+                  <Field
+                    label="New password"
+                    error={resetPw.length > 0 && resetPw.length < 8 ? 'Must be at least 8 characters.' : undefined}
+                    hint={resetPw.length > 0 && resetPw.length < 8 ? undefined : 'Must be at least 8 characters.'}
+                  >
+                    <div style={{ position: 'relative' }}>
+                      <Input icon="lock" type={showResetPw ? 'text' : 'password'} value={resetPw}
+                        onChange={(e) => { setResetPw(e.target.value); setResetErr(null) }} placeholder="At least 8 characters" />
+                      <button type="button" className="sm-login-pw-toggle" onClick={() => setShowResetPw((s) => !s)} aria-label="Toggle password">
+                        <Icon name="eye" size={16} />
+                      </button>
+                    </div>
                   </Field>
-                  <Field label="Confirm password">
-                    <Input icon="lock" type="password" value={resetPw2} onChange={(e) => { setResetPw2(e.target.value); setResetErr(null) }} placeholder="Re-enter your password" />
+                  <Field
+                    label="Confirm password"
+                    hint={resetPw2.length > 0 && resetPw !== resetPw2 ? "Passwords don't match yet." : undefined}
+                  >
+                    <Input icon="lock" type={showResetPw ? 'text' : 'password'} value={resetPw2}
+                      onChange={(e) => { setResetPw2(e.target.value); setResetErr(null) }} placeholder="Re-enter your password" />
                   </Field>
+                  {resetErr && <span className="sm-err"><Icon name="alert" size={12} /> {resetErr}</span>}
                   <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy || resetBusy}>
                     {(busy || resetBusy) ? <><Spinner size={16} /> Saving…</> : <>Set password <Icon name="arrowRight" size={16} /></>}
                   </Btn>
