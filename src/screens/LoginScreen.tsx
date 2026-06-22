@@ -1,13 +1,12 @@
 /* ============================================================
-   SchoolMate — Login screen (role-locked demo accounts)
+   SchoolMate — Login screen
    ============================================================ */
 import { useState } from 'react'
-import { useApp } from '@/lib/hooks'
+import { useApp, useToast } from '@/lib/hooks'
 import { DEMO_ACCOUNTS, type DemoAccount } from '@/context/AppProvider'
-import { ROLE_META } from '@/data/mockDb'
-import { Icon, Field, Input, Btn, Checkbox, Spinner, Avatar } from '@/components/ui'
+import { Icon, Field, Input, Btn, Checkbox, Spinner } from '@/components/ui'
 import { validateEmail, validatePassword, passwordsMatch, required } from '@/lib/validation'
-import { otpRequest, passwordForgot, passwordReset } from '@/api/auth'
+import { passwordForgot, passwordReset } from '@/api/auth'
 import { ApiError } from '@/api/client'
 
 /* ---------- Sign-in identifier helpers (which account an email/mobile maps to) ---------- */
@@ -64,45 +63,14 @@ const POINTS = [
 
 export function LoginScreen() {
   const app = useApp()
-  const [email, setEmail] = useState('admin@greenwood.edu')
-  const [pw, setPw] = useState('demo1234')
+  const toast = useToast()
+  const [email, setEmail] = useState('')
+  const [pw, setPw] = useState('')
   const [showPw, setShowPw] = useState(false)
   const [remember, setRemember] = useState(true)
   const busy = app.authBusy
 
   const signIn = (e: string) => { void app.loginWithPassword(e, pw) }
-
-  /* OTP sign-in: hidden until the user opts in, then request a code from the API and verify it. */
-  const [otpOpen, setOtpOpen] = useState(false)
-  const [otpId, setOtpId] = useState('')
-  const [otpStep, setOtpStep] = useState<'request' | 'verify'>('request')
-  const [otpId2, setOtpId2] = useState('')
-  const [otpInput, setOtpInput] = useState('')
-  const [otpErr, setOtpErr] = useState<string | null>(null)
-
-  const sendCode = async () => {
-    const v = otpId.trim()
-    if (!v) { setOtpErr('Enter your email or mobile number.'); return }
-    if (!looksLikePhone(v) && validateEmail(v)) { setOtpErr('Enter a valid email or mobile number.'); return }
-    setOtpErr(null)
-    try {
-      await otpRequest(v)
-      setOtpId2(v)         // remember the identifier for the verify step
-      setOtpInput('')
-      setOtpStep('verify')
-    } catch (e) {
-      setOtpErr(e instanceof Error ? e.message : 'Could not send a code. Try again.')
-    }
-  }
-
-  const verifyCode = () => { void app.loginWithOtp(otpId2, otpInput.trim()) }
-
-  const backToRequest = () => {
-    setOtpStep('request')
-    setOtpId2('')
-    setOtpInput('')
-    setOtpErr(null)
-  }
 
   /* Password reset/create: prove the identifier via a one-time code, then set a new
      password in a single /auth/password/reset call. On success, return to sign in. */
@@ -136,6 +104,11 @@ export function LoginScreen() {
       setResetCode(''); setResetPw(''); setResetPw2('')
       setResetStep('reset')
     } catch (e) {
+      // Not-registered is the common, expected case — surface it as a popup so it's unmissable,
+      // and keep the inline hint on the field. Other errors stay inline only.
+      if (e instanceof ApiError && e.code === 'not_registered') {
+        toast.danger('Email or mobile not registered', 'No account exists for that email or mobile number.')
+      }
       setResetErr(apiErrorMessage(e, 'Could not send a code. Check your connection and try again.'))
     } finally {
       setResetBusy(false)
@@ -203,36 +176,36 @@ export function LoginScreen() {
         <div className="sm-login-form">
           {resetOpen ? (
             <>
-              <h2>Reset your password</h2>
-              <p className="lead">Verify your email or mobile, then set a new password.</p>
-
               {resetStep === 'id' && (
-                <form className="col gap10" onSubmit={(e) => { e.preventDefault(); void resetRequest() }}>
-                  <Field label="Email or mobile number" error={resetErr ?? undefined}>
-                    <Input icon="phone" value={resetId} onChange={(e) => { setResetId(e.target.value); setResetErr(null) }} placeholder="you@school.edu or +91…" />
-                  </Field>
-                  <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy || resetBusy}>
-                    Send one-time code <Icon name="arrowRight" size={16} />
-                  </Btn>
-                </form>
+                <>
+                  <h2>Set your password</h2>
+                  <p className="lead">First time here or forgot your password? Enter your email or mobile — if it's registered, we'll send a 6-digit code to verify it's you.</p>
+                  <form className="col gap10" onSubmit={(e) => { e.preventDefault(); void resetRequest() }}>
+                    <Field label="Email or mobile number" error={resetErr ?? undefined}>
+                      <Input icon="phone" value={resetId} onChange={(e) => { setResetId(e.target.value); setResetErr(null) }} placeholder="you@school.edu or +91…" />
+                    </Field>
+                    <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy || resetBusy}>
+                      Send code <Icon name="arrowRight" size={16} />
+                    </Btn>
+                  </form>
+                </>
               )}
 
               {resetStep === 'reset' && (
                 <form className="col gap10" onSubmit={(e) => { e.preventDefault(); void resetSubmit() }}>
-                  <div className="sm-login-otp-hint">
-                    <Icon name="message" size={14} /><span>We sent a 6-digit code to {resetId.trim()}.</span>
-                  </div>
+                  <h2>Choose a new password</h2>
+                  <p className="lead">Enter the 6-digit code we sent to {resetId.trim()}, then set a new password (at least 8 characters).</p>
                   <Field label="6-digit code" error={resetErr ?? undefined}>
                     <Input icon="key" inputMode="numeric" maxLength={6} value={resetCode} onChange={(e) => { setResetCode(e.target.value); setResetErr(null) }} placeholder="••••••" />
                   </Field>
                   <Field label="New password">
                     <Input icon="lock" type="password" value={resetPw} onChange={(e) => { setResetPw(e.target.value); setResetErr(null) }} placeholder="At least 8 characters" />
                   </Field>
-                  <Field label="Confirm new password">
+                  <Field label="Confirm password">
                     <Input icon="lock" type="password" value={resetPw2} onChange={(e) => { setResetPw2(e.target.value); setResetErr(null) }} placeholder="Re-enter your password" />
                   </Field>
                   <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy || resetBusy}>
-                    {(busy || resetBusy) ? <><Spinner size={16} /> Updating…</> : <>Reset password <Icon name="arrowRight" size={16} /></>}
+                    {(busy || resetBusy) ? <><Spinner size={16} /> Saving…</> : <>Set password <Icon name="arrowRight" size={16} /></>}
                   </Btn>
                   <button type="button" className="sm-login-link" onClick={() => { void resendCode() }}>
                     Resend code
@@ -259,8 +232,8 @@ export function LoginScreen() {
               )}
 
               <form className="col gap14" onSubmit={(e) => { e.preventDefault(); signIn(email) }}>
-                <Field label="Email address">
-                  <Input icon="user" type="email" value={email} onChange={(e) => { setEmail(e.target.value); setResetDone(false) }} placeholder="you@school.edu" />
+                <Field label="Email or mobile number">
+                  <Input icon="user" type="text" value={email} onChange={(e) => { setEmail(e.target.value); setResetDone(false) }} placeholder="you@school.edu or +91…" />
                 </Field>
                 <Field label="Password" error={app.authError ?? undefined}>
                   <div style={{ position: 'relative' }}>
@@ -281,57 +254,9 @@ export function LoginScreen() {
                 </Btn>
               </form>
 
-              <div className="sm-login-or"><span>or</span></div>
-
-              <div className="sm-login-otp">
-                {!otpOpen ? (
-                  <Btn type="button" variant="secondary" size="lg" style={{ width: '100%' }} onClick={() => setOtpOpen(true)} disabled={busy}>
-                    <Icon name="key" size={16} /> OTP login
-                  </Btn>
-                ) : otpStep === 'request' ? (
-                  <form className="col gap10" onSubmit={(e) => { e.preventDefault(); void sendCode() }}>
-                    <Field label="Email or mobile number" error={otpErr ?? undefined}>
-                      <Input icon="phone" value={otpId} onChange={(e) => { setOtpId(e.target.value); setOtpErr(null) }} placeholder="you@school.edu or +91…" />
-                    </Field>
-                    <Btn type="submit" variant="secondary" size="lg" className="sm-login-otp-send" style={{ width: '100%' }} disabled={busy}>
-                      Send one-time code <Icon name="arrowRight" size={16} />
-                    </Btn>
-                  </form>
-                ) : (
-                  <form className="col gap10" onSubmit={(e) => { e.preventDefault(); verifyCode() }}>
-                    <div className="sm-login-otp-hint">
-                      <Icon name="message" size={14} />
-                      <span>We sent a 6-digit code to {otpId2}.</span>
-                    </div>
-                    <Field label="Enter the 6-digit code" error={(otpErr ?? app.authError) ?? undefined}>
-                      <Input icon="key" inputMode="numeric" maxLength={6} value={otpInput} onChange={(e) => { setOtpInput(e.target.value); setOtpErr(null) }} placeholder="••••••" />
-                    </Field>
-                    <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy}>
-                      Verify &amp; sign in <Icon name="arrowRight" size={16} />
-                    </Btn>
-                    <button type="button" className="sm-login-link" onClick={backToRequest}>
-                      <Icon name="arrowLeft" size={13} /> Use a different email/mobile
-                    </button>
-                  </form>
-                )}
-              </div>
-
-              <div className="sm-demos">
-                <div className="sm-demos-label">or try a demo account</div>
-                <div className="sm-demo-grid">
-                  {DEMO_ACCOUNTS.map((a) => {
-                    const label = a.console === 'owner' ? 'Owner' : ROLE_META[a.role].label
-                    return (
-                      <button key={a.email} type="button" className="sm-demo-chip" onClick={() => signIn(a.email)} disabled={busy}>
-                        <Avatar name={a.name} hue={a.hue} size={28} />
-                        <div style={{ minWidth: 0 }}>
-                          <div className="nm">{a.name}</div>
-                          <div className="rl">{label}</div>
-                        </div>
-                      </button>
-                    )
-                  })}
-                </div>
+              <div className="sm-login-row" style={{ justifyContent: 'center', gap: 6 }}>
+                <span className="lead" style={{ margin: 0 }}>First time here?</span>
+                <button type="button" className="sm-login-link" onClick={openReset}>Create a password</button>
               </div>
             </>
           )}

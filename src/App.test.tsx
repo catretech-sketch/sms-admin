@@ -6,14 +6,22 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
-/* Demo-chip sign-in now performs a real password login: POST /auth/login then GET /auth/me.
-   Mock both so a chip click lands the user in the app. */
+/* Sign-in performs a real password login: POST /auth/login then GET /auth/me.
+   Mock both so a form submit lands the user in the app. */
 function mockAuth(roles: string[] = ['admin'], tenantId: string | null = 't1') {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     if (url.includes('/auth/me')) return jsonResponse({ data: { id: 'u1', tenant_id: tenantId, roles } })
     return jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } })
   }))
+}
+
+/* Fill the email/password form and submit. Owner console is keyed off the
+   @schoolmate.io domain; anything else lands in the school console. */
+function signIn(email: string, password = 'demo1234') {
+  fireEvent.change(screen.getByPlaceholderText(/you@school\.edu/), { target: { value: email } })
+  fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: password } })
+  fireEvent.click(screen.getByRole('button', { name: /^sign in/i }))
 }
 
 describe('App (smoke)', () => {
@@ -28,7 +36,7 @@ describe('App (smoke)', () => {
   it('owner demo account lands in the owner console', async () => {
     mockAuth()
     render(<App />)
-    fireEvent.click(screen.getByText('Anil Mehta'))
+    signIn('anil@schoolmate.io')
     expect(await screen.findByText('Portfolio overview')).toBeInTheDocument()
     const sidebar = document.querySelector('.sm-sidebar') as HTMLElement
     expect(within(sidebar).getByText('Schools')).toBeInTheDocument()
@@ -37,7 +45,7 @@ describe('App (smoke)', () => {
   it('school admin lands in the school console with dashboard nav', async () => {
     mockAuth()
     render(<App />)
-    fireEvent.click(screen.getByText('Ravi Menon'))
+    signIn('admin@greenwood.edu')
     const sidebar = (await screen.findByRole('complementary')) as HTMLElement
     expect(within(sidebar).getByText('Dashboard')).toBeInTheDocument()
     expect(within(sidebar).getByText('Students (SIS)')).toBeInTheDocument()
@@ -46,7 +54,7 @@ describe('App (smoke)', () => {
   it('theme toggle flips data-theme', async () => {
     mockAuth()
     render(<App />)
-    fireEvent.click(screen.getByText('Ravi Menon'))
+    signIn('admin@greenwood.edu')
     const toggle = await screen.findByLabelText('Toggle theme')
     const before = document.documentElement.getAttribute('data-theme')
     fireEvent.click(toggle)

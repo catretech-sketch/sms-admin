@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { LoginScreen } from './LoginScreen'
 import { AppProvider } from '@/context/AppProvider'
+import { ToastProvider } from '@/context/ToastProvider'
 import { tokenStore } from '@/api/auth/tokenStore'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -10,21 +11,11 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 beforeEach(() => { localStorage.clear(); tokenStore.clear(); vi.restoreAllMocks() })
 
-const renderLogin = () => render(<AppProvider><LoginScreen /></AppProvider>)
+const renderLogin = () => render(
+  <ToastProvider><AppProvider><LoginScreen /></AppProvider></ToastProvider>
+)
 
 describe('LoginScreen', () => {
-  it('requests an OTP from the API when the user submits an identifier', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { sent: true } }))
-    vi.stubGlobal('fetch', fetchMock)
-    renderLogin()
-    await userEvent.click(screen.getByRole('button', { name: /OTP login/i }))
-    await userEvent.type(screen.getByPlaceholderText(/you@school.edu or/i), 'admin@greenwood.edu')
-    await userEvent.click(screen.getByRole('button', { name: /Send one-time code/i }))
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
-    expect(fetchMock.mock.calls[0][0]).toContain('/auth/otp/request')
-    expect(await screen.findByText(/Enter the 6-digit code/i)).toBeInTheDocument()
-  })
-
   it('shows the API error message when password sign-in fails', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
       jsonResponse({ error: { code: 'invalid_credentials', message: 'Wrong email or password.' } }, 401)))
@@ -38,7 +29,7 @@ describe('LoginScreen password reset', () => {
   it('opens the reset panel from the Forgot password link', async () => {
     renderLogin()
     await userEvent.click(screen.getByRole('button', { name: /forgot password/i }))
-    expect(screen.getByText(/Reset your password/i)).toBeInTheDocument()
+    expect(screen.getByText(/Set your password/i)).toBeInTheDocument()
     expect(screen.getByPlaceholderText(/you@school.edu or/i)).toBeInTheDocument()
   })
 
@@ -48,8 +39,11 @@ describe('LoginScreen password reset', () => {
     renderLogin()
     await userEvent.click(screen.getByRole('button', { name: /forgot password/i }))
     await userEvent.type(screen.getByPlaceholderText(/you@school.edu or/i), 'ghost@nowhere.edu')
-    await userEvent.click(screen.getByRole('button', { name: /send one-time code/i }))
+    await userEvent.click(screen.getByRole('button', { name: /send code/i }))
     expect(await screen.findByText(/No account is registered/i)).toBeInTheDocument()
+    // popup (toast) also appears for the not-registered case
+    expect(await screen.findByText(/not registered/i)).toBeInTheDocument()
+    expect(screen.getByText(/No account exists for that email or mobile/i)).toBeInTheDocument()
     // still on the identify step
     expect(screen.getByPlaceholderText(/you@school.edu or/i)).toBeInTheDocument()
   })
@@ -62,11 +56,11 @@ describe('LoginScreen password reset', () => {
     renderLogin()
     await userEvent.click(screen.getByRole('button', { name: /forgot password/i }))
     await userEvent.type(screen.getByPlaceholderText(/you@school.edu or/i), 'admin@greenwood.edu')
-    await userEvent.click(screen.getByRole('button', { name: /send one-time code/i }))
+    await userEvent.click(screen.getByRole('button', { name: /send code/i }))
     await userEvent.type(await screen.findByPlaceholderText('••••••'), '123456')
     await userEvent.type(screen.getByPlaceholderText(/at least 8 characters/i), 'newPass123')
     await userEvent.type(screen.getByPlaceholderText(/re-enter your password/i), 'newPass123')
-    await userEvent.click(screen.getByRole('button', { name: /reset password/i }))
+    await userEvent.click(screen.getByRole('button', { name: /set password/i }))
     expect(await screen.findByText(/Password updated/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^Sign in/i })).toBeInTheDocument()
     const urls = fetchMock.mock.calls.map((c) => String(c[0]))
@@ -82,11 +76,11 @@ describe('LoginScreen password reset', () => {
     renderLogin()
     await userEvent.click(screen.getByRole('button', { name: /forgot password/i }))
     await userEvent.type(screen.getByPlaceholderText(/you@school.edu or/i), 'admin@greenwood.edu')
-    await userEvent.click(screen.getByRole('button', { name: /send one-time code/i }))
+    await userEvent.click(screen.getByRole('button', { name: /send code/i }))
     await userEvent.type(await screen.findByPlaceholderText('••••••'), '000000')
     await userEvent.type(screen.getByPlaceholderText(/at least 8 characters/i), 'newPass123')
     await userEvent.type(screen.getByPlaceholderText(/re-enter your password/i), 'newPass123')
-    await userEvent.click(screen.getByRole('button', { name: /reset password/i }))
+    await userEvent.click(screen.getByRole('button', { name: /set password/i }))
     expect(await screen.findByText(/invalid or expired/i)).toBeInTheDocument()
   })
 
@@ -97,11 +91,11 @@ describe('LoginScreen password reset', () => {
     renderLogin()
     await userEvent.click(screen.getByRole('button', { name: /forgot password/i }))
     await userEvent.type(screen.getByPlaceholderText(/you@school.edu or/i), 'admin@greenwood.edu')
-    await userEvent.click(screen.getByRole('button', { name: /send one-time code/i }))
+    await userEvent.click(screen.getByRole('button', { name: /send code/i }))
     await userEvent.type(await screen.findByPlaceholderText('••••••'), '123456')
     await userEvent.type(screen.getByPlaceholderText(/at least 8 characters/i), 'short')
     await userEvent.type(screen.getByPlaceholderText(/re-enter your password/i), 'short')
-    await userEvent.click(screen.getByRole('button', { name: /reset password/i }))
+    await userEvent.click(screen.getByRole('button', { name: /set password/i }))
     expect(await screen.findByText(/Password must be at least 8 characters/i)).toBeInTheDocument()
     expect(fetchMock).toHaveBeenCalledTimes(1) // forgot only; no reset call
   })

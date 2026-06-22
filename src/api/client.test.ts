@@ -29,7 +29,7 @@ describe('request', () => {
     tokenStore.set({ access_token: 'a1', refresh_token: 'r1' })
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: {} }))
     vi.stubGlobal('fetch', fetchMock)
-    await request('/auth/otp/verify', { method: 'POST', body: {} })
+    await request('/auth/password/forgot', { method: 'POST', body: {} })
     const headers = (fetchMock.mock.calls[0][1] as RequestInit).headers as Record<string, string>
     expect(headers.Authorization).toBeUndefined()
   })

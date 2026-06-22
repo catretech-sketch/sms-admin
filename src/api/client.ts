@@ -9,7 +9,7 @@ let onAuthFailure: () => void = () => {}
 export function setOnAuthFailure(cb: () => void): void { onAuthFailure = cb }
 
 const NO_AUTH = new Set([
-  '/auth/otp/request', '/auth/otp/verify', '/auth/refresh', '/auth/login',
+  '/auth/refresh', '/auth/login',
   '/auth/password/forgot', '/auth/password/reset',
 ])
 

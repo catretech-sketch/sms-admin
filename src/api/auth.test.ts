@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { otpRequest, otpVerify, login, me, logout, passwordForgot, passwordReset } from './auth'
+import { login, me, logout, passwordForgot, passwordReset } from './auth'
 import { tokenStore } from './auth/tokenStore'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -8,24 +8,19 @@ function jsonResponse(body: unknown, status = 200): Response {
 beforeEach(() => { localStorage.clear(); tokenStore.clear(); vi.restoreAllMocks() })
 
 describe('auth', () => {
-  it('otpRequest posts the identifier and returns {sent}', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { sent: true } }))
+  it('login stores tokens and sends an email identifier as { email }', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { access_token: 'a2', refresh_token: 'r2' } }))
     vi.stubGlobal('fetch', fetchMock)
-    expect(await otpRequest('a@b.edu')).toEqual({ sent: true })
-    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({ identifier: 'a@b.edu' })
-  })
-
-  it('otpVerify stores both tokens', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } })))
-    await otpVerify('a@b.edu', '123456')
-    expect(tokenStore.getAccess()).toBe('a')
-    expect(tokenStore.getRefresh()).toBe('r')
-  })
-
-  it('login stores tokens', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: { access_token: 'a2', refresh_token: 'r2' } })))
     await login('a@b.edu', 'pw')
     expect(tokenStore.getAccess()).toBe('a2')
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({ email: 'a@b.edu', password: 'pw' })
+  })
+
+  it('login sends a mobile identifier as { phone }', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { access_token: 'a3', refresh_token: 'r3' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await login('+91 98100 10002', 'pw')
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({ phone: '+91 98100 10002', password: 'pw' })
   })
 
   it('me persists the tenant id', async () => {

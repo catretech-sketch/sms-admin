@@ -4,7 +4,7 @@
    ============================================================ */
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ApiError, setOnAuthFailure } from '@/api/client'
-import { login as passwordLogin, otpVerify, me as fetchMe, logout as apiLogout } from '@/api/auth'
+import { login as passwordLogin, me as fetchMe, logout as apiLogout } from '@/api/auth'
 import { tokenStore } from '@/api/auth/tokenStore'
 import type { ConsoleKind, Exam, FeePayment, PaperSlot, Role, School, Staff, Student, Teacher, Tier } from '@/types'
 import { schools, students as seedStudents, teachers as seedTeachers, staff as seedStaff, exams as seedExams } from '@/data/mockDb'
@@ -79,7 +79,6 @@ interface AppState {
   authError: string | null
   clearAuthError: () => void
   loginWithPassword: (email: string, password: string) => Promise<void>
-  loginWithOtp: (identifier: string, code: string) => Promise<void>
   logout: () => Promise<void>
   go: (view: string, opts?: { focus?: string; intent?: string }) => void
   clearIntent: () => void
@@ -182,12 +181,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await finishLogin(email)
     }, 'Sign-in failed. Please try again.')
 
-  const loginWithOtp = (identifier: string, code: string) =>
-    runAuth(async () => {
-      await otpVerify(identifier, code)
-      await finishLogin(identifier)
-    }, 'Verification failed. Please try again.')
-
   const logout = async () => {
     try { await apiLogout() } finally {
       setLoggedIn(false)
@@ -237,7 +230,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     datesheets, saveDatesheet,
     feePayments, addFeePayment,
     feeHeads, feeStructure, saveFeeStructure,
-    authBusy, authError, clearAuthError, loginWithPassword, loginWithOtp,
+    authBusy, authError, clearAuthError, loginWithPassword,
     logout, go, clearIntent, setSchoolId, enterSchool, exitToOwner, upgrade, setLang, setMobileNav,
   }
 

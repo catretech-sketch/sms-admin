@@ -2,16 +2,6 @@ import { request } from './client'
 import { tokenStore } from './auth/tokenStore'
 import type { AuthTokens, Me } from './types'
 
-export async function otpRequest(identifier: string): Promise<{ sent: boolean }> {
-  return request('/auth/otp/request', { method: 'POST', body: { identifier } })
-}
-
-export async function otpVerify(identifier: string, code: string): Promise<AuthTokens> {
-  const tokens = await request<AuthTokens>('/auth/otp/verify', { method: 'POST', body: { identifier, code } })
-  tokenStore.set(tokens)
-  return tokens
-}
-
 export async function passwordForgot(identifier: string): Promise<{ sent: boolean }> {
   return request('/auth/password/forgot', { method: 'POST', body: { identifier } })
 }
@@ -20,8 +10,10 @@ export async function passwordReset(identifier: string, code: string, password: 
   await request('/auth/password/reset', { method: 'POST', body: { identifier, code, password } })
 }
 
-export async function login(email: string, password: string): Promise<AuthTokens> {
-  const tokens = await request<AuthTokens>('/auth/login', { method: 'POST', body: { email, password } })
+/** Sign in with an email or a mobile number. An '@' routes to the email field, otherwise phone. */
+export async function login(identifier: string, password: string): Promise<AuthTokens> {
+  const body = identifier.includes('@') ? { email: identifier, password } : { phone: identifier, password }
+  const tokens = await request<AuthTokens>('/auth/login', { method: 'POST', body })
   tokenStore.set(tokens)
   return tokens
 }
