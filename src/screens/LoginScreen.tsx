@@ -7,7 +7,7 @@ import { DEMO_ACCOUNTS, type DemoAccount } from '@/context/AppProvider'
 import { ROLE_META } from '@/data/mockDb'
 import { Icon, Field, Input, Btn, Checkbox, Spinner, Avatar } from '@/components/ui'
 import { validateEmail, validatePassword, passwordsMatch, required } from '@/lib/validation'
-import { otpRequest, otpVerify, setPassword } from '@/api/auth'
+import { otpRequest, passwordForgot, passwordReset } from '@/api/auth'
 import { ApiError } from '@/api/client'
 
 /* ---------- Sign-in identifier helpers (which account an email/mobile maps to) ---------- */
@@ -40,6 +40,20 @@ export function findAccountByIdentifier(identifier: string): DemoAccount | null 
 /** True when the input looks like a phone number (digits, +, -, spaces, parens). */
 function looksLikePhone(v: string): boolean {
   return /^[\d+\-\s()]+$/.test(v)
+}
+
+/** Map a thrown error to friendly copy by the backend's error code. */
+function apiErrorMessage(e: unknown, fallback: string): string {
+  if (e instanceof ApiError) {
+    switch (e.code) {
+      case 'not_registered': return 'No account is registered for this email/mobile.'
+      case 'invalid_code':   return 'That code is invalid or expired. Request a new one.'
+      case 'weak_password':  return 'Password is too weak — use at least 8 characters.'
+      case 'rate_limited':   return 'Too many requests — please wait a minute and try again.'
+      default:               return e.message || fallback
+    }
+  }
+  return fallback
 }
 
 const POINTS = [
@@ -90,24 +104,26 @@ export function LoginScreen() {
     setOtpErr(null)
   }
 
-  /* Password reset/create: verify email/mobile via a one-time code, then set a new password. */
+  /* Password reset/create: prove the identifier via a one-time code, then set a new
+     password in a single /auth/password/reset call. On success, return to sign in. */
   const [resetOpen, setResetOpen] = useState(false)
-  const [resetStep, setResetStep] = useState<'id' | 'code' | 'pw'>('id')
+  const [resetStep, setResetStep] = useState<'id' | 'reset'>('id')
   const [resetId, setResetId] = useState('')
   const [resetCode, setResetCode] = useState('')
   const [resetPw, setResetPw] = useState('')
   const [resetPw2, setResetPw2] = useState('')
-  const [resetMsg, setResetMsg] = useState<string | null>(null)
   const [resetErr, setResetErr] = useState<string | null>(null)
   const [resetBusy, setResetBusy] = useState(false)
+  const [resetDone, setResetDone] = useState(false)
 
   const openReset = () => {
-    setResetOpen(true); setResetStep('id')
+    setResetOpen(true); setResetStep('id'); setResetDone(false)
     setResetId(''); setResetCode(''); setResetPw(''); setResetPw2('')
-    setResetMsg(null); setResetErr(null)
+    setResetErr(null)
   }
   const closeReset = () => { setResetOpen(false); app.clearAuthError() }
 
+  /* Step 1 — send the code via /auth/password/forgot. */
   const resetRequest = async () => {
     if (resetBusy) return
     const v = resetId.trim()
@@ -116,41 +132,35 @@ export function LoginScreen() {
     setResetErr(null)
     setResetBusy(true)
     try {
-      await otpRequest(v)
+      await passwordForgot(v)
+      setResetCode(''); setResetPw(''); setResetPw2('')
+      setResetStep('reset')
     } catch (e) {
-      // A true network failure blocks advancing. An ApiError (e.g. "not found")
-      // falls through to a neutral advance so we never reveal which
-      // emails/numbers have accounts (anti-enumeration).
-      if (!(e instanceof ApiError)) {
-        setResetErr('Could not send a code. Check your connection and try again.')
-        return
-      }
+      setResetErr(apiErrorMessage(e, 'Could not send a code. Check your connection and try again.'))
     } finally {
       setResetBusy(false)
     }
-    setResetMsg(`If an account exists for ${v}, we've sent a 6-digit code.`)
-    setResetCode('')
-    setResetStep('code')
   }
 
-  const resetVerify = async () => {
+  /* Resend the code from the reset step. */
+  const resendCode = async () => {
     if (resetBusy) return
-    const code = resetCode.trim()
-    if (code.length < 6) { setResetErr('Enter the code we sent you.'); return }
     setResetErr(null)
     setResetBusy(true)
     try {
-      await otpVerify(resetId.trim(), code)  // deposits tokens in tokenStore
-      setResetStep('pw')
+      await passwordForgot(resetId.trim())
     } catch (e) {
-      setResetErr(e instanceof ApiError ? e.message : 'That code is invalid or expired. Try again.')
+      setResetErr(apiErrorMessage(e, 'Could not resend the code. Try again.'))
     } finally {
       setResetBusy(false)
     }
   }
 
+  /* Step 2 — code + new password in one /auth/password/reset call (204, no tokens). */
   const resetSubmit = async () => {
     if (resetBusy) return
+    const code = resetCode.trim()
+    if (code.length !== 6) { setResetErr('Enter the 6-digit code we sent you.'); return }
     const pwErr = required(resetPw) ?? validatePassword(resetPw)
     if (pwErr) { setResetErr(pwErr); return }
     const matchErr = passwordsMatch(resetPw, resetPw2)
@@ -158,14 +168,19 @@ export function LoginScreen() {
     setResetErr(null)
     setResetBusy(true)
     try {
-      await setPassword(resetPw)  // authenticated by the tokens from resetVerify
+      await passwordReset(resetId.trim(), code, resetPw)
     } catch (e) {
-      setResetErr(e instanceof ApiError ? e.message : 'Could not set your password. Try again.')
+      setResetErr(apiErrorMessage(e, 'Could not reset your password. Check your connection and try again.'))
       return
     } finally {
       setResetBusy(false)
     }
-    await app.establishSession(resetId.trim())  // loads /auth/me and navigates to the dashboard
+    // Success: return to sign in with a banner; prefill the email if it's email-shaped.
+    const id = resetId.trim()
+    setResetOpen(false); setResetStep('id')
+    setResetCode(''); setResetPw(''); setResetPw2(''); setResetErr(null)
+    if (validateEmail(id) === null) setEmail(id)
+    setResetDone(true)
   }
 
   return (
@@ -202,34 +217,29 @@ export function LoginScreen() {
                 </form>
               )}
 
-              {resetStep === 'code' && (
-                <form className="col gap10" onSubmit={(e) => { e.preventDefault(); void resetVerify() }}>
-                  {resetMsg && (
-                    <div className="sm-login-otp-hint"><Icon name="message" size={14} /><span>{resetMsg}</span></div>
-                  )}
-                  <Field label="Enter the 6-digit code" error={resetErr ?? undefined}>
+              {resetStep === 'reset' && (
+                <form className="col gap10" onSubmit={(e) => { e.preventDefault(); void resetSubmit() }}>
+                  <div className="sm-login-otp-hint">
+                    <Icon name="message" size={14} /><span>We sent a 6-digit code to {resetId.trim()}.</span>
+                  </div>
+                  <Field label="6-digit code" error={resetErr ?? undefined}>
                     <Input icon="key" inputMode="numeric" maxLength={6} value={resetCode} onChange={(e) => { setResetCode(e.target.value); setResetErr(null) }} placeholder="••••••" />
                   </Field>
-                  <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy || resetBusy}>
-                    Verify code <Icon name="arrowRight" size={16} />
-                  </Btn>
-                  <button type="button" className="sm-login-link" onClick={() => { setResetStep('id'); setResetErr(null) }}>
-                    <Icon name="arrowLeft" size={13} /> Use a different email/mobile
-                  </button>
-                </form>
-              )}
-
-              {resetStep === 'pw' && (
-                <form className="col gap10" onSubmit={(e) => { e.preventDefault(); void resetSubmit() }}>
-                  <Field label="New password" error={resetErr ?? undefined}>
+                  <Field label="New password">
                     <Input icon="lock" type="password" value={resetPw} onChange={(e) => { setResetPw(e.target.value); setResetErr(null) }} placeholder="At least 8 characters" />
                   </Field>
                   <Field label="Confirm new password">
                     <Input icon="lock" type="password" value={resetPw2} onChange={(e) => { setResetPw2(e.target.value); setResetErr(null) }} placeholder="Re-enter your password" />
                   </Field>
                   <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy || resetBusy}>
-                    {(busy || resetBusy) ? <><Spinner size={16} /> Setting password…</> : <>Set password &amp; sign in <Icon name="arrowRight" size={16} /></>}
+                    {(busy || resetBusy) ? <><Spinner size={16} /> Updating…</> : <>Reset password <Icon name="arrowRight" size={16} /></>}
                   </Btn>
+                  <button type="button" className="sm-login-link" onClick={() => { void resendCode() }}>
+                    Resend code
+                  </button>
+                  <button type="button" className="sm-login-link" onClick={() => { setResetStep('id'); setResetErr(null) }}>
+                    <Icon name="arrowLeft" size={13} /> Use a different email/mobile
+                  </button>
                 </form>
               )}
 
@@ -242,9 +252,15 @@ export function LoginScreen() {
               <h2>Welcome back</h2>
               <p className="lead">Sign in to your SchoolMate workspace.</p>
 
+              {resetDone && (
+                <div className="sm-login-otp-hint" role="status">
+                  <Icon name="checkCircle" size={14} /><span>Password updated — sign in with your new password.</span>
+                </div>
+              )}
+
               <form className="col gap14" onSubmit={(e) => { e.preventDefault(); signIn(email) }}>
                 <Field label="Email address">
-                  <Input icon="user" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@school.edu" />
+                  <Input icon="user" type="email" value={email} onChange={(e) => { setEmail(e.target.value); setResetDone(false) }} placeholder="you@school.edu" />
                 </Field>
                 <Field label="Password" error={app.authError ?? undefined}>
                   <div style={{ position: 'relative' }}>

@@ -42,67 +42,67 @@ describe('LoginScreen password reset', () => {
     expect(screen.getByPlaceholderText(/you@school.edu or/i)).toBeInTheDocument()
   })
 
-  it('advances to the code step even when the account is unknown (anti-enumeration)', async () => {
+  it('surfaces a no-account message when the identifier is not registered', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
-      jsonResponse({ error: { code: 'not_found', message: 'No such user' } }, 404)))
+      jsonResponse({ error: { code: 'not_registered', message: 'nope' } }, 404)))
     renderLogin()
     await userEvent.click(screen.getByRole('button', { name: /forgot password/i }))
     await userEvent.type(screen.getByPlaceholderText(/you@school.edu or/i), 'ghost@nowhere.edu')
     await userEvent.click(screen.getByRole('button', { name: /send one-time code/i }))
-    expect(await screen.findByText(/we've sent a 6-digit code/i)).toBeInTheDocument()
+    expect(await screen.findByText(/No account is registered/i)).toBeInTheDocument()
+    // still on the identify step
+    expect(screen.getByPlaceholderText(/you@school.edu or/i)).toBeInTheDocument()
   })
 
-  it('keeps the user on the code step when the code is invalid', async () => {
-    vi.stubGlobal('fetch', vi.fn()
+  it('resets the password then returns to sign in with a success banner', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { sent: true } })) // /auth/password/forgot
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))     // /auth/password/reset
+    vi.stubGlobal('fetch', fetchMock)
+    renderLogin()
+    await userEvent.click(screen.getByRole('button', { name: /forgot password/i }))
+    await userEvent.type(screen.getByPlaceholderText(/you@school.edu or/i), 'admin@greenwood.edu')
+    await userEvent.click(screen.getByRole('button', { name: /send one-time code/i }))
+    await userEvent.type(await screen.findByPlaceholderText('••••••'), '123456')
+    await userEvent.type(screen.getByPlaceholderText(/at least 8 characters/i), 'newPass123')
+    await userEvent.type(screen.getByPlaceholderText(/re-enter your password/i), 'newPass123')
+    await userEvent.click(screen.getByRole('button', { name: /reset password/i }))
+    expect(await screen.findByText(/Password updated/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Sign in/i })).toBeInTheDocument()
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]))
+    expect(urls[0]).toContain('/auth/password/forgot')
+    expect(urls[1]).toContain('/auth/password/reset')
+  })
+
+  it('keeps the user on the reset step when the code is invalid', async () => {
+    const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ data: { sent: true } }))
-      .mockResolvedValueOnce(jsonResponse({ error: { code: 'invalid_otp', message: 'That code is incorrect.' } }, 400)))
+      .mockResolvedValueOnce(jsonResponse({ error: { code: 'invalid_code', message: 'bad' } }, 401))
+    vi.stubGlobal('fetch', fetchMock)
     renderLogin()
     await userEvent.click(screen.getByRole('button', { name: /forgot password/i }))
     await userEvent.type(screen.getByPlaceholderText(/you@school.edu or/i), 'admin@greenwood.edu')
     await userEvent.click(screen.getByRole('button', { name: /send one-time code/i }))
     await userEvent.type(await screen.findByPlaceholderText('••••••'), '000000')
-    await userEvent.click(screen.getByRole('button', { name: /verify code/i }))
-    expect(await screen.findByText('That code is incorrect.')).toBeInTheDocument()
+    await userEvent.type(screen.getByPlaceholderText(/at least 8 characters/i), 'newPass123')
+    await userEvent.type(screen.getByPlaceholderText(/re-enter your password/i), 'newPass123')
+    await userEvent.click(screen.getByRole('button', { name: /reset password/i }))
+    expect(await screen.findByText(/invalid or expired/i)).toBeInTheDocument()
   })
 
-  it('blocks a too-short password without calling set-password', async () => {
+  it('blocks a too-short password without calling the reset API', async () => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(jsonResponse({ data: { sent: true } }))
-      .mockResolvedValueOnce(jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { sent: true } })) // forgot only
     vi.stubGlobal('fetch', fetchMock)
     renderLogin()
     await userEvent.click(screen.getByRole('button', { name: /forgot password/i }))
     await userEvent.type(screen.getByPlaceholderText(/you@school.edu or/i), 'admin@greenwood.edu')
     await userEvent.click(screen.getByRole('button', { name: /send one-time code/i }))
     await userEvent.type(await screen.findByPlaceholderText('••••••'), '123456')
-    await userEvent.click(screen.getByRole('button', { name: /verify code/i }))
-    await userEvent.type(await screen.findByPlaceholderText(/at least 8 characters/i), 'short')
+    await userEvent.type(screen.getByPlaceholderText(/at least 8 characters/i), 'short')
     await userEvent.type(screen.getByPlaceholderText(/re-enter your password/i), 'short')
-    await userEvent.click(screen.getByRole('button', { name: /set password & sign in/i }))
+    await userEvent.click(screen.getByRole('button', { name: /reset password/i }))
     expect(await screen.findByText(/Password must be at least 8 characters/i)).toBeInTheDocument()
-    expect(fetchMock).toHaveBeenCalledTimes(2) // request + verify only; no set-password
-  })
-
-  it('sets the new password then loads the session on the happy path', async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(jsonResponse({ data: { sent: true } }))                            // otp/request
-      .mockResolvedValueOnce(jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } })) // otp/verify
-      .mockResolvedValueOnce(new Response(null, { status: 204 }))                               // set-password
-      .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: 't1', roles: ['admin'] } })) // /auth/me
-    vi.stubGlobal('fetch', fetchMock)
-    renderLogin()
-    await userEvent.click(screen.getByRole('button', { name: /forgot password/i }))
-    await userEvent.type(screen.getByPlaceholderText(/you@school.edu or/i), 'admin@greenwood.edu')
-    await userEvent.click(screen.getByRole('button', { name: /send one-time code/i }))
-    await userEvent.type(await screen.findByPlaceholderText('••••••'), '123456')
-    await userEvent.click(screen.getByRole('button', { name: /verify code/i }))
-    await userEvent.type(await screen.findByPlaceholderText(/at least 8 characters/i), 'newpass123')
-    await userEvent.type(screen.getByPlaceholderText(/re-enter your password/i), 'newpass123')
-    await userEvent.click(screen.getByRole('button', { name: /set password & sign in/i }))
-    await waitFor(() => {
-      const urls = fetchMock.mock.calls.map((c) => String(c[0]))
-      expect(urls.some((u) => u.includes('/auth/set-password'))).toBe(true)
-      expect(urls.some((u) => u.includes('/auth/me'))).toBe(true)
-    })
+    expect(fetchMock).toHaveBeenCalledTimes(1) // forgot only; no reset call
   })
 })
