@@ -65,6 +65,20 @@ describe('request', () => {
     expect(onFail).toHaveBeenCalledOnce()
     expect(tokenStore.getRefresh()).toBeNull()
   })
+
+  it('treats a 401 on a no-auth password route as a normal error (no refresh, no logout)', async () => {
+    tokenStore.set({ access_token: 'a1', refresh_token: 'r1' })
+    const onFail = vi.fn()
+    setOnAuthFailure(onFail)
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ error: { code: 'invalid_code', message: 'bad code' } }, 401))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(request('/auth/password/reset', { method: 'POST', body: {} }))
+      .rejects.toMatchObject({ status: 401, code: 'invalid_code' })
+    expect(fetchMock).toHaveBeenCalledOnce()      // no refresh retry
+    expect(onFail).not.toHaveBeenCalled()         // no session-expiry path
+    expect(tokenStore.getRefresh()).toBe('r1')    // tokens untouched
+  })
 })
 
 describe('listRequest', () => {
