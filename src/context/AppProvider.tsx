@@ -80,7 +80,6 @@ interface AppState {
   clearAuthError: () => void
   loginWithPassword: (email: string, password: string) => Promise<void>
   loginWithOtp: (identifier: string, code: string) => Promise<void>
-  establishSession: (identifier: string) => Promise<void>
   logout: () => Promise<void>
   go: (view: string, opts?: { focus?: string; intent?: string }) => void
   clearIntent: () => void
@@ -189,11 +188,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await finishLogin(identifier)
     }, 'Verification failed. Please try again.')
 
-  /** Establish the logged-in session from an already-verified identifier
-   *  (used after the OTP password-reset flow sets tokens via otpVerify). */
-  const establishSession = (identifier: string) =>
-    runAuth(() => finishLogin(identifier), 'Could not load your profile. Please try again.')
-
   const logout = async () => {
     try { await apiLogout() } finally {
       setLoggedIn(false)
@@ -243,7 +237,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     datesheets, saveDatesheet,
     feePayments, addFeePayment,
     feeHeads, feeStructure, saveFeeStructure,
-    authBusy, authError, clearAuthError, loginWithPassword, loginWithOtp, establishSession,
+    authBusy, authError, clearAuthError, loginWithPassword, loginWithOtp,
     logout, go, clearIntent, setSchoolId, enterSchool, exitToOwner, upgrade, setLang, setMobileNav,
   }
 

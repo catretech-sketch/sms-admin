@@ -63,15 +63,4 @@ describe('AppProvider auth', () => {
     await act(async () => { await result.current.logout() })
     expect(result.current.loggedIn).toBe(false)
   })
-
-  it('establishSession loads role/tenant from /auth/me for an already-verified identifier', async () => {
-    tokenStore.set({ access_token: 'a', refresh_token: 'r' })
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
-      jsonResponse({ data: { id: 'u1', tenant_id: 't1', roles: ['teacher'] } }))) // /auth/me
-    const { result } = renderHook(() => useApp(), { wrapper })
-    await act(async () => { await result.current.establishSession('teacher@greenwood.edu') })
-    await waitFor(() => expect(result.current.loggedIn).toBe(true))
-    expect(result.current.role).toBe('teacher')
-    expect(tokenStore.getTenantId()).toBe('t1')
-  })
 })
