@@ -12,6 +12,14 @@ export async function otpVerify(identifier: string, code: string): Promise<AuthT
   return tokens
 }
 
+export async function passwordForgot(identifier: string): Promise<{ sent: boolean }> {
+  return request('/auth/password/forgot', { method: 'POST', body: { identifier } })
+}
+
+export async function passwordReset(identifier: string, code: string, password: string): Promise<void> {
+  await request('/auth/password/reset', { method: 'POST', body: { identifier, code, password } })
+}
+
 export async function login(email: string, password: string): Promise<AuthTokens> {
   const tokens = await request<AuthTokens>('/auth/login', { method: 'POST', body: { email, password } })
   tokenStore.set(tokens)
