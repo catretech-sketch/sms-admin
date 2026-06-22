@@ -99,6 +99,7 @@ export function LoginScreen() {
   const [resetPw2, setResetPw2] = useState('')
   const [resetMsg, setResetMsg] = useState<string | null>(null)
   const [resetErr, setResetErr] = useState<string | null>(null)
+  const [resetBusy, setResetBusy] = useState(false)
 
   const openReset = () => {
     setResetOpen(true); setResetStep('id')
@@ -108,10 +109,12 @@ export function LoginScreen() {
   const closeReset = () => { setResetOpen(false); app.clearAuthError() }
 
   const resetRequest = async () => {
+    if (resetBusy) return
     const v = resetId.trim()
     if (!v) { setResetErr('Enter your email or mobile number.'); return }
     if (!looksLikePhone(v) && validateEmail(v)) { setResetErr('Enter a valid email or mobile number.'); return }
     setResetErr(null)
+    setResetBusy(true)
     try {
       await otpRequest(v)
     } catch (e) {
@@ -122,6 +125,8 @@ export function LoginScreen() {
         setResetErr('Could not send a code. Check your connection and try again.')
         return
       }
+    } finally {
+      setResetBusy(false)
     }
     setResetMsg(`If an account exists for ${v}, we've sent a 6-digit code.`)
     setResetCode('')
@@ -129,28 +134,36 @@ export function LoginScreen() {
   }
 
   const resetVerify = async () => {
+    if (resetBusy) return
     const code = resetCode.trim()
     if (code.length < 6) { setResetErr('Enter the code we sent you.'); return }
     setResetErr(null)
+    setResetBusy(true)
     try {
       await otpVerify(resetId.trim(), code)  // deposits tokens in tokenStore
       setResetStep('pw')
     } catch (e) {
       setResetErr(e instanceof ApiError ? e.message : 'That code is invalid or expired. Try again.')
+    } finally {
+      setResetBusy(false)
     }
   }
 
   const resetSubmit = async () => {
+    if (resetBusy) return
     const pwErr = required(resetPw) ?? validatePassword(resetPw)
     if (pwErr) { setResetErr(pwErr); return }
     const matchErr = passwordsMatch(resetPw, resetPw2)
     if (matchErr) { setResetErr(matchErr); return }
     setResetErr(null)
+    setResetBusy(true)
     try {
       await setPassword(resetPw)  // authenticated by the tokens from resetVerify
     } catch (e) {
       setResetErr(e instanceof ApiError ? e.message : 'Could not set your password. Try again.')
       return
+    } finally {
+      setResetBusy(false)
     }
     await app.establishSession(resetId.trim())  // loads /auth/me and navigates to the dashboard
   }
@@ -183,7 +196,7 @@ export function LoginScreen() {
                   <Field label="Email or mobile number" error={resetErr ?? undefined}>
                     <Input icon="phone" value={resetId} onChange={(e) => { setResetId(e.target.value); setResetErr(null) }} placeholder="you@school.edu or +91…" />
                   </Field>
-                  <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy}>
+                  <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy || resetBusy}>
                     Send one-time code <Icon name="arrowRight" size={16} />
                   </Btn>
                 </form>
@@ -197,7 +210,7 @@ export function LoginScreen() {
                   <Field label="Enter the 6-digit code" error={resetErr ?? undefined}>
                     <Input icon="key" inputMode="numeric" maxLength={6} value={resetCode} onChange={(e) => { setResetCode(e.target.value); setResetErr(null) }} placeholder="••••••" />
                   </Field>
-                  <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy}>
+                  <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy || resetBusy}>
                     Verify code <Icon name="arrowRight" size={16} />
                   </Btn>
                   <button type="button" className="sm-login-link" onClick={() => { setResetStep('id'); setResetErr(null) }}>
@@ -214,8 +227,8 @@ export function LoginScreen() {
                   <Field label="Confirm new password">
                     <Input icon="lock" type="password" value={resetPw2} onChange={(e) => { setResetPw2(e.target.value); setResetErr(null) }} placeholder="Re-enter your password" />
                   </Field>
-                  <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy}>
-                    {busy ? <><Spinner size={16} /> Setting password…</> : <>Set password &amp; sign in <Icon name="arrowRight" size={16} /></>}
+                  <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy || resetBusy}>
+                    {(busy || resetBusy) ? <><Spinner size={16} /> Setting password…</> : <>Set password &amp; sign in <Icon name="arrowRight" size={16} /></>}
                   </Btn>
                 </form>
               )}
