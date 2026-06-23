@@ -20,7 +20,7 @@ import {
   type Column, type BadgeTone,
 } from '@/components/ui'
 import { ROLES, ROLE_META, PERMS, TIER_META, teachers, staff } from '@/data/mockDb'
-import type { Role, Cap, Tier, CellState, UserOverrides } from '@/types'
+import type { Role, GateRole, Cap, Tier, CellState, UserOverrides } from '@/types'
 
 /* ============================================================
    Reports
@@ -268,7 +268,8 @@ const MODULE_LABEL: Record<string, string> = {
 }
 
 const roleTone = (r: Role): BadgeTone =>
-  r === 'principal' ? 'success' : r === 'vice_principal' ? 'brand' : r === 'admin' ? 'info' : 'neutral'
+  r === 'principal' ? 'success' : r === 'vice_principal' ? 'brand'
+    : r === 'admin' || r === 'owner' ? 'info' : 'neutral'
 
 /* ---------- Users (built from the teachers + staff sample) ---------- */
 interface SchoolUser {
@@ -460,7 +461,7 @@ function UsersTab() {
 }
 
 /* ---------- Roles & permissions matrix ---------- */
-type Matrix = Record<string, Record<Role, Cap[]>>
+type Matrix = Record<string, Record<GateRole, Cap[]>>
 
 function clonePerms(): Matrix {
   const out: Matrix = {}
@@ -626,7 +627,7 @@ function RolesTab() {
   const toast = useToast()
   const [matrix, setMatrix] = useState<Matrix>(clonePerms)
 
-  const toggle = (mod: string, role: Role, cap: Cap) => {
+  const toggle = (mod: string, role: GateRole, cap: Cap) => {
     setMatrix((m) => {
       const cur = m[mod][role]
       const next = cur.includes(cap) ? cur.filter((c) => c !== cap) : [...cur, cap]

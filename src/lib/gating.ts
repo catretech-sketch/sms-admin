@@ -3,7 +3,7 @@
    Ported from data.jsx. UI-side gating only; the future
    .NET API must enforce the same matrix server-side.
    ============================================================ */
-import type { Tier, Role, Cap, UserOverrides, CellState } from '@/types'
+import type { Tier, Role, GateRole, Cap, UserOverrides, CellState } from '@/types'
 import { TIERS, FEATURE_TIER, PERMS } from '@/data/mockDb'
 
 export function tierIncludes(plan: Tier, feature: string): boolean {
@@ -15,14 +15,19 @@ export function requiredTier(feature: string): Tier {
   return FEATURE_TIER[feature] || 'silver'
 }
 
+/** Normalize owner → admin for matrix lookups (owner inherits admin's row). */
+function gateRole(role: Role): GateRole {
+  return role === 'owner' ? 'admin' : role
+}
+
 export function can(role: Role, module: string, cap: Cap): boolean {
   const m = PERMS[module]
   if (!m) return false
-  return (m[role] || []).indexOf(cap) >= 0
+  return (m[gateRole(role)] || []).indexOf(cap) >= 0
 }
 
 export function caps(role: Role, module: string): Cap[] {
-  return (PERMS[module] || {})[role] || []
+  return (PERMS[module] || {})[gateRole(role)] || []
 }
 
 const CAP_ORDER: Cap[] = ['V', 'E', 'A']

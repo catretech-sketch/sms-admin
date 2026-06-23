@@ -4,7 +4,10 @@
    ============================================================ */
 
 export type Tier = 'silver' | 'gold' | 'platinum'
-export type Role = 'admin' | 'principal' | 'vice_principal' | 'teacher'
+export type Role = 'owner' | 'admin' | 'principal' | 'vice_principal' | 'teacher'
+/* Roles that appear in the permission matrix (everything except the owner alias).
+   `owner` is intentionally excluded — it inherits the admin row via gating normalization. */
+export type GateRole = Exclude<Role, 'owner'>
 export type Cap = 'V' | 'E' | 'A'
 export type ConsoleKind = 'owner' | 'school'
 

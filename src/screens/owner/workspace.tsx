@@ -16,7 +16,7 @@ import {
   type Column, type BadgeTone,
 } from '@/components/ui'
 import { ROLES, ROLE_META, PERMS, schools } from '@/data/mockDb'
-import type { Role, Cap } from '@/types'
+import type { Role, GateRole, Cap } from '@/types'
 
 /* ---------- shared helpers ---------- */
 const CAPS: Cap[] = ['V', 'E', 'A']
@@ -345,7 +345,7 @@ function Kard({ icon, label, value, tone }: { icon: string; label: string; value
 /* ============================================================
    Roles & permissions — interactive matrix
    ============================================================ */
-type Matrix = Record<string, Record<Role, Cap[]>>
+type Matrix = Record<string, Record<GateRole, Cap[]>>
 
 function clonePerms(): Matrix {
   const out: Matrix = {}
@@ -383,7 +383,7 @@ function RolesTab() {
   const toast = useToast()
   const [matrix, setMatrix] = useState<Matrix>(clonePerms)
 
-  const toggle = (mod: string, role: Role, cap: Cap) => {
+  const toggle = (mod: string, role: GateRole, cap: Cap) => {
     setMatrix((m) => {
       const cur = m[mod][role]
       const next = cur.includes(cap) ? cur.filter((c) => c !== cap) : [...cur, cap]

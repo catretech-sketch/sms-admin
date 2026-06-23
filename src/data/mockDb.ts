@@ -4,7 +4,7 @@
    generated records stable across runs so tests are reliable.
    ============================================================ */
 import type {
-  Tier, Role, Cap, TierMeta, RoleMeta,
+  Tier, Role, GateRole, Cap, TierMeta, RoleMeta,
   School, Student, Teacher, Staff, Bus, Exam, Approval, AppNotification,
   Complaint, Thread,
 } from '@/types'
@@ -26,14 +26,15 @@ export const FEATURE_TIER: Record<string, Tier> = {
 }
 
 /* ---------- Roles & permission matrix ---------- */
-export const ROLES: Role[] = ['admin', 'principal', 'vice_principal', 'teacher']
+export const ROLES: GateRole[] = ['admin', 'principal', 'vice_principal', 'teacher']
 export const ROLE_META: Record<Role, RoleMeta> = {
+  owner: { label: 'Owner', short: 'OW', desc: 'School owner — full control of this school' },
   admin: { label: 'Admin', short: 'AD', desc: 'Day-to-day setup & data entry' },
   principal: { label: 'Principal', short: 'PR', desc: 'Final approver + all reports' },
   vice_principal: { label: 'Vice-Principal', short: 'VP', desc: 'Academic owner, no financial authority' },
   teacher: { label: 'Teacher', short: 'TE', desc: 'Marks, attendance & homework for own classes' },
 }
-export const PERMS: Record<string, Record<Role, Cap[]>> = {
+export const PERMS: Record<string, Record<GateRole, Cap[]>> = {
   setup: { admin: ['E'], principal: ['V', 'E'], vice_principal: ['V'], teacher: [] },
   dashboard: { admin: ['V'], principal: ['V'], vice_principal: ['V'], teacher: ['V'] },
   identity: { admin: ['E'], principal: ['V', 'E'], vice_principal: ['V'], teacher: [] },
