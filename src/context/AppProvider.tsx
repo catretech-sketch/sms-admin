@@ -144,13 +144,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const dir: 'ltr' | 'rtl' = RTL_LANGS.includes(lang) ? 'rtl' : 'ltr'
 
   /** Apply the identity from /auth/me to console/role/view state. */
-  const applySession = (email: string, role: Role) => {
-    const isOwner = email.endsWith('@schoolmate.io')
-    setUser({ name: email.split('@')[0], email, role, hue: isOwner ? 250 : 210 })
-    setConsoleKind(isOwner ? 'owner' : 'school')
+  const applySession = (email: string, role: Role, isPlatform: boolean) => {
+    setUser({ name: email.split('@')[0], email, role, hue: isPlatform ? 250 : 210 })
+    setConsoleKind(isPlatform ? 'owner' : 'school')
     setRole(role)
     setOwnerViewing(false)
-    setView(isOwner ? 'owner.dashboard' : 'school.dashboard')
+    setView(isPlatform ? 'owner.dashboard' : 'school.dashboard')
     setLoggedIn(true)
   }
 
@@ -160,7 +159,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // map anything unknown to a safe default so ROLE_META lookups never crash.
     const known: Role[] = ['admin', 'principal', 'vice_principal', 'teacher']
     const raw = profile.roles[0]
-    applySession(email, known.includes(raw as Role) ? (raw as Role) : 'admin')
+    applySession(email, known.includes(raw as Role) ? (raw as Role) : 'admin', profile.is_platform === true)
   }
 
   /** Shared busy/error wrapper for the auth flows. */

@@ -8,10 +8,10 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 /* Sign-in performs a real password login: POST /auth/login then GET /auth/me.
    Mock both so a form submit lands the user in the app. */
-function mockAuth(roles: string[] = ['admin'], tenantId: string | null = 't1') {
+function mockAuth(roles: string[] = ['admin'], tenantId: string | null = 't1', isPlatform = false) {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
-    if (url.includes('/auth/me')) return jsonResponse({ data: { id: 'u1', tenant_id: tenantId, roles } })
+    if (url.includes('/auth/me')) return jsonResponse({ data: { id: 'u1', tenant_id: tenantId, roles, is_platform: isPlatform } })
     return jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } })
   }))
 }
@@ -34,7 +34,7 @@ describe('App (smoke)', () => {
   })
 
   it('owner demo account lands in the owner console', async () => {
-    mockAuth()
+    mockAuth(['admin'], null, true)
     render(<App />)
     signIn('anil@schoolmate.io')
     expect(await screen.findByText('Portfolio overview')).toBeInTheDocument()

@@ -31,15 +31,26 @@ describe('AppProvider auth', () => {
     expect(result.current.authError).toBe('Wrong email or password.')
   })
 
-  it('owner-domain email routes to the owner console', async () => {
+  it('a platform account routes to the owner console', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } }))
-      .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: null, roles: ['admin'] } })))
+      .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: null, roles: ['admin'], is_platform: true } })))
     const { result } = renderHook(() => useApp(), { wrapper })
-    await act(async () => { await result.current.loginWithPassword('anil@schoolmate.io', 'pw') })
+    await act(async () => { await result.current.loginWithPassword('owner@anything.com', 'pw') })
     await waitFor(() => expect(result.current.loggedIn).toBe(true))
     expect(result.current.consoleKind).toBe('owner')
     expect(result.current.view).toBe('owner.dashboard')
+  })
+
+  it('a non-platform account routes to the school console even with an @schoolmate.io email', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: 't1', roles: ['admin'], is_platform: false } })))
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await act(async () => { await result.current.loginWithPassword('anil@schoolmate.io', 'pw') })
+    await waitFor(() => expect(result.current.loggedIn).toBe(true))
+    expect(result.current.consoleKind).toBe('school')
+    expect(result.current.view).toBe('school.dashboard')
   })
 
   it('an unknown backend role falls back to admin (no crash)', async () => {
