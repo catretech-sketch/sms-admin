@@ -26,6 +26,13 @@ describe('gating', () => {
     expect(caps('admin', 'sis')).toContain('E')
     expect(caps('teacher', 'fees')).toEqual([])
   })
+  it('owner inherits the admin permission matrix', () => {
+    for (const mod of ['setup', 'sis', 'academics', 'fees', 'dashboard']) {
+      expect(caps('owner', mod)).toEqual(caps('admin', mod))
+      for (const cap of ['V', 'E', 'A'] as const)
+        expect(can('owner', mod, cap)).toBe(can('admin', mod, cap))
+    }
+  })
 })
 
 describe('per-user overrides', () => {

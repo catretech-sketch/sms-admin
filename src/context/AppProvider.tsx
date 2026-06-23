@@ -154,13 +154,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setLoggedIn(true)
   }
 
+  /* Map the backend role string (e.g. "school.owner") to a frontend Role. Unknown
+     roles fall back to 'admin' so ROLE_META lookups never crash. */
+  const ROLE_MAP: Record<string, Role> = {
+    'school.owner': 'owner', 'school.admin': 'admin',
+    'school.principal': 'principal', 'school.teacher': 'teacher',
+    owner: 'owner', admin: 'admin', principal: 'principal',
+    vice_principal: 'vice_principal', teacher: 'teacher',
+  }
+
   const finishLogin = async (email: string) => {
     const profile = await fetchMe()
-    // The backend may return roles outside the UI union (e.g. "school_admin");
-    // map anything unknown to a safe default so ROLE_META lookups never crash.
-    const known: Role[] = ['admin', 'principal', 'vice_principal', 'teacher']
-    const raw = profile.roles[0]
-    applySession(email, known.includes(raw as Role) ? (raw as Role) : 'admin', profile.is_platform === true)
+    const role = ROLE_MAP[profile.roles[0]] ?? 'admin'
+    applySession(email, role, profile.is_platform === true)
   }
 
   /** Shared busy/error wrapper for the auth flows. */
