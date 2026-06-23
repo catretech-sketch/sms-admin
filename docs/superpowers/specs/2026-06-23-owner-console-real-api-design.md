@@ -82,10 +82,14 @@ Port catre admin's operator API modules into `sms-admin/src/api`, adapted to sms
 | Users & roles | `/owner/users` | `GET/POST/PATCH /team` | `workspace.tsx` mock |
 | Owner settings | `/owner/settings` | none (client-side only) | mock |
 
-**Add school + give access:** the onboarding wizard posts `POST /clients` (creates tenant + owner
-user, storing `ContactEmail`). On success, surface the owner email and a "send setup code" action
-that calls the existing `passwordForgot`, so the new owner can set a password via the
-create-password flow already built. This reuses the `LoginScreen` reset flow end-to-end.
+**Add school + give access:** the onboarding wizard (adapt the design's `app/wizard_school.jsx`)
+posts `POST /clients` (creates tenant + founding owner user, storing `ContactEmail`). As of the
+`school.owner` work (see [`2026-06-23-school-owner-role-design.md`](./2026-06-23-school-owner-role-design.md)),
+that founding account is saved with the **`school.owner`** role and `is_platform = false`, so the new
+owner lands on the **School Console** (not this Owner Console). On success, surface the owner email and
+a "send setup code" action that calls the existing `passwordForgot`, so the new owner can set a
+password via the create-password flow already built. This reuses the `LoginScreen` reset flow
+end-to-end. The live `POST /clients` already assigns `school.owner` — no backend change is needed here.
 
 ## Gaps, visuals, testing
 
