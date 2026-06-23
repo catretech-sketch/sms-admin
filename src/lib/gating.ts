@@ -16,7 +16,7 @@ export function requiredTier(feature: string): Tier {
 }
 
 /** Normalize owner → admin for matrix lookups (owner inherits admin's row). */
-function gateRole(role: Role): GateRole {
+export function gateRole(role: Role): GateRole {
   return role === 'owner' ? 'admin' : role
 }
 

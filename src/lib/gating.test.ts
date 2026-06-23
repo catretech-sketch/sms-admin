@@ -2,8 +2,21 @@ import { describe, it, expect } from 'vitest'
 import {
   tierIncludes, requiredTier, can, caps,
   effectiveCaps, cellState, overrideCount, NEXT_CELL_STATE,
+  gateRole,
 } from './gating'
 import type { UserOverrides } from '@/types'
+
+describe('gateRole (exported)', () => {
+  it('maps owner to admin', () => {
+    expect(gateRole('owner')).toBe('admin')
+  })
+  it('passes through every other role unchanged', () => {
+    expect(gateRole('admin')).toBe('admin')
+    expect(gateRole('principal')).toBe('principal')
+    expect(gateRole('vice_principal')).toBe('vice_principal')
+    expect(gateRole('teacher')).toBe('teacher')
+  })
+})
 
 describe('gating', () => {
   it('tierIncludes respects tier order', () => {

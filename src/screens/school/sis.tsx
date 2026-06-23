@@ -10,21 +10,22 @@ import {
   type Column, type BadgeTone,
 } from '@/components/ui'
 import { grades } from '@/data/mockDb'
+import { gateRole } from '@/lib/gating'
 import { useStudents, useStudent } from '@/api/hooks/useStudents'
 import {
   reportFor, classRank, attendanceMonths, fmtMoney,
   overallToppers, classToppers,
   type TopperMetric, type ScoredStudent, type ClassTopperGroup,
 } from '@/lib/format'
-import type { Student, FeeStatus } from '@/types'
+import type { Student, FeeStatus, Role } from '@/types'
 
 /* ---------- shared helpers ---------- */
 const feeTone: Record<FeeStatus, BadgeTone> = { paid: 'success', partial: 'warning', due: 'danger' }
 const feeLabel: Record<FeeStatus, string> = { paid: 'Paid', partial: 'Partial', due: 'Due' }
 const attColor = (v: number): string => (v >= 90 ? 'var(--success)' : v >= 80 ? 'var(--brand-600)' : v >= 75 ? 'var(--warning)' : 'var(--danger)')
 
-function canEdit(role: string): boolean {
-  return role === 'admin' || role === 'principal' || role === 'vice_principal'
+export function canEdit(role: Role): boolean {
+  return gateRole(role) === 'admin' || role === 'principal' || role === 'vice_principal'
 }
 
 /* ============================================================

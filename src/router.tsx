@@ -7,6 +7,7 @@ import { useApp } from '@/lib/hooks'
 import { Placeholder } from '@/screens/placeholders/Placeholder'
 import { RestrictedScreen } from '@/components/shell/gates'
 import { screenRegistry } from '@/screens/registry'
+import { gateRole } from '@/lib/gating'
 
 interface ViewMeta { title: string; sub?: string; phase: number }
 
@@ -55,8 +56,8 @@ export function Router() {
   const app = useApp()
   const meta = VIEWS[app.view] ?? VIEWS['school.dashboard']
 
-  // Identity & access is Admin-only
-  if (app.view === 'school.identity' && app.role !== 'admin') {
+  // Identity & access is Admin-only (owner inherits admin powers via gateRole)
+  if (app.view === 'school.identity' && gateRole(app.role) !== 'admin') {
     return <RestrictedScreen title="Identity & access" note="Identity & access is limited to the School Admin and the Owner workspace." />
   }
 

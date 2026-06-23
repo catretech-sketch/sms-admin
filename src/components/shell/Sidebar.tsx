@@ -3,9 +3,9 @@
    ============================================================ */
 import { useApp } from '@/lib/hooks'
 import { Icon, Btn, Tip, TierPill } from '@/components/ui'
-import { tierIncludes } from '@/lib/gating'
+import { tierIncludes, gateRole } from '@/lib/gating'
 import { approvals } from '@/data/mockDb'
-import type { Tier } from '@/types'
+import type { Tier, Role } from '@/types'
 
 interface NavItem { label: string; view: string; icon: string; lockTier?: Tier; adminOnly?: boolean; badge?: number }
 interface NavGroup { label?: string; items: NavItem[] }
@@ -25,7 +25,7 @@ const OWNER_NAV: NavGroup[] = [
   ] },
 ]
 
-function schoolNav(role: string, approvalCount: number): NavGroup[] {
+function schoolNav(role: Role, approvalCount: number): NavGroup[] {
   return [
     { items: [
       { label: 'Dashboard', view: 'school.dashboard', icon: 'grid' },
@@ -54,7 +54,7 @@ function schoolNav(role: string, approvalCount: number): NavGroup[] {
       { label: 'Reports', view: 'school.reports', icon: 'trend' },
       { label: 'Identity & access', view: 'school.identity', icon: 'key', adminOnly: true },
       { label: 'Settings', view: 'school.settings', icon: 'settings' },
-    ].filter((i) => !i.adminOnly || role === 'admin') },
+    ].filter((i) => !i.adminOnly || gateRole(role) === 'admin') },
   ]
 }
 
