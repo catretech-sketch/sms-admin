@@ -16,8 +16,8 @@ function mockAuth(roles: string[] = ['admin'], tenantId: string | null = 't1', i
   }))
 }
 
-/* Fill the email/password form and submit. Owner console is keyed off the
-   @schoolmate.io domain; anything else lands in the school console. */
+/* Fill the email/password form and submit. Console routing is determined by
+   the is_platform flag from /auth/me, not the email domain. */
 function signIn(email: string, password = 'demo1234') {
   fireEvent.change(screen.getByPlaceholderText(/you@school\.edu/), { target: { value: email } })
   fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: password } })

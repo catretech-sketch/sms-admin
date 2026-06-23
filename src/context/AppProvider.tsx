@@ -18,8 +18,9 @@ export interface DemoAccount {
   hue: number
 }
 
-/* Five role-locked demo accounts (per the design). Owner email domain
-   routes to the Owner console; school accounts lock to their role. */
+/* Five role-locked demo accounts (per the design). Console routing is now
+   driven by the backend is_platform claim (see applySession), not the email
+   domain; the `console` field here is descriptive demo metadata only. */
 export const DEMO_ACCOUNTS: DemoAccount[] = [
   { email: 'anil@schoolmate.io', phone: '+91 98100 10001', name: 'Anil Mehta', role: 'admin', console: 'owner', hue: 250 },
   { email: 'admin@greenwood.edu', phone: '+91 98100 10002', name: 'Ravi Menon', role: 'admin', console: 'school', hue: 200 },
