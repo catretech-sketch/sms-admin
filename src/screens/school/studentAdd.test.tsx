@@ -45,6 +45,7 @@ function fillRequired() {
   fireEvent.change(within(screen.getByText('First name').closest('.sm-field') as HTMLElement).getByRole('textbox'), { target: { value: 'Test' } })
   fireEvent.change(within(screen.getByText('Last name').closest('.sm-field') as HTMLElement).getByRole('textbox'), { target: { value: 'Student' } })
   fireEvent.change(within(screen.getByText('Primary contact number').closest('.sm-field') as HTMLElement).getByRole('textbox'), { target: { value: '9876543210' } })
+  fireEvent.change(within(screen.getByText('Father name').closest('.sm-field') as HTMLElement).getByRole('textbox'), { target: { value: 'Test Father' } })
   setByLabel('Class', 'VIII')
   setByLabel('Section', 'A')
   setByLabel('Gender', 'M')
@@ -72,12 +73,12 @@ describe('Add Student form', () => {
     expect(screen.getByText('Aadhaar must be exactly 12 digits')).toBeInTheDocument()
   })
 
-  it('adds the student and navigates back when valid', async () => {
+  it('adds the student and opens the profile when valid', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
       data: {
         id: 'srv', admission_no: 'A1', class_label: '1-A', name: 'X',
-        gender: 'M', grade: '1', section: 'A', roll: 1, guardian: 'g',
-        phone: '1', attendance: 0, fee_status: 'due', fee_due: 0,
+        gender: 'M', grade: '1', section: 'A', roll: 1, guardian_name: 'Test Father',
+        guardian_phone: '9876543210', attendance_pct: 0, fee_status: 'due', fee_due: 0,
         status: 'active', house: 'Ruby', avatar_hue: 1,
       },
     })))
@@ -86,7 +87,7 @@ describe('Add Student form', () => {
     fillRequired()
     fireEvent.click(screen.getByText('Save student'))
 
-    await waitFor(() => expect(probe().split('|')[1]).toBe('school.sis'))
+    await waitFor(() => expect(probe().split('|')[1]).toBe('school.student'))
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('/students')
 
     vi.unstubAllGlobals()

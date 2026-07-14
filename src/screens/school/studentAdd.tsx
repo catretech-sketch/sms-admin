@@ -1,18 +1,22 @@
 /* ============================================================
-   SchoolMate — Add Student (full-page enrolment form).
-   Four sections: Student, Father, Mother, Documents.
-   Frontend-only: validates + previews uploads client-side and
-   adds the new student to the in-session roster.
+   SchoolMate — Add / Edit Student enrolment form.
+   Student + father/mother + documents. Core SIS fields go to
+   the API; parent/docs extras stay in local device storage until
+   a documents API exists.
    ============================================================ */
-import { useMemo, useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
-import { useCreateStudent } from '@/api/hooks/useStudentMutations'
-import { PageHead, Card, CardHead, Btn, Badge, Icon, useFormKit } from '@/components/ui'
+import { useCreateStudent, useUpdateStudent } from '@/api/hooks/useStudentMutations'
+import { useStudent } from '@/api/hooks/useStudents'
+import {
+  extrasFromStudent, fileToStoredDoc, loadStudentExtras, saveStudentExtras,
+  type StoredDoc,
+} from '@/api/studentExtras'
+import { PageHead, Card, CardHead, Btn, Badge, Icon, useFormKit, Spinner, Empty } from '@/components/ui'
 import { grades, sections } from '@/data/mockDb'
 import { required, validateAadhaar, validateEmail, validatePhone, validateFile } from '@/lib/validation'
 import type { Student } from '@/types'
 
-/* ---------- option lists ---------- */
 const ACADEMIC_YEARS = ['2026–27', '2025–26', '2027–28']
 const BLOOD_GROUPS = ['', 'A+', 'A−', 'B+', 'B−', 'O+', 'O−', 'AB+', 'AB−']
 const HOUSES = ['', 'Ruby', 'Emerald', 'Sapphire', 'Topaz']
@@ -21,7 +25,6 @@ const CATEGORIES = ['', 'General', 'OBC', 'SC', 'ST', 'EWS']
 const GENDERS = [{ value: '', label: 'Select…' }, { value: 'M', label: 'Male' }, { value: 'F', label: 'Female' }]
 const STATUSES = [{ value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }]
 
-/* text fields that must be filled before save */
 const REQUIRED_FIELDS = ['firstName', 'lastName', 'cls', 'section', 'adm', 'dob', 'gender', 'phone'] as const
 
 type Form = Record<string, string>
@@ -42,15 +45,147 @@ const INITIAL_FILES: Files = {
   birthCert: null, transferCert: null,
 }
 
-function AddStudentScreen() {
+function splitName(full: string): { first: string; last: string } {
+  const parts = full.trim().split(/\s+/)
+  if (parts.length <= 1) return { first: parts[0] || '', last: '' }
+  return { first: parts[0], last: parts.slice(1).join(' ') }
+}
+
+function studentToForm(s: Student): Form {
+  const { first, last } = splitName(s.name)
+  const grade = s.grade || (s.cls.includes('-') ? s.cls.split('-')[0] : s.cls)
+  const section = s.section || (s.cls.includes('-') ? s.cls.split('-').slice(1).join('-') : '')
+  return {
+    ...INITIAL_FORM,
+    academicYear: s.academicYear || ACADEMIC_YEARS[0],
+    adm: s.adm || '',
+    admissionDate: s.admissionDate || '',
+    roll: s.roll ? String(s.roll) : '',
+    status: s.status === 'inactive' ? 'inactive' : 'active',
+    firstName: first,
+    lastName: last,
+    cls: grade,
+    section,
+    gender: s.gender || '',
+    dob: s.dob ? String(s.dob).slice(0, 10) : '',
+    bloodGroup: s.bloodGroup || '',
+    house: s.house || '',
+    religion: s.religion || '',
+    category: s.category || '',
+    phone: s.phone || '',
+    email: s.email || '',
+    caste: s.caste || '',
+    motherTongue: s.motherTongue || '',
+    languages: s.languages || '',
+    lastSchool: s.lastSchool || '',
+    address: s.address || '',
+    aadhaar: s.aadhaar || '',
+    fatherName: s.father?.name || s.guardian || '',
+    fatherEmail: s.father?.email || '',
+    fatherPhone: s.father?.phone || '',
+    fatherOccupation: s.father?.occupation || '',
+    fatherAadhaar: s.father?.aadhaar || '',
+    motherName: s.mother?.name || '',
+    motherEmail: s.mother?.email || '',
+    motherPhone: s.mother?.phone || '',
+    motherOccupation: s.mother?.occupation || '',
+  }
+}
+
+function buildStudent(f: Form, files: Files, base?: Student): Student {
+  const name = `${f.firstName.trim()} ${f.lastName.trim()}`.trim()
+  const cls = `${f.cls}-${f.section}`
+  const guardian = (f.fatherName || f.motherName || '').trim()
+  return {
+    id: base?.id || 'S' + Date.now().toString(36).toUpperCase(),
+    adm: f.adm.trim(),
+    name,
+    gender: f.gender === 'F' ? 'F' : 'M',
+    grade: f.cls,
+    section: f.section,
+    cls,
+    roll: Number(f.roll) || 0,
+    guardian,
+    phone: f.phone.trim(),
+    attendance: base?.attendance ?? 0,
+    feeStatus: base?.feeStatus ?? 'due',
+    feeDue: base?.feeDue ?? 0,
+    status: f.status === 'inactive' ? 'inactive' : 'active',
+    house: f.house || 'Ruby',
+    avatarHue: base?.avatarHue ?? ((name.length * 47) % 360),
+    academicYear: f.academicYear,
+    admissionDate: f.admissionDate || undefined,
+    dob: f.dob,
+    bloodGroup: f.bloodGroup || undefined,
+    religion: f.religion || undefined,
+    category: f.category || undefined,
+    caste: f.caste || undefined,
+    motherTongue: f.motherTongue || undefined,
+    languages: f.languages || undefined,
+    lastSchool: f.lastSchool || undefined,
+    address: f.address || undefined,
+    email: f.email || undefined,
+    aadhaar: f.aadhaar || undefined,
+    photoName: files.studentPhoto?.name || base?.photoName,
+    father: {
+      name: f.fatherName || undefined, email: f.fatherEmail || undefined,
+      phone: f.fatherPhone || undefined, occupation: f.fatherOccupation || undefined,
+      aadhaar: f.fatherAadhaar || undefined,
+      photoName: files.fatherPhoto?.name || base?.father?.photoName,
+    },
+    mother: {
+      name: f.motherName || undefined, email: f.motherEmail || undefined,
+      phone: f.motherPhone || undefined, occupation: f.motherOccupation || undefined,
+      photoName: files.motherPhoto?.name || base?.mother?.photoName,
+    },
+    documents: {
+      birthCert: files.birthCert?.name || base?.documents?.birthCert,
+      transferCert: files.transferCert?.name || base?.documents?.transferCert,
+      studentAadhaar: files.studentAadhaarDoc?.name || base?.documents?.studentAadhaar,
+      fatherAadhaar: files.fatherAadhaarDoc?.name || base?.documents?.fatherAadhaar,
+    },
+  }
+}
+
+async function persistExtras(studentId: string, student: Student, files: Files): Promise<void> {
+  const prev = loadStudentExtras(studentId)?.files || []
+  const byKey = new Map(prev.map((d) => [d.key, d]))
+  const picks: Array<[StoredDoc['key'], File | null]> = [
+    ['photo', files.studentPhoto],
+    ['studentAadhaar', files.studentAadhaarDoc],
+    ['fatherPhoto', files.fatherPhoto],
+    ['fatherAadhaar', files.fatherAadhaarDoc],
+    ['motherPhoto', files.motherPhoto],
+    ['birthCert', files.birthCert],
+    ['transferCert', files.transferCert],
+  ]
+  for (const [key, file] of picks) {
+    const stored = await fileToStoredDoc(key, file)
+    if (stored) byKey.set(key, stored)
+  }
+  saveStudentExtras(studentId, extrasFromStudent(student, Array.from(byKey.values())))
+}
+
+function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
   const app = useApp()
   const toast = useToast()
   const [f, setForm] = useState<Form>(INITIAL_FORM)
   const [files, setFiles] = useState<Files>(INITIAL_FILES)
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [hydrated, setHydrated] = useState(mode === 'add')
+  const [saving, setSaving] = useState(false)
 
   const { txt, sel, area, upload, fieldGrid } = useFormKit(f, setForm, files, setFiles, errors)
   const createStudent = useCreateStudent()
+  const updateStudent = useUpdateStudent()
+  const existingQ = useStudent(mode === 'edit' ? app.focus : null)
+  const existing = existingQ.data
+
+  useEffect(() => {
+    if (mode !== 'edit' || !existing) return
+    setForm(studentToForm(existing))
+    setHydrated(true)
+  }, [mode, existing])
 
   const clsOptions = useMemo(
     () => [{ value: '', label: 'Select…' }, ...grades.slice(4).map((g) => ({ value: g, label: g }))],
@@ -61,12 +196,14 @@ function AddStudentScreen() {
     [],
   )
 
-  /* ---------- validation + save ---------- */
   const validate = (): Record<string, string> => {
     const e: Record<string, string> = {}
     for (const key of REQUIRED_FIELDS) {
       const msg = required(f[key])
       if (msg) e[key] = msg
+    }
+    if (!f.fatherName.trim() && !f.motherName.trim()) {
+      e.fatherName = 'Enter father or mother name'
     }
     const checks: [string, string | null][] = [
       ['aadhaar', validateAadhaar(f.aadhaar)],
@@ -79,7 +216,6 @@ function AddStudentScreen() {
       ['motherPhone', validatePhone(f.motherPhone)],
     ]
     for (const [key, msg] of checks) if (msg) e[key] = msg
-    /* defence-in-depth: files are already validated on pick */
     for (const key of Object.keys(files)) {
       const msg = validateFile(files[key])
       if (msg) e[key] = msg
@@ -87,7 +223,7 @@ function AddStudentScreen() {
     return e
   }
 
-  const save = () => {
+  const save = async () => {
     const e = validate()
     setErrors(e)
     if (Object.keys(e).length) {
@@ -95,82 +231,73 @@ function AddStudentScreen() {
       return
     }
 
-    const name = `${f.firstName.trim()} ${f.lastName.trim()}`.trim()
-    const cls = `${f.cls}-${f.section}`
-    const student: Student = {
-      id: 'S' + Date.now().toString(36).toUpperCase(),
-      adm: f.adm.trim(),
-      name,
-      gender: f.gender === 'F' ? 'F' : 'M',
-      grade: f.cls,
-      section: f.section,
-      cls,
-      roll: Number(f.roll) || 0,
-      guardian: (f.fatherName || f.motherName || '—').trim(),
-      phone: f.phone.trim(),
-      attendance: 0,
-      feeStatus: 'due',
-      feeDue: 0,
-      status: f.status === 'inactive' ? 'inactive' : 'active',
-      house: f.house || 'Ruby',
-      avatarHue: (name.length * 47) % 360,
-      academicYear: f.academicYear,
-      admissionDate: f.admissionDate || undefined,
-      dob: f.dob,
-      bloodGroup: f.bloodGroup || undefined,
-      religion: f.religion || undefined,
-      category: f.category || undefined,
-      caste: f.caste || undefined,
-      motherTongue: f.motherTongue || undefined,
-      languages: f.languages || undefined,
-      lastSchool: f.lastSchool || undefined,
-      address: f.address || undefined,
-      email: f.email || undefined,
-      aadhaar: f.aadhaar || undefined,
-      photoName: files.studentPhoto?.name,
-      father: {
-        name: f.fatherName || undefined, email: f.fatherEmail || undefined,
-        phone: f.fatherPhone || undefined, occupation: f.fatherOccupation || undefined,
-        aadhaar: f.fatherAadhaar || undefined, photoName: files.fatherPhoto?.name,
-      },
-      mother: {
-        name: f.motherName || undefined, email: f.motherEmail || undefined,
-        phone: f.motherPhone || undefined, occupation: f.motherOccupation || undefined,
-        photoName: files.motherPhoto?.name,
-      },
-      documents: {
-        birthCert: files.birthCert?.name, transferCert: files.transferCert?.name,
-        studentAadhaar: files.studentAadhaarDoc?.name, fatherAadhaar: files.fatherAadhaarDoc?.name,
-      },
+    const student = buildStudent(f, files, existing)
+    setSaving(true)
+
+    const afterOk = async (saved: Student) => {
+      await persistExtras(saved.id, { ...student, id: saved.id }, files)
+      toast.success(mode === 'edit' ? 'Student updated' : 'Student added', `${saved.name} · ${saved.cls}.`)
+      app.go('school.student', { focus: saved.id })
+    }
+
+    if (mode === 'edit' && existing) {
+      updateStudent.mutate({ id: existing.id, student }, {
+        onSuccess: (saved) => { void afterOk(saved).finally(() => setSaving(false)) },
+        onError: (err) => {
+          setSaving(false)
+          toast.danger('Could not save', err instanceof Error ? err.message : 'Please try again.')
+        },
+      })
+      return
     }
 
     createStudent.mutate(student, {
-      onSuccess: () => {
-        toast.success('Student added', `${name} enrolled in ${cls}.`)
-        app.go('school.sis')
-      },
+      onSuccess: (saved) => { void afterOk(saved).finally(() => setSaving(false)) },
       onError: (err) => {
+        setSaving(false)
         toast.danger('Could not save', err instanceof Error ? err.message : 'Please try again.')
       },
     })
   }
 
+  if (mode === 'edit' && existingQ.isLoading) {
+    return <div className="col ai-center jc-center gap12" style={{ minHeight: 240 }}><Spinner size={28} /><div className="t-sm muted">Loading student…</div></div>
+  }
+  if (mode === 'edit' && (existingQ.isError || !existing)) {
+    return (
+      <div>
+        <Btn variant="ghost" icon="arrowLeft" onClick={() => app.go('school.sis')}>Students</Btn>
+        <Empty icon="user" title="Student not found" body="Open a student from the list, then choose Edit." />
+      </div>
+    )
+  }
+  if (!hydrated) return null
+
+  const back = () => (mode === 'edit' && existing ? app.go('school.student', { focus: existing.id }) : app.go('school.sis'))
+
   return (
     <div>
       <div className="row ai-center gap12" style={{ marginBottom: 16 }}>
-        <Btn variant="ghost" icon="arrowLeft" onClick={() => app.go('school.sis')}>Students</Btn>
+        <Btn variant="ghost" icon="arrowLeft" onClick={back}>{mode === 'edit' ? 'Profile' : 'Students'}</Btn>
       </div>
 
-      <PageHead title="Add student" sub={`New enrolment record · ${app.school.name}`} />
+      <PageHead
+        title={mode === 'edit' ? 'Edit student' : 'Add student'}
+        sub={`${mode === 'edit' ? 'Update enrolment' : 'New enrolment'} · ${app.school.name}`}
+      />
 
       <div className="col gap16">
-        {/* ---- Student Details ---- */}
         <Card>
           <CardHead title="Student details" icon="user" />
           <div style={{ marginTop: 12 }}>
             {fieldGrid(<>
               {sel('academicYear', 'Academic year', ACADEMIC_YEARS)}
               {txt('adm', 'Admission number', { required: true, ph: 'ADM2026000' })}
+              {mode === 'edit' ? (
+                <div className="t-xs muted" style={{ gridColumn: '1 / -1', marginTop: -8 }}>
+                  Admission number is fixed after create; other SIS fields and parents/docs can be updated.
+                </div>
+              ) : null}
               {txt('admissionDate', 'Admission date', { type: 'date' })}
               {txt('roll', 'Roll number', { ph: 'e.g. 24' })}
               {sel('status', 'Status', STATUSES)}
@@ -199,12 +326,11 @@ function AddStudentScreen() {
         </Card>
 
         <div className="sm-grid-2 gap16">
-          {/* ---- Father Details ---- */}
           <Card>
             <CardHead title="Father details" icon="user" />
             <div style={{ marginTop: 12 }}>
               {fieldGrid(<>
-                {txt('fatherName', 'Father name', { icon: 'user', ph: 'Full name' })}
+                {txt('fatherName', 'Father name', { icon: 'user', ph: 'Full name', required: true })}
                 {txt('fatherEmail', 'Father email', { ph: 'father@example.com' })}
                 {txt('fatherPhone', 'Father phone number', { icon: 'phone', ph: '+91 9XXXXXXXXX' })}
                 {txt('fatherOccupation', 'Father occupation')}
@@ -215,7 +341,6 @@ function AddStudentScreen() {
             </div>
           </Card>
 
-          {/* ---- Mother Details ---- */}
           <Card>
             <CardHead title="Mother details" icon="user" />
             <div style={{ marginTop: 12 }}>
@@ -230,7 +355,6 @@ function AddStudentScreen() {
           </Card>
         </div>
 
-        {/* ---- Documents ---- */}
         <Card>
           <CardHead title="Documents" icon="doc" action={<Badge tone="neutral" icon="alert">PDF / JPG / PNG · max 4 MB</Badge>} />
           <div style={{ marginTop: 12 }}>
@@ -240,13 +364,12 @@ function AddStudentScreen() {
             </>)}
             <div className="row ai-center gap8 t-xs muted" style={{ marginTop: 12 }}>
               <Icon name="check" size={13} />
-              Student &amp; Father Aadhaar cards are captured in their sections above.
+              Files are kept on this device for View / Download on the student profile.
             </div>
           </div>
         </Card>
       </div>
 
-      {/* ---- sticky action bar ---- */}
       <div
         className="row ai-center jc-end gap8"
         style={{
@@ -254,13 +377,24 @@ function AddStudentScreen() {
           background: 'var(--bg)', borderTop: '1px solid var(--border)',
         }}
       >
-        <Btn variant="ghost" onClick={() => app.go('school.sis')}>Cancel</Btn>
-        <Btn variant="primary" icon="check" onClick={save}>Save student</Btn>
+        <Btn variant="ghost" onClick={back}>Cancel</Btn>
+        <Btn variant="primary" icon="check" disabled={saving} onClick={() => { void save() }}>
+          {saving ? 'Saving…' : mode === 'edit' ? 'Save changes' : 'Save student'}
+        </Btn>
       </div>
     </div>
   )
 }
 
+function AddStudentScreen() {
+  return <StudentFormScreen mode="add" />
+}
+
+function EditStudentScreen() {
+  return <StudentFormScreen mode="edit" />
+}
+
 export const studentAddScreens: Record<string, ComponentType> = {
   'school.sis.add': AddStudentScreen,
+  'school.sis.edit': EditStudentScreen,
 }

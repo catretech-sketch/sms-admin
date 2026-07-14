@@ -18,6 +18,7 @@ import { financeScreens } from './school/finance'
 import { opsScreens } from './school/operations'
 import { portfolioScreens } from './owner/portfolio'
 import { billingScreens } from './owner/billing'
+import { revenueScreens } from './owner/revenue'
 import { workspaceScreens } from './owner/workspace'
 import { adminScreens } from './school/admin'
 
@@ -37,5 +38,6 @@ export const screenRegistry: Record<string, ComponentType> = {
   ...opsScreens,
   ...portfolioScreens,
   ...billingScreens,
+  ...revenueScreens,
   ...workspaceScreens,
 }

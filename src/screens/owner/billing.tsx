@@ -1,45 +1,24 @@
 /* ============================================================
    SchoolMate — Owner console: Cross-school reports +
-   Subscriptions & billing (with interactive plan calculator).
-   Frontend-only, deterministic mock data. Sits above all
-   schools (SaaS account level), so no single-school context.
+   Subscriptions & billing.
+   Both screens use live portfolio schools (/me/schools or /clients).
    ============================================================ */
 import { useMemo, useState, type ComponentType } from 'react'
-import { useToast } from '@/lib/hooks'
+import { useApp } from '@/lib/hooks'
 import {
-  PageHead, Tabs, Card, CardHead, Kpi, Btn, Badge, TierPill, Segmented, Select, Field, Input,
-  Modal, Icon, HBars, LineChart, Legend, Donut, DataTable, type Column, type BadgeTone, DemoBadge,
+  PageHead, Tabs, Card, CardHead, Kpi, Badge, TierPill, Segmented,
+  HBars, Legend, Donut, DataTable, Empty, Spinner,
+  type Column, type BadgeTone,
 } from '@/components/ui'
-import { schools, TIERS, TIER_META } from '@/data/mockDb'
+import { TIERS, TIER_META } from '@/data/mockDb'
 import { fmtMoney, fmtNum } from '@/lib/format'
 import type { School, Tier } from '@/types'
-
-/* ============================================================
-   Shared pricing — volume-discounted ₹/student/yr, by strength
-   band and tier. Identical bands to the create-school wizard.
-   ============================================================ */
-const RATE_TABLE: Record<Tier, [number, number, number, number]> = {
-  silver: [120, 96, 78, 64],
-  gold: [300, 240, 190, 160],
-  platinum: [520, 430, 340, 290],
-}
-function strengthBand(n: number): 0 | 1 | 2 | 3 {
-  return n <= 500 ? 0 : n <= 1500 ? 1 : n <= 3000 ? 2 : 3
-}
-function bandLabel(n: number): string {
-  return n <= 500 ? '≤ 500 students' : n <= 1500 ? '501 – 1,500 students' : n <= 3000 ? '1,501 – 3,000 students' : '3,000+ students'
-}
-function rateFor(n: number, tier: Tier): number {
-  return RATE_TABLE[tier][strengthBand(n)]
-}
-function recommendedTier(n: number): Tier {
-  return n <= 500 ? 'silver' : n <= 1500 ? 'gold' : 'platinum'
-}
-const TIER_FEATURES: Record<Tier, string[]> = {
-  silver: ['Core SIS & academics', 'Attendance, exams & fees', 'Parent communication'],
-  gold: ['Everything in Silver', 'HR & Payroll', 'Advanced reporting & analytics'],
-  platinum: ['Everything in Gold', 'GPS transport & geofence', 'Dedicated success manager'],
-}
+import { usePortfolioSchools, useOwnerPlans } from '@/api/hooks/useOwner'
+import { clientToSchool } from '@/api/ownerMap'
+import { listInvoices, type ApiInvoice } from '@/api/billing'
+import { useQuery } from '@tanstack/react-query'
+import { queryKeys } from '@/api/queryKeys'
+import type { Plan } from '@/api/ownerTypes'
 
 /* compact ₹ for charts/KPIs */
 function compactMoney(n: number): string {
@@ -53,10 +32,10 @@ const statusTone: Record<School['status'], BadgeTone> = { active: 'success', tri
 const statusLabel: Record<School['status'], string> = { active: 'Active', trial: 'Trial', past_due: 'Past due' }
 
 /* ============================================================
-   OwnerReports — Cross-school comparison
-   (no scatter, no league table — removed per design decision)
+   OwnerReports — live portfolio comparison only
+   (no mock schools, no fake FY scaling / attendance)
    ============================================================ */
-type Metric = 'attendance' | 'fees' | 'enrolment' | 'revenue'
+type Metric = 'enrolment' | 'staff' | 'revenue' | 'health'
 
 interface MetricMeta {
   label: string
@@ -66,70 +45,72 @@ interface MetricMeta {
   fmt: (v: number) => string
 }
 const METRIC_META: Record<Metric, MetricMeta> = {
-  attendance: { label: 'Attendance', short: 'attendance', sum: false, base: (s) => s.attendance, fmt: (v) => v.toFixed(1) + '%' },
-  fees: { label: 'Fee collection', short: 'fee collection', sum: false, base: (s) => s.fees, fmt: (v) => v.toFixed(1) + '%' },
   enrolment: { label: 'Enrolment', short: 'students', sum: true, base: (s) => s.students, fmt: (v) => fmtNum(Math.round(v)) },
+  staff: { label: 'Staff', short: 'staff', sum: true, base: (s) => s.staff, fmt: (v) => fmtNum(Math.round(v)) },
   revenue: { label: 'Revenue (MRR)', short: 'MRR', sum: true, base: (s) => s.mrr, fmt: (v) => compactMoney(Math.round(v)) },
+  health: { label: 'Health score', short: 'health', sum: false, base: (s) => s.fees, fmt: (v) => v.toFixed(0) },
 }
-const YEARS = ['2024', '2025', '2026']
-const YEAR_FACTOR: Record<string, number> = { '2024': 0.9, '2025': 0.95, '2026': 1 }
 
 function OwnerReports() {
-  const toast = useToast()
-  const [metric, setMetric] = useState<Metric>('attendance')
-  const [year, setYear] = useState('2026')
+  const app = useApp()
+  const [metric, setMetric] = useState<Metric>('enrolment')
+  const schoolsQ = usePortfolioSchools(app.isPlatform)
+  const schools = useMemo(() => (schoolsQ.data ?? []).map(clientToSchool), [schoolsQ.data])
 
   const meta = METRIC_META[metric]
-  const factor = YEAR_FACTOR[year]
 
   const ranked = useMemo(() => {
     return schools
       .map((s) => {
-        const raw = meta.base(s) * factor
+        const raw = meta.base(s)
         const value = meta.sum ? Math.round(raw) : +raw.toFixed(1)
         return { school: s, value }
       })
       .sort((a, b) => b.value - a.value)
-  }, [meta, factor])
+  }, [schools, meta])
 
   const summary = useMemo(() => {
+    if (ranked.length === 0) return { agg: 0, top: null as null | typeof ranked[0], low: null as null | typeof ranked[0], count: 0 }
     const values = ranked.map((r) => r.value)
     const total = values.reduce((a, v) => a + v, 0)
-    const agg = meta.sum ? total : total / (values.length || 1)
+    const agg = meta.sum ? total : total / values.length
     return { agg, top: ranked[0], low: ranked[ranked.length - 1], count: ranked.length }
   }, [ranked, meta])
 
   const bars = ranked.map((r) => ({ value: r.value, label: r.school.name, color: r.school.color }))
 
+  if (schoolsQ.isLoading) {
+    return <div className="col ai-center jc-center gap12" style={{ minHeight: 280 }}><Spinner size={28} /><div className="t-sm muted">Loading reports…</div></div>
+  }
+  if (schoolsQ.isError) {
+    return <Empty icon="alert" title="Could not load reports" body="Check your connection and try again." />
+  }
+  if (schools.length === 0) {
+    return (
+      <div>
+        <PageHead title="Cross-school reports" sub="Live portfolio data" />
+        <Card>
+          <Empty icon="building" title="No schools yet" body="Create a school to compare enrolment, staff, MRR, and health across your portfolio." />
+        </Card>
+      </div>
+    )
+  }
+
   return (
     <div>
       <PageHead
         title="Cross-school reports"
-        sub={`Comparing ${schools.length} schools · ${meta.label} · FY ${year}`}
-        actions={
-          <Btn variant="primary" icon="download" onClick={() => toast.success('Exported .xlsx', `${meta.label} comparison · FY ${year} · ${schools.length} schools.`)}>
-            Export Excel
-          </Btn>
-        }
+        sub={`Comparing ${schools.length} ${schools.length === 1 ? 'school' : 'schools'} · ${meta.label} · live portfolio`}
       />
 
-      {/* Controls */}
       <Card className="row ai-center jc-between gap12 wrap" style={{ marginBottom: 16 }}>
         <Segmented
           value={metric}
           onChange={(v) => setMetric(v as Metric)}
           options={(Object.keys(METRIC_META) as Metric[]).map((m) => ({ value: m, label: METRIC_META[m].label }))}
         />
-        <Field label="">
-          <Select
-            options={YEARS.map((y) => ({ value: y, label: `FY ${y}` }))}
-            value={year}
-            onChange={(e) => setYear(e.target.value)}
-          />
-        </Field>
       </Card>
 
-      {/* KPI summary */}
       <div className="sm-kpi-grid" style={{ marginBottom: 16 }}>
         <Kpi
           icon="trend" iconBg="var(--brand-50)" iconColor="var(--brand-600)"
@@ -138,23 +119,28 @@ function OwnerReports() {
         />
         <Kpi
           icon="sparkle" iconBg="var(--success-bg)" iconColor="var(--success)"
-          label="Top school" value={meta.fmt(summary.top.value)} foot={summary.top.school.name}
+          label="Top school"
+          value={summary.top ? meta.fmt(summary.top.value) : '—'}
+          foot={summary.top?.school.name ?? '—'}
         />
         <Kpi
           icon="alert" iconBg="var(--warning-bg)" iconColor="var(--warning)"
-          label="Lowest" value={meta.fmt(summary.low.value)} foot={summary.low.school.name}
+          label="Lowest"
+          value={summary.low ? meta.fmt(summary.low.value) : '—'}
+          foot={summary.low?.school.name ?? '—'}
         />
         <Kpi
           icon="building" iconBg="var(--info-bg)" iconColor="var(--info)"
-          label="Schools compared" value={fmtNum(summary.count)} foot={`Financial year ${year}`}
+          label="Schools compared" value={fmtNum(summary.count)} foot="From your portfolio"
         />
       </div>
 
-      {/* Ranked comparison */}
       <Card>
-        <CardHead title={`${meta.label} by school`} sub={`Ranked across all schools · FY ${year}`} icon="grid" />
+        <CardHead title={`${meta.label} by school`} sub="Ranked from live portfolio data" icon="grid" />
         <div style={{ marginTop: 16 }}>
-          <HBars data={bars} labelWidth={200} valueFmt={(v) => meta.fmt(v)} />
+          {bars.length === 0
+            ? <Empty icon="grid" title="No data" body="No values to chart for this metric." />
+            : <HBars data={bars} labelWidth={200} valueFmt={(v) => meta.fmt(v)} />}
         </div>
       </Card>
     </div>
@@ -162,74 +148,9 @@ function OwnerReports() {
 }
 
 /* ============================================================
-   Change-plan modal — per-student pricing for THIS school
+   Subscriptions tab — live schools from portfolio API
    ============================================================ */
-function ChangePlanModal({ school, onClose }: { school: School; onClose: () => void }) {
-  const toast = useToast()
-  const [tier, setTier] = useState<Tier>(school.plan)
-  const seats = school.students
-
-  const apply = () => {
-    if (tier === school.plan) { toast.info('No change', `${school.name} is already on ${TIER_META[tier].label}.`); return }
-    const annual = rateFor(seats, tier) * seats
-    toast.success('Plan changed', `${school.name} → ${TIER_META[tier].label} · ${fmtMoney(annual)}/yr (${fmtNum(seats)} students).`)
-    onClose()
-  }
-
-  return (
-    <Modal
-      open onClose={onClose} icon="layers" size="md"
-      title={`Change plan · ${school.name}`}
-      sub={`${fmtNum(seats)} students · ${bandLabel(seats)}`}
-      footer={
-        <div className="row gap8 jc-end">
-          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn variant="primary" icon="check" onClick={apply}>Apply plan</Btn>
-        </div>
-      }
-    >
-      <div className="col gap10">
-        {TIERS.map((t) => {
-          const rate = rateFor(seats, t)
-          const annual = rate * seats
-          const selected = t === tier
-          const current = t === school.plan
-          return (
-            <button
-              key={t}
-              onClick={() => setTier(t)}
-              className="row ai-center jc-between gap12"
-              style={{
-                textAlign: 'left', width: '100%', padding: '14px 16px', cursor: 'pointer',
-                border: `1.5px solid ${selected ? TIER_META[t].color : 'var(--border)'}`,
-                borderRadius: 12, background: selected ? TIER_META[t].bg : 'var(--surface)',
-              }}
-            >
-              <div className="row ai-center gap12">
-                <TierPill plan={t} size="md" />
-                {current && <Badge tone="neutral">Current</Badge>}
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div className="fw7">{fmtMoney(annual)}/yr</div>
-                <div className="t-xs muted">{fmtNum(seats)} × {fmtMoney(rate)}/student/yr</div>
-              </div>
-            </button>
-          )
-        })}
-      </div>
-    </Modal>
-  )
-}
-
-/* ============================================================
-   Subscriptions tab
-   ============================================================ */
-const RENEW_DATES = ['14 Apr 2027', '02 Jun 2026', '21 Sep 2026', '08 Jan 2027', '30 Jun 2026', '11 Nov 2026', '17 Mar 2027']
-function renewDate(i: number): string { return RENEW_DATES[i % RENEW_DATES.length] }
-
-function SubscriptionsTab() {
-  const [planFor, setPlanFor] = useState<School | null>(null)
-
+function SubscriptionsTab({ schools }: { schools: School[] }) {
   const columns: Column<School>[] = [
     {
       key: 'name', label: 'School', sortValue: (s) => s.name,
@@ -244,29 +165,21 @@ function SubscriptionsTab() {
       ),
     },
     { key: 'plan', label: 'Plan', sortValue: (s) => s.plan, render: (s) => <TierPill plan={s.plan} /> },
-    { key: 'students', label: 'Seats', align: 'right', sortValue: (s) => s.students, render: (s) => fmtNum(s.students) },
-    {
-      key: 'rate', label: 'Per student', align: 'right', sortValue: (s) => rateFor(s.students, s.plan),
-      render: (s) => <span className="t-sm">{fmtMoney(rateFor(s.students, s.plan))}<span className="muted">/yr</span></span>,
-    },
-    {
-      key: 'annual', label: 'Annual value', align: 'right', sortValue: (s) => rateFor(s.students, s.plan) * s.students,
-      render: (s) => <span className="fw6">{fmtMoney(rateFor(s.students, s.plan) * s.students)}</span>,
-    },
+    { key: 'students', label: 'Students', align: 'right', sortValue: (s) => s.students, render: (s) => fmtNum(s.students) },
     { key: 'mrr', label: 'MRR', align: 'right', sortValue: (s) => s.mrr, render: (s) => fmtMoney(s.mrr) },
     {
       key: 'status', label: 'Status', align: 'center', sortValue: (s) => s.status,
       render: (s) => <Badge tone={statusTone[s.status]} dot>{statusLabel[s.status]}</Badge>,
     },
-    {
-      key: 'renews', label: 'Renews', align: 'right',
-      render: (s) => <span className="t-sm muted">{renewDate(schools.indexOf(s))}</span>,
-    },
-    {
-      key: 'actions', label: '', align: 'right',
-      render: (s) => <Btn size="sm" variant="secondary" icon="layers" onClick={() => setPlanFor(s)}>Change plan</Btn>,
-    },
   ]
+
+  if (schools.length === 0) {
+    return (
+      <Card>
+        <Empty icon="building" title="No schools yet" body="Create a school to see its subscription here. Billing activates when Catre admin activates the client." />
+      </Card>
+    )
+  }
 
   return (
     <Card pad={false}>
@@ -276,108 +189,117 @@ function SubscriptionsTab() {
         pageSize={10}
         rowKey={(s) => s.id}
         initialSort={{ key: 'mrr', dir: 'desc' }}
+        empty={<Empty icon="building" title="No subscriptions" body="No schools in your portfolio." />}
       />
-      {planFor && <ChangePlanModal key={planFor.id} school={planFor} onClose={() => setPlanFor(null)} />}
     </Card>
   )
 }
 
 /* ============================================================
-   Invoices tab
+   Invoices tab — platform live API; school owners get empty (no fake INV-*)
    ============================================================ */
-type InvStatus = 'paid' | 'issued' | 'overdue'
-interface Invoice { id: string; school: School; amount: number; issued: string; due: string; status: InvStatus }
-const invTone: Record<InvStatus, BadgeTone> = { paid: 'success', issued: 'info', overdue: 'danger' }
-const invLabel: Record<InvStatus, string> = { paid: 'Paid', issued: 'Issued', overdue: 'Overdue' }
+type InvUiStatus = 'paid' | 'open' | 'past_due'
+const invTone: Record<InvUiStatus, BadgeTone> = { paid: 'success', open: 'info', past_due: 'danger' }
+const invLabel: Record<InvUiStatus, string> = { paid: 'Paid', open: 'Open', past_due: 'Past due' }
 
-function buildInvoices(): Invoice[] {
-  const paying = schools.filter((s) => s.mrr > 0)
-  const out: Invoice[] = []
-  paying.forEach((s, i) => {
-    out.push({ id: `INV-26${String(500 + i * 2).padStart(4, '0')}`, school: s, amount: s.mrr, issued: '01 May 2026', due: '15 May 2026', status: s.status === 'past_due' ? 'overdue' : 'paid' })
-    out.push({ id: `INV-26${String(501 + i * 2).padStart(4, '0')}`, school: s, amount: s.mrr, issued: '01 Jun 2026', due: '15 Jun 2026', status: s.status === 'past_due' ? 'overdue' : 'issued' })
-  })
-  return out
+function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
-function InvoicesTab() {
-  const toast = useToast()
-  const invoices = useMemo(buildInvoices, [])
+function InvoicesTab({ isPlatform }: { isPlatform: boolean }) {
+  const q = useQuery({
+    queryKey: [...queryKeys.owner.clients({}), 'invoices'],
+    queryFn: async () => (await listInvoices()).data,
+    enabled: isPlatform,
+  })
 
-  const columns: Column<Invoice>[] = [
-    { key: 'id', label: 'Invoice', sortValue: (r) => r.id, render: (r) => <span className="fw6">{r.id}</span> },
-    {
-      key: 'school', label: 'School', sortValue: (r) => r.school.name,
-      render: (r) => (
-        <div className="row ai-center gap10">
-          <span className="sm-avatar" style={{ width: 30, height: 30, background: r.school.color, fontSize: 12, borderRadius: 9 }}>{r.school.logo}</span>
-          <span className="fw6">{r.school.name}</span>
-        </div>
-      ),
-    },
-    { key: 'amount', label: 'Amount', align: 'right', sortValue: (r) => r.amount, render: (r) => <span className="fw6">{fmtMoney(r.amount)}</span> },
-    { key: 'issued', label: 'Issued', align: 'right', render: (r) => <span className="t-sm muted">{r.issued}</span> },
-    { key: 'due', label: 'Due', align: 'right', render: (r) => <span className="t-sm muted">{r.due}</span> },
+  if (!isPlatform) {
+    return (
+      <Card>
+        <Empty
+          icon="doc"
+          title="No invoices yet"
+          body="Invoices appear after Catre admin activates a school and billing starts."
+        />
+      </Card>
+    )
+  }
+
+  if (q.isLoading) {
+    return <div className="col ai-center jc-center gap12" style={{ minHeight: 200 }}><Spinner size={28} /><div className="t-sm muted">Loading invoices…</div></div>
+  }
+  if (q.isError) {
+    return <Card><Empty icon="alert" title="Could not load invoices" body="Check your connection and try again." /></Card>
+  }
+
+  const invoices = q.data ?? []
+  const columns: Column<ApiInvoice>[] = [
+    { key: 'id', label: 'Invoice', sortValue: (r) => r.id, render: (r) => <span className="fw6 t-xs">{r.id.slice(0, 8)}…</span> },
+    { key: 'tenant_name', label: 'School', sortValue: (r) => r.tenant_name ?? '', render: (r) => <span className="fw6">{r.tenant_name ?? '—'}</span> },
+    { key: 'plan_name', label: 'Plan', render: (r) => <span className="t-sm muted">{r.plan_name ?? '—'}</span> },
+    { key: 'amount', label: 'Amount', align: 'right', sortValue: (r) => r.amount, render: (r) => <span className="fw6">{fmtMoney(Number(r.amount))}</span> },
+    { key: 'issued', label: 'Issued', align: 'right', render: (r) => <span className="t-sm muted">{fmtDate(r.issued)}</span> },
+    { key: 'due', label: 'Due', align: 'right', render: (r) => <span className="t-sm muted">{fmtDate(r.due)}</span> },
     {
       key: 'status', label: 'Status', align: 'center', sortValue: (r) => r.status,
-      render: (r) => <Badge tone={invTone[r.status]} dot>{invLabel[r.status]}</Badge>,
-    },
-    {
-      key: 'actions', label: '', align: 'right',
-      render: (r) => (
-        <div className="row gap6 jc-end">
-          <Btn size="sm" variant="ghost" icon="download" onClick={() => toast.info('Invoice downloaded', `${r.id} · ${fmtMoney(r.amount)} (PDF).`)}>PDF</Btn>
-          {r.status !== 'paid' && (
-            <Btn size="sm" variant="secondary" icon="bell" onClick={() => toast.success('Reminder sent', `${r.school.name} notified about ${r.id}.`)}>Remind</Btn>
-          )}
-        </div>
-      ),
+      render: (r) => {
+        const st = (r.status === 'paid' || r.status === 'open' || r.status === 'past_due' ? r.status : 'open') as InvUiStatus
+        return <Badge tone={invTone[st]} dot>{invLabel[st]}</Badge>
+      },
     },
   ]
 
   return (
     <Card pad={false}>
-      <DataTable<Invoice>
+      <DataTable<ApiInvoice>
         columns={columns}
         rows={invoices}
         pageSize={10}
         rowKey={(r) => r.id}
         initialSort={{ key: 'status', dir: 'asc' }}
+        empty={<Empty icon="doc" title="No invoices" body="No invoices have been issued yet." />}
       />
     </Card>
   )
 }
 
 /* ============================================================
-   Revenue tab
+   Revenue tab — real MRR from portfolio (no fake 12-month curve)
    ============================================================ */
-function RevenueTab() {
-  const totalMrr = useMemo(() => schools.reduce((a, s) => a + s.mrr, 0), [])
-
-  const months = ['Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun']
-  const growth = months.map((_m, i) => Math.round(totalMrr * (0.72 + (0.28 * i) / (months.length - 1))))
-
+function RevenueTab({ schools }: { schools: School[] }) {
+  const totalMrr = useMemo(() => schools.reduce((a, s) => a + s.mrr, 0), [schools])
   const byPlan = useMemo(() =>
     TIERS.map((t) => ({
       tier: t,
       value: schools.filter((s) => s.plan === t).reduce((a, s) => a + s.mrr, 0),
       color: TIER_META[t].color,
-    })), [])
+    })), [schools])
+
+  const bySchool = useMemo(
+    () => schools.map((s) => ({ value: s.mrr, label: s.logo || s.name.slice(0, 2), color: s.color })),
+    [schools],
+  )
+
+  if (schools.length === 0) {
+    return <Card><Empty icon="trend" title="No revenue yet" body="MRR appears when your schools have an active or trial plan with billing." /></Card>
+  }
 
   return (
     <div className="sm-grid-2">
       <Card>
-        <CardHead title="MRR growth" sub="Trailing 12 months" icon="trend" />
+        <CardHead title="Subscription MRR by school" sub="Software plan billing — not student fees" icon="trend" />
         <div style={{ marginTop: 12 }}>
-          <LineChart
-            series={[{ data: growth, color: 'var(--brand-600)', label: 'MRR' }]}
-            labels={months}
-            yFmt={(v) => compactMoney(v)}
+          <HBars
+            data={bySchool}
+            valueFmt={(v) => compactMoney(v)}
           />
         </div>
       </Card>
       <Card>
-        <CardHead title="Revenue by plan" sub="Share of MRR" icon="layers" />
+        <CardHead title="Revenue by plan" sub="Share of current MRR" icon="layers" />
         <div className="row ai-center gap20 wrap" style={{ marginTop: 12 }}>
           <Donut
             segments={byPlan.map((p) => ({ value: p.value, color: p.color, label: TIER_META[p.tier].label }))}
@@ -399,113 +321,84 @@ function RevenueTab() {
 }
 
 /* ============================================================
-   Plans & pricing tab — interactive plan calculator
+   Plans & pricing — published Catre plans (no dummy calculator trials)
    ============================================================ */
-function PlanCalculator() {
-  const toast = useToast()
-  const [strength, setStrength] = useState(800)
-  const [billing, setBilling] = useState<'annual' | 'monthly'>('annual')
-  const rec = recommendedTier(strength)
-  const clamp = (n: number) => Math.max(50, Math.min(5000, Math.round(n || 0)))
+function LivePlansTab({ plans, loading, error }: { plans: Plan[]; loading: boolean; error: boolean }) {
+  if (loading) {
+    return <div className="col ai-center jc-center gap12" style={{ minHeight: 200 }}><Spinner size={28} /><div className="t-sm muted">Loading published plans…</div></div>
+  }
+  if (error) {
+    return <Card><Empty icon="alert" title="Could not load plans" body="Check your connection and try again." /></Card>
+  }
+  if (plans.length === 0) {
+    return <Card><Empty icon="layers" title="No published plans" body="Ask Catre admin to publish a plan. Only live plans are listed here." /></Card>
+  }
 
   return (
-    <div className="col gap16">
-      <Card>
-        <CardHead title="Pricing calculator" sub="Enter a school's strength to see plans & pricing" icon="rupee" />
-        <div className="row ai-end jc-between gap16 wrap" style={{ marginTop: 14 }}>
-          <Field label="Student strength" hint={bandLabel(strength)}>
-            <Input
-              icon="users" type="number" inputMode="numeric" value={strength} style={{ width: 160 }}
-              onChange={(e) => setStrength(clamp(Number(e.target.value)))}
-            />
-          </Field>
-          <div style={{ flex: 1, minWidth: 220 }}>
-            <input
-              type="range" min={50} max={5000} step={50} value={strength}
-              onChange={(e) => setStrength(clamp(Number(e.target.value)))}
-              style={{ width: '100%' }}
-              aria-label="Student strength"
-            />
-            <div className="row ai-center jc-between t-xs muted"><span>50</span><span>5,000</span></div>
-          </div>
-          <Segmented
-            value={billing}
-            onChange={(v) => setBilling(v as 'annual' | 'monthly')}
-            options={[{ value: 'annual', label: 'Annual' }, { value: 'monthly', label: 'Monthly' }]}
-          />
-        </div>
-      </Card>
-
-      <div className="sm-grid-3">
-        {TIERS.map((t) => {
-          const rate = rateFor(strength, t)
-          const annual = rate * strength
-          const monthly = Math.round(annual / 12)
-          const price = billing === 'annual' ? annual : monthly
-          const isRec = t === rec
-          return (
-            <Card key={t} style={isRec ? { borderColor: TIER_META[t].color, borderWidth: 1.5 } : undefined}>
-              <div className="row ai-center jc-between">
-                <TierPill plan={t} size="md" />
-                {isRec && <Badge tone="success" icon="sparkle">Recommended</Badge>}
-              </div>
-              <div style={{ marginTop: 14 }}>
-                <div className="row ai-end gap6">
-                  <div className="fw7" style={{ fontSize: 26, fontFamily: 'var(--font-display)' }}>{fmtMoney(price)}</div>
-                  <div className="t-xs muted" style={{ marginBottom: 4 }}>{billing === 'annual' ? '/year' : '/month'}</div>
-                </div>
-                <div className="t-xs muted">
-                  {billing === 'annual'
-                    ? `≈ ${fmtMoney(monthly)}/mo`
-                    : `${fmtMoney(annual)}/yr billed annually`}
+    <div className="sm-grid-3">
+      {plans.map((p) => {
+        const tier = ((TIERS as readonly string[]).includes((p.tier ?? '').toLowerCase()) ? p.tier!.toLowerCase() : 'gold') as Tier
+        const price = p.pricing === 'per_student'
+          ? Number(p.per_student) || 0
+          : Number(p.price) || 0
+        return (
+          <Card key={p.id}>
+            <div className="row ai-center jc-between gap8">
+              <div className="t-md fw7">{p.name}</div>
+              <TierPill plan={tier} size="md" />
+            </div>
+            {p.description && <div className="t-xs muted3" style={{ marginTop: 6 }}>{p.description}</div>}
+            <div style={{ marginTop: 14 }}>
+              <div className="row ai-end gap6">
+                <div className="fw7" style={{ fontSize: 26, fontFamily: 'var(--font-display)' }}>{fmtMoney(price)}</div>
+                <div className="t-xs muted" style={{ marginBottom: 4 }}>
+                  {p.pricing === 'per_student' ? '/student' : 'flat'} · {p.period || 'month'}
                 </div>
               </div>
-              <div className="t-sm muted" style={{ marginTop: 8 }}>
-                {fmtNum(strength)} × {fmtMoney(rate)}/student/yr = {fmtMoney(annual)}/yr
-              </div>
-              <div className="col gap6" style={{ marginTop: 14 }}>
-                {TIER_FEATURES[t].map((f) => (
-                  <div key={f} className="row ai-center gap8 t-sm">
-                    <Icon name="check" size={14} stroke={3} />{f}
-                  </div>
-                ))}
-              </div>
-              <Btn
-                variant={isRec ? 'primary' : 'secondary'} icon="sparkle" style={{ width: '100%', marginTop: 16 }}
-                onClick={() => toast.success('Trial started', `14-day ${TIER_META[t].label} trial · ${fmtNum(strength)} students · no card required.`)}
-              >
-                Start 14-day trial
-              </Btn>
-              <div className="t-xs muted3 ta-center" style={{ marginTop: 8, textAlign: 'center' }}>Free for 14 days · no card required</div>
-            </Card>
-          )
-        })}
-      </div>
+            </div>
+            <Badge tone="info" style={{ marginTop: 12 }}>Published by Catre</Badge>
+          </Card>
+        )
+      })}
     </div>
   )
 }
 
 /* ============================================================
-   OwnerBilling — Subscriptions & billing
+   OwnerBilling — Subscriptions & billing (live portfolio data)
    ============================================================ */
 function OwnerBilling() {
+  const app = useApp()
   const [tab, setTab] = useState('subs')
+  const schoolsQ = usePortfolioSchools(app.isPlatform)
+  const plansQ = useOwnerPlans(app.isPlatform)
+  const schools = useMemo(() => (schoolsQ.data ?? []).map(clientToSchool), [schoolsQ.data])
 
   const kpis = useMemo(() => {
     const mrr = schools.reduce((a, s) => a + s.mrr, 0)
-    const paying = schools.filter((s) => s.mrr > 0).length
+    const paying = schools.filter((s) => s.status === 'active' || s.mrr > 0).length
     const overdue = schools.filter((s) => s.status === 'past_due').reduce((a, s) => a + s.mrr, 0)
     return { mrr, arr: mrr * 12, paying, overdue }
-  }, [])
+  }, [schools])
+
+  if (schoolsQ.isLoading) {
+    return <div className="col ai-center jc-center gap12" style={{ minHeight: 280 }}><Spinner size={28} /><div className="t-sm muted">Loading billing…</div></div>
+  }
+  if (schoolsQ.isError) {
+    return <Empty icon="alert" title="Could not load billing" body="Check your connection and try again." />
+  }
 
   return (
     <div>
-      <PageHead title="Subscriptions & billing" sub={`${schools.length} tenants · per-student pricing`} actions={<DemoBadge />} />
+      <PageHead
+        title="Subscriptions & billing"
+        sub={`${schools.length} ${schools.length === 1 ? 'school' : 'schools'} · live portfolio data`}
+      />
 
       <div className="sm-kpi-grid" style={{ marginBottom: 16 }}>
-        <Kpi icon="rupee" iconBg="var(--brand-50)" iconColor="var(--brand-600)" label="MRR" value={fmtMoney(kpis.mrr)} foot="Monthly recurring revenue" />
-        <Kpi icon="trend" iconBg="var(--success-bg)" iconColor="var(--success)" label="ARR" value={fmtMoney(kpis.arr)} foot="Annual run-rate (MRR × 12)" />
-        <Kpi icon="building" iconBg="var(--info-bg)" iconColor="var(--info)" label="Paying tenants" value={fmtNum(kpis.paying)} foot={`of ${schools.length} schools`} />
+        <Kpi icon="rupee" iconBg="var(--brand-50)" iconColor="var(--brand-600)" label="Subscription MRR" value={fmtMoney(kpis.mrr)} foot="What schools pay for SchoolMate software" />
+        <Kpi icon="trend" iconBg="var(--success-bg)" iconColor="var(--success)" label="Subscription ARR" value={fmtMoney(kpis.arr)} foot="Annual run-rate (MRR × 12)" />
+        <Kpi icon="building" iconBg="var(--info-bg)" iconColor="var(--info)" label="Paying / billed" value={fmtNum(kpis.paying)} foot={`of ${schools.length} schools`} />
         <Kpi icon="alert" iconBg="var(--danger-bg)" iconColor="var(--danger)" label="Overdue amount" value={fmtMoney(kpis.overdue)} foot="Past-due accounts" />
       </div>
 
@@ -520,10 +413,10 @@ function OwnerBilling() {
       />
 
       <div style={{ marginTop: 16 }}>
-        {tab === 'subs' && <SubscriptionsTab />}
-        {tab === 'invoices' && <InvoicesTab />}
-        {tab === 'revenue' && <RevenueTab />}
-        {tab === 'plans' && <PlanCalculator />}
+        {tab === 'subs' && <SubscriptionsTab schools={schools} />}
+        {tab === 'invoices' && <InvoicesTab isPlatform={app.isPlatform} />}
+        {tab === 'revenue' && <RevenueTab schools={schools} />}
+        {tab === 'plans' && <LivePlansTab plans={plansQ.data ?? []} loading={plansQ.isLoading} error={plansQ.isError} />}
       </div>
     </div>
   )

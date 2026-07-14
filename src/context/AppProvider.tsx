@@ -5,9 +5,13 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ApiError, setOnAuthFailure } from '@/api/client'
 import { login as passwordLogin, me as fetchMe, logout as apiLogout } from '@/api/auth'
+import { listMySchools, switchSchool } from '@/api/mySchools'
+import { clientToSchool } from '@/api/ownerMap'
 import { tokenStore } from '@/api/auth/tokenStore'
 import type { ConsoleKind, Exam, FeePayment, PaperSlot, Role, School, Staff, Student, Teacher, Tier } from '@/types'
-import { schools, students as seedStudents, teachers as seedTeachers, staff as seedStaff, exams as seedExams } from '@/data/mockDb'
+import { schools as mockSchools, students as seedStudents, teachers as seedTeachers, staff as seedStaff, exams as seedExams } from '@/data/mockDb'
+
+const isTenantGuid = (id: string) => /^[0-9a-f-]{36}$/i.test(id)
 
 export interface DemoAccount {
   email: string
@@ -36,6 +40,7 @@ interface AppState {
   user: AppUser | null
   consoleKind: ConsoleKind
   role: Role
+  isPlatform: boolean
   schoolId: string
   ownerViewingSchool: boolean
   lang: string
@@ -84,7 +89,10 @@ interface AppState {
   go: (view: string, opts?: { focus?: string; intent?: string }) => void
   clearIntent: () => void
   setSchoolId: (id: string) => void
-  enterSchool: (id: string) => void
+  /** Open school console. Pass `profile` (from portfolio) so plan/features match the subscription tier. */
+  enterSchool: (id: string, profile?: School) => void | Promise<void>
+  /** Live portfolio schools when known; otherwise mock demo tenants. */
+  schoolChoices: School[]
   exitToOwner: () => void
   upgrade: (tier: Tier) => void
   setLang: (lang: string) => void
@@ -99,6 +107,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AppUser | null>(null)
   const [consoleKind, setConsoleKind] = useState<ConsoleKind>('school')
   const [role, setRole] = useState<Role>('admin')
+  const [isPlatform, setIsPlatform] = useState(false)
   const [schoolId, setSchoolId] = useState<string>('grv')
   const [ownerViewingSchool, setOwnerViewing] = useState(false)
   const [lang, setLangState] = useState('en')
@@ -108,6 +117,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [mobileNav, setMobileNav] = useState(false)
   /* plan overrides allow live "upgrade" without mutating the dataset */
   const [planOverride, setPlanOverride] = useState<Record<string, Tier>>({})
+  /* Real tenants from /me/schools or /clients — drives plan gating (silver/gold/platinum). */
+  const [liveSchools, setLiveSchools] = useState<Record<string, School>>({})
   /* roster: seeded data plus students enrolled this session (newest first) */
   const [students, setStudents] = useState<Student[]>(seedStudents)
   const addStudent = (student: Student) => setStudents((list) => [student, ...list])
@@ -140,17 +151,47 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [authError, setAuthError] = useState<string | null>(null)
   const clearAuthError = () => setAuthError(null)
 
-  const school = useMemo(() => schools.find((s) => s.id === schoolId) ?? schools[0], [schoolId])
+  const rememberSchools = (list: School[]) => {
+    if (list.length === 0) return
+    setLiveSchools((prev) => {
+      const next = { ...prev }
+      for (const s of list) next[s.id] = s
+      return next
+    })
+  }
+
+  const hydrateLiveSchools = async () => {
+    try {
+      const res = await listMySchools()
+      rememberSchools((res.data ?? []).map(clientToSchool))
+    } catch {
+      /* school session without portfolio access — keep mock / remembered profile */
+    }
+  }
+
+  const schoolChoices = useMemo(() => {
+    const live = Object.values(liveSchools)
+    return live.length > 0 ? live : mockSchools
+  }, [liveSchools])
+
+  const school = useMemo(
+    () => liveSchools[schoolId] ?? mockSchools.find((s) => s.id === schoolId) ?? schoolChoices[0] ?? mockSchools[0],
+    [schoolId, liveSchools, schoolChoices],
+  )
+  /** Subscription tier for TierGate: live API plan unless a session upgrade override is set. */
   const plan: Tier = planOverride[schoolId] ?? school.plan
   const dir: 'ltr' | 'rtl' = RTL_LANGS.includes(lang) ? 'rtl' : 'ltr'
 
-  /** Apply the identity from /auth/me to console/role/view state. */
-  const applySession = (email: string, role: Role, isPlatform: boolean) => {
-    setUser({ name: email.split('@')[0], email, role, hue: isPlatform ? 250 : 210 })
-    setConsoleKind(isPlatform ? 'owner' : 'school')
+  /** Apply the identity from /auth/me to console/role/view state.
+   *  Platform operators and school founders (role owner) land on Owner Console. */
+  const applySession = (email: string, role: Role, isPlatformUser: boolean) => {
+    const ownerConsole = isPlatformUser || role === 'owner'
+    setUser({ name: email.split('@')[0], email, role, hue: isPlatformUser ? 250 : 210 })
+    setIsPlatform(isPlatformUser)
+    setConsoleKind(ownerConsole ? 'owner' : 'school')
     setRole(role)
     setOwnerViewing(false)
-    setView(isPlatform ? 'owner.dashboard' : 'school.dashboard')
+    setView(ownerConsole ? 'owner.dashboard' : 'school.dashboard')
     setLoggedIn(true)
   }
 
@@ -166,7 +207,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const finishLogin = async (email: string) => {
     const profile = await fetchMe()
     const role = ROLE_MAP[profile.roles[0]] ?? 'admin'
-    applySession(email, role, profile.is_platform === true)
+    const platform = profile.is_platform === true
+    applySession(email, role, platform)
+    // Load real tenant plan so school console gates match silver/gold/platinum.
+    if (!platform) {
+      await hydrateLiveSchools()
+      if (profile.tenant_id && isTenantGuid(profile.tenant_id)) {
+        setSchoolId(profile.tenant_id)
+      }
+    }
   }
 
   /** Shared busy/error wrapper for the auth flows. */
@@ -192,6 +241,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setLoggedIn(false)
       setUser(null)
       setOwnerViewing(false)
+      setLiveSchools({})
+      setPlanOverride({})
+      setSchoolId('grv')
       setView('school.dashboard')
       setMobileNav(false)
     }
@@ -205,7 +257,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }
   const clearIntent = () => setIntent(null)
 
-  const enterSchool = (id: string) => {
+  const enterSchool = async (id: string, profile?: School) => {
+    if (profile) rememberSchools([profile])
+    else if (isTenantGuid(id) && !liveSchools[id]) await hydrateLiveSchools()
+
+    // Real tenant UUIDs need a token switch for school owners; mock ids stay local-only.
+    if (isTenantGuid(id) && !isPlatform) {
+      try {
+        await switchSchool(id)
+      } catch {
+        /* same-tenant open still works without switch */
+      }
+    }
     setSchoolId(id)
     setConsoleKind('school')
     setOwnerViewing(true)
@@ -226,7 +289,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => { setOnAuthFailure(() => { tokenStore.clear(); logout() }) }, [])
 
   const value: AppState = {
-    loggedIn, user, consoleKind, role, schoolId, ownerViewingSchool, lang, dir, view, mobileNav,
+    loggedIn, user, consoleKind, role, isPlatform, schoolId, ownerViewingSchool, lang, dir, view, mobileNav,
     focus, intent,
     school, plan,
     students, addStudent,
@@ -237,7 +300,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     feePayments, addFeePayment,
     feeHeads, feeStructure, saveFeeStructure,
     authBusy, authError, clearAuthError, loginWithPassword,
-    logout, go, clearIntent, setSchoolId, enterSchool, exitToOwner, upgrade, setLang, setMobileNav,
+    logout, go, clearIntent, setSchoolId, enterSchool, schoolChoices, exitToOwner, upgrade, setLang, setMobileNav,
   }
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>

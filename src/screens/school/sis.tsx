@@ -1,6 +1,6 @@
 /* ============================================================
    SchoolMate — Students (SIS) list + Student 360 profile.
-   Phase 1 flagship screen. Frontend-only, mock data.
+   Phase 1 flagship screen. Live /students list + create.
    ============================================================ */
 import { useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
@@ -12,6 +12,8 @@ import {
 import { grades } from '@/data/mockDb'
 import { gateRole } from '@/lib/gating'
 import { useStudents, useStudent } from '@/api/hooks/useStudents'
+import { studentGuardianName } from '@/api/students'
+import { listStoredDocs, downloadStoredDoc, openStoredDoc } from '@/api/studentExtras'
 import {
   reportFor, classRank, attendanceMonths, fmtMoney,
   overallToppers, classToppers,
@@ -250,11 +252,11 @@ function StudentsScreen() {
       ),
     },
     {
-      key: 'guardian', label: 'Guardian', sortValue: (s) => s.guardian,
+      key: 'guardian', label: 'Guardian', sortValue: (s) => studentGuardianName(s) || s.guardian,
       render: (s) => (
         <div>
-          <div>{s.guardian}</div>
-          <div className="t-xs muted">{s.phone}</div>
+          <div>{studentGuardianName(s) || '—'}</div>
+          <div className="t-xs muted">{s.phone || '—'}</div>
         </div>
       ),
     },
@@ -362,18 +364,43 @@ function StatTile({ icon, label, value, color }: { icon: string; label: string; 
   )
 }
 
+function DetailRow({ label, value }: { label: string; value?: string | number | null }) {
+  const v = value === undefined || value === null || String(value).trim() === '' ? '—' : String(value)
+  return (
+    <div className="row ai-center jc-between gap12" style={{ padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+      <span className="muted t-sm">{label}</span>
+      <span className="fw6 t-sm" style={{ textAlign: 'right' }}>{v}</span>
+    </div>
+  )
+}
+
 function Student360() {
   const app = useApp()
   const toast = useToast()
-  const [tab, setTab] = useState('overview')
+  const [tab, setTab] = useState('details')
+  const editable = canEdit(app.role)
 
-  const { data: fetched } = useStudent(app.focus)
-  const stu = fetched ?? app.students.find((s) => s.id === app.focus) ?? app.students[0]
+  const { data: fetched, isLoading, isError } = useStudent(app.focus)
+  if (isLoading) {
+    return <div className="col ai-center jc-center gap12" style={{ minHeight: 240 }}><div className="t-sm muted">Loading student…</div></div>
+  }
+  if (isError || !fetched) {
+    return (
+      <div>
+        <Btn variant="ghost" icon="arrowLeft" onClick={() => app.go('school.sis')}>Back to students</Btn>
+        <Empty icon="user" title="Student not found" body="This student is not in the live SIS for this school." />
+      </div>
+    )
+  }
+  const stu = fetched
+  const guardian = studentGuardianName(stu) || stu.guardian
   const report = reportFor(stu)
   const rank = classRank(stu)
   const months = attendanceMonths(stu)
+  const docs = listStoredDocs(stu.id, stu)
 
   const tabs = [
+    { value: 'details', label: 'Details', icon: 'user' },
     { value: 'overview', label: 'Overview', icon: 'grid' },
     { value: 'academics', label: 'Academics', icon: 'cap' },
     { value: 'attendance', label: 'Attendance', icon: 'calendar' },
@@ -382,19 +409,10 @@ function Student360() {
     { value: 'timeline', label: 'Timeline', icon: 'clock' },
   ]
 
-  /* sample fee ledger derived from the student's status */
   const ledger = [
     { id: 'INV-2026-T1', label: 'Term 1 tuition', amount: 48000, paid: 48000, date: '12 Apr 2026' },
     { id: 'INV-2026-T2', label: 'Term 2 tuition', amount: 48000, paid: stu.feeStatus === 'paid' ? 48000 : stu.feeStatus === 'partial' ? 48000 - stu.feeDue : 0, date: stu.feeStatus === 'due' ? '— pending' : '18 Aug 2026' },
     { id: 'INV-2026-TR', label: 'Transport (annual)', amount: 18000, paid: 18000, date: '12 Apr 2026' },
-  ]
-
-  const docs = [
-    { name: 'Birth certificate', type: 'PDF', size: '212 KB', on: 'Verified' },
-    { name: 'Aadhaar card', type: 'PDF', size: '180 KB', on: 'Verified' },
-    { name: 'Previous report card', type: 'PDF', size: '344 KB', on: 'Verified' },
-    { name: 'Medical record', type: 'PDF', size: '96 KB', on: 'Pending' },
-    { name: 'Passport photo', type: 'JPG', size: '64 KB', on: 'Verified' },
   ]
 
   const timeline = [
@@ -405,35 +423,40 @@ function Student360() {
     { tone: 'var(--success)', title: 'Enrolled', body: 'Admission ' + stu.adm, time: '02 Apr 2025' },
   ]
 
+  const fmtSize = (n: number) => (n > 0 ? `${Math.max(1, Math.round(n / 1024))} KB` : '—')
+
   return (
     <div>
       <div className="row ai-center gap12" style={{ marginBottom: 16 }}>
         <Btn variant="ghost" icon="arrowLeft" onClick={() => app.go('school.sis')}>Back to students</Btn>
+        <Btn variant="ghost" icon="users" onClick={() => app.go('school.parents')}>Parents</Btn>
       </div>
 
-      {/* Header card */}
       <Card>
         <div className="row ai-center gap16 wrap jc-between">
           <div className="row ai-center gap16">
             <Avatar name={stu.name} hue={stu.avatarHue} size={68} />
             <div>
-              <div className="row ai-center gap8">
+              <div className="row ai-center gap8 wrap">
                 <h2 className="sm-pagehead-title" style={{ margin: 0 }}>{stu.name}</h2>
                 <Badge tone={stu.status === 'active' ? 'success' : 'neutral'}>{stu.status === 'active' ? 'Active' : 'Inactive'}</Badge>
               </div>
               <div className="row ai-center gap12 wrap muted t-sm" style={{ marginTop: 4 }}>
                 <span>{stu.adm}</span><span>·</span>
                 <span>Class {stu.cls} · Roll {stu.roll}</span><span>·</span>
-                <span>{stu.house} House</span><span>·</span>
-                <span>{stu.guardian} · {stu.phone}</span>
+                <span>{stu.house || '—'} House</span><span>·</span>
+                <span>{guardian || '—'} · {stu.phone || '—'}</span>
               </div>
             </div>
           </div>
-          <div className="row ai-center gap20 wrap">
+          <div className="row ai-center gap12 wrap">
             <StatTile icon="calendar" label="Attendance" value={stu.attendance + '%'} color={attColor(stu.attendance)} />
             <StatTile icon="cap" label={`Rank · ${rank.rank}/${rank.classSize}`} value={report.pct + '%'} color="var(--brand-600)" />
             <StatTile icon="rupee" label="Fee status" value={feeLabel[stu.feeStatus]} color={`var(--${feeTone[stu.feeStatus] === 'success' ? 'success' : feeTone[stu.feeStatus] === 'warning' ? 'warning' : 'danger'})`} />
-            <Btn variant="secondary" icon="message" onClick={() => toast.success('Message sent', `Notified ${stu.guardian}.`)}>Message</Btn>
+            {editable && (
+              <Btn variant="primary" icon="edit" onClick={() => app.go('school.sis.edit', { focus: stu.id })}>Edit</Btn>
+            )}
+            <Btn variant="secondary" icon="message" onClick={() => toast.success('Message sent', `Notified ${guardian || 'guardian'}.`)}>Message</Btn>
           </div>
         </div>
       </Card>
@@ -442,7 +465,61 @@ function Student360() {
         <Tabs value={tab} onChange={setTab} tabs={tabs} />
       </div>
 
-      {/* ---- Overview ---- */}
+      {tab === 'details' && (
+        <div className="sm-grid-2 gap16">
+          <Card>
+            <CardHead title="Student" icon="user" />
+            <div style={{ marginTop: 4 }}>
+              <DetailRow label="Admission no." value={stu.adm} />
+              <DetailRow label="Name" value={stu.name} />
+              <DetailRow label="Gender" value={stu.gender === 'F' ? 'Female' : 'Male'} />
+              <DetailRow label="Date of birth" value={stu.dob} />
+              <DetailRow label="Class / section" value={stu.cls} />
+              <DetailRow label="Roll" value={stu.roll} />
+              <DetailRow label="House" value={stu.house} />
+              <DetailRow label="Email" value={stu.email} />
+              <DetailRow label="Address" value={stu.address} />
+              <DetailRow label="Blood group" value={stu.bloodGroup} />
+              <DetailRow label="Religion" value={stu.religion} />
+              <DetailRow label="Category" value={stu.category} />
+              <DetailRow label="Caste" value={stu.caste} />
+              <DetailRow label="Mother tongue" value={stu.motherTongue} />
+              <DetailRow label="Languages" value={stu.languages} />
+              <DetailRow label="Last school" value={stu.lastSchool} />
+              <DetailRow label="Aadhaar" value={stu.aadhaar} />
+              <DetailRow label="Academic year" value={stu.academicYear} />
+              <DetailRow label="Admission date" value={stu.admissionDate} />
+            </div>
+          </Card>
+          <div className="col gap16">
+            <Card>
+              <CardHead title="Guardian / parents" icon="users" />
+              <div style={{ marginTop: 4 }}>
+                <DetailRow label="Guardian" value={guardian} />
+                <DetailRow label="Phone" value={stu.phone} />
+                <DetailRow label="Father" value={stu.father?.name} />
+                <DetailRow label="Father phone" value={stu.father?.phone} />
+                <DetailRow label="Father email" value={stu.father?.email} />
+                <DetailRow label="Father occupation" value={stu.father?.occupation} />
+                <DetailRow label="Mother" value={stu.mother?.name} />
+                <DetailRow label="Mother phone" value={stu.mother?.phone} />
+                <DetailRow label="Mother email" value={stu.mother?.email} />
+                <DetailRow label="Mother occupation" value={stu.mother?.occupation} />
+              </div>
+            </Card>
+            <Card>
+              <CardHead title="Fees & status" icon="rupee" />
+              <div style={{ marginTop: 4 }}>
+                <DetailRow label="Fee status" value={feeLabel[stu.feeStatus]} />
+                <DetailRow label="Outstanding" value={fmtMoney(stu.feeDue)} />
+                <DetailRow label="Attendance" value={`${stu.attendance}%`} />
+                <DetailRow label="Status" value={stu.status} />
+              </div>
+            </Card>
+          </div>
+        </div>
+      )}
+
       {tab === 'overview' && (
         <div className="sm-grid-2 gap16">
           <Card>
@@ -463,7 +540,6 @@ function Student360() {
         </div>
       )}
 
-      {/* ---- Academics ---- */}
       {tab === 'academics' && (
         <Card pad={false}>
           <div style={{ padding: 16 }}>
@@ -500,7 +576,6 @@ function Student360() {
         </Card>
       )}
 
-      {/* ---- Attendance ---- */}
       {tab === 'attendance' && (
         <Card>
           <CardHead title="Monthly attendance" sub={`Year average ${stu.attendance}%`} icon="calendar" />
@@ -513,7 +588,6 @@ function Student360() {
         </Card>
       )}
 
-      {/* ---- Fees ---- */}
       {tab === 'fees' && (
         <Card pad={false}>
           <div style={{ padding: 16 }}>
@@ -547,31 +621,63 @@ function Student360() {
         </Card>
       )}
 
-      {/* ---- Documents ---- */}
       {tab === 'documents' && (
         <Card>
-          <CardHead title="Documents" sub={`${docs.length} files on record`} icon="doc" action={<Btn variant="secondary" size="sm" icon="upload" onClick={() => toast.info('Upload', 'Choose a file to attach to this student.')}>Upload</Btn>} />
-          <div className="col gap8" style={{ marginTop: 8 }}>
-            {docs.map((d) => (
-              <div key={d.name} className="row ai-center jc-between" style={{ padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 10 }}>
-                <div className="row ai-center gap12">
-                  <span className="sm-card-ic"><Icon name="doc" size={16} /></span>
-                  <div>
-                    <div className="fw6">{d.name}</div>
-                    <div className="t-xs muted">{d.type} · {d.size}</div>
+          <CardHead
+            title="Documents"
+            sub={docs.length ? `${docs.length} file${docs.length === 1 ? '' : 's'} on this device` : 'No enrolment files yet'}
+            icon="doc"
+            action={editable ? (
+              <Btn variant="secondary" size="sm" icon="upload" onClick={() => app.go('school.sis.edit', { focus: stu.id })}>Add / replace</Btn>
+            ) : undefined}
+          />
+          {docs.length === 0 ? (
+            <Empty
+              icon="doc"
+              title="No documents"
+              body={editable ? 'Edit this student and upload birth certificate, Aadhaar, or photo to see them here.' : 'No documents were uploaded for this student.'}
+            />
+          ) : (
+            <div className="col gap8" style={{ marginTop: 8 }}>
+              {docs.map((d) => (
+                <div key={d.key + d.fileName} className="row ai-center jc-between" style={{ padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 10 }}>
+                  <div className="row ai-center gap12">
+                    <span className="sm-card-ic"><Icon name="doc" size={16} /></span>
+                    <div>
+                      <div className="fw6">{d.label}</div>
+                      <div className="t-xs muted">{d.fileName}{d.size ? ` · ${fmtSize(d.size)}` : ''}</div>
+                    </div>
+                  </div>
+                  <div className="row ai-center gap8">
+                    <Badge tone={d.dataUrl ? 'success' : 'neutral'}>{d.dataUrl ? 'Ready' : 'Name only'}</Badge>
+                    <Btn
+                      variant="ghost"
+                      size="sm"
+                      icon="eye"
+                      onClick={() => {
+                        if (!openStoredDoc(d)) toast.info('Preview unavailable', 'Re-upload this file from Edit student to view it.')
+                      }}
+                    >
+                      View
+                    </Btn>
+                    <Btn
+                      variant="secondary"
+                      size="sm"
+                      icon="download"
+                      onClick={() => {
+                        if (!downloadStoredDoc(d)) toast.info('Download unavailable', 'Re-upload this file from Edit student to download it.')
+                      }}
+                    >
+                      Download
+                    </Btn>
                   </div>
                 </div>
-                <div className="row ai-center gap8">
-                  <Badge tone={d.on === 'Verified' ? 'success' : 'warning'}>{d.on}</Badge>
-                  <Btn variant="ghost" size="sm" icon="download" onClick={() => toast.success('Downloading', d.name)}>Download</Btn>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </Card>
       )}
 
-      {/* ---- Timeline ---- */}
       {tab === 'timeline' && (
         <Card>
           <CardHead title="Activity timeline" sub="Recent events" icon="clock" />

@@ -1,15 +1,50 @@
 import { request, listRequest } from './client'
-import { snakeToCamel, camelToSnake } from './mapper'
+import { snakeToCamel } from './mapper'
+import { mergeStudentExtras } from './studentExtras'
 import type { Student, ListStudentsOpts } from '@/types'
 
 interface ListEnvelope { data: Record<string, unknown>[]; next_cursor: string | null }
 
+function cleanName(v: unknown): string {
+  const s = String(v ?? '').trim()
+  if (!s || s === '—' || s === '-') return ''
+  return s
+}
+
 /** Map one wire record (snake_case) to the UI `Student` shape.
- *  Generic casing covers fee_status/fee_due/avatar_hue; only adm/cls are renamed. */
+ *  API uses guardian_name / guardian_phone / attendance_pct — UI uses guardian / phone / attendance. */
 export function toStudent(wire: Record<string, unknown>): Student {
   const c = snakeToCamel<Record<string, unknown>>(wire)
-  const { admissionNo, classLabel, ...rest } = c
-  return { ...rest, adm: admissionNo, cls: classLabel } as unknown as Student
+  const {
+    admissionNo, classLabel, guardianName, guardianPhone, attendancePct,
+    ...rest
+  } = c
+  const guardian = cleanName(guardianName ?? rest.guardian)
+  const phone = String(guardianPhone ?? rest.phone ?? '').trim()
+  const attendance = Number(attendancePct ?? rest.attendance ?? 0)
+  const base = {
+    ...rest,
+    adm: admissionNo,
+    cls: classLabel,
+    guardian,
+    phone,
+    attendance,
+  } as unknown as Student
+  return mergeStudentExtras(base)
+}
+
+/** Prefer guardian name, then father/mother enrolment names. */
+export function studentGuardianName(s: Student): string {
+  return (
+    cleanName(s.guardian)
+    || cleanName(s.father?.name)
+    || cleanName(s.mother?.name)
+  )
+}
+
+/** Display label for Parents — never empty when a student exists. */
+export function studentParentLabel(s: Student): string {
+  return studentGuardianName(s) || (s.phone ? `Guardian · ${s.phone}` : `Parent of ${s.name}`)
 }
 
 export async function listStudents(opts: ListStudentsOpts = {}): Promise<Student[]> {
@@ -18,7 +53,6 @@ export async function listStudents(opts: ListStudentsOpts = {}): Promise<Student
   if (opts.grade && opts.grade !== 'all') query.grade = opts.grade
   if (opts.status && opts.status !== 'all') query.status = opts.status
   if (opts.fee && opts.fee !== 'all') query.fee = opts.fee
-  // next_cursor is read forward-compatibly but a single page is returned today.
   const env = await listRequest<ListEnvelope>('/students', { query })
   return env.data.map(toStudent)
 }
@@ -28,15 +62,58 @@ export async function getStudent(id: string): Promise<Student> {
   return toStudent(wire)
 }
 
-/** Map the UI `Student` to a snake_case POST body. `camelToSnake` leaves the
- *  single-token `adm`/`cls` as-is; rename them to their wire names explicitly. */
+/** Body for POST /students — only fields the SIS create contract accepts. */
 export function fromStudent(s: Student): Record<string, unknown> {
-  const snake = camelToSnake(s) as Record<string, unknown>
-  const { adm, cls, ...rest } = snake
-  return { ...rest, admission_no: adm, class_label: cls }
+  const guardianName = studentGuardianName(s) || null
+  const guardianPhone = String(s.phone ?? '').trim()
+    || String(s.father?.phone ?? '').trim()
+    || String(s.mother?.phone ?? '').trim()
+    || null
+  return {
+    admission_no: s.adm,
+    name: s.name,
+    gender: s.gender,
+    grade: s.grade,
+    section: s.section,
+    roll: s.roll,
+    guardian_name: guardianName,
+    guardian_phone: guardianPhone,
+    house: s.house || null,
+    avatar_hue: s.avatarHue ?? 0,
+    dob: s.dob || null,
+    email: s.email || null,
+    address: s.address || null,
+  }
+}
+
+/** Body for PUT /students/{id}. */
+export function fromStudentUpdate(s: Student): Record<string, unknown> {
+  return {
+    name: s.name,
+    grade: s.grade,
+    section: s.section,
+    roll: s.roll,
+    guardian_name: studentGuardianName(s) || null,
+    guardian_phone: String(s.phone ?? '').trim()
+      || String(s.father?.phone ?? '').trim()
+      || String(s.mother?.phone ?? '').trim()
+      || null,
+    house: s.house || null,
+    fee_status: s.feeStatus,
+    fee_due: s.feeDue,
+    status: s.status,
+  }
 }
 
 export async function createStudent(s: Student): Promise<Student> {
   const wire = await request<Record<string, unknown>>('/students', { method: 'POST', body: fromStudent(s) })
+  return toStudent(wire)
+}
+
+export async function updateStudent(id: string, s: Student): Promise<Student> {
+  const wire = await request<Record<string, unknown>>(`/students/${id}`, {
+    method: 'PATCH',
+    body: fromStudentUpdate(s),
+  })
   return toStudent(wire)
 }

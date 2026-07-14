@@ -18,7 +18,8 @@ const VIEWS: Record<string, ViewMeta> = {
   'owner.schools': { title: 'Schools', sub: 'Your tenants', phase: 4 },
   'owner.create': { title: 'Create school', sub: 'Onboard a new tenant', phase: 4 },
   'owner.reports': { title: 'Cross-school reports', sub: 'Compare across tenants', phase: 4 },
-  'owner.billing': { title: 'Subscriptions & billing', sub: 'Plans, invoices & revenue', phase: 4 },
+  'owner.revenue': { title: 'Fee collection', sub: 'School-wise student fee cash', phase: 4 },
+  'owner.billing': { title: 'Subscriptions & billing', sub: 'Plans, invoices & SaaS revenue', phase: 4 },
   'owner.users': { title: 'Users & roles', sub: 'Workspace team', phase: 4 },
   'owner.settings': { title: 'Owner settings', sub: 'Company, branding & policies', phase: 4 },
 
@@ -26,6 +27,8 @@ const VIEWS: Record<string, ViewMeta> = {
   'school.dashboard': { title: 'Dashboard', phase: 1 },
   'school.approvals': { title: 'Approvals', sub: 'Pending your action', phase: 1 },
   'school.sis': { title: 'Students (SIS)', phase: 1 },
+  'school.sis.add': { title: 'Add student', phase: 1 },
+  'school.sis.edit': { title: 'Edit student', phase: 1 },
   'school.student': { title: 'Student profile', phase: 1 },
 
   // People (Phase 3)

@@ -14,7 +14,8 @@ describe('AppProvider auth', () => {
   it('password login authenticates then loads role/tenant from /auth/me', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } })) // /auth/login
-      .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: 't1', roles: ['principal'] } }))) // /auth/me
+      .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: 't1', roles: ['principal'] } })) // /auth/me
+      .mockResolvedValueOnce(jsonResponse({ data: [] }))) // /me/schools
     const { result } = renderHook(() => useApp(), { wrapper })
     await act(async () => { await result.current.loginWithPassword('p@greenwood.edu', 'pw') })
     await waitFor(() => expect(result.current.loggedIn).toBe(true))
@@ -45,7 +46,8 @@ describe('AppProvider auth', () => {
   it('a non-platform account routes to the school console even with an @schoolmate.io email', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } }))
-      .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: 't1', roles: ['admin'], is_platform: false } })))
+      .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: 't1', roles: ['admin'], is_platform: false } }))
+      .mockResolvedValueOnce(jsonResponse({ data: [] })))
     const { result } = renderHook(() => useApp(), { wrapper })
     await act(async () => { await result.current.loginWithPassword('anil@schoolmate.io', 'pw') })
     await waitFor(() => expect(result.current.loggedIn).toBe(true))
@@ -56,34 +58,83 @@ describe('AppProvider auth', () => {
   it('an unknown backend role falls back to admin (no crash)', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } }))
-      .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: 't1', roles: ['school_admin'] } })))
+      .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: 't1', roles: ['school_admin'] } }))
+      .mockResolvedValueOnce(jsonResponse({ data: [] })))
     const { result } = renderHook(() => useApp(), { wrapper })
     await act(async () => { await result.current.loginWithPassword('admin@greenwood.edu', 'pw') })
     await waitFor(() => expect(result.current.loggedIn).toBe(true))
     expect(result.current.role).toBe('admin')
   })
 
-  it('a school.owner account routes to the school console as role owner', async () => {
+  it('a school.owner account routes to the owner console as role owner', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } }))
-      .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: 't1', roles: ['school.owner'], is_platform: false } })))
+      .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: 't1', roles: ['school.owner'], is_platform: false } }))
+      .mockResolvedValueOnce(jsonResponse({ data: [] })))
     const { result } = renderHook(() => useApp(), { wrapper })
     await act(async () => { await result.current.loginWithPassword('owner@greenwood.edu', 'pw') })
     await waitFor(() => expect(result.current.loggedIn).toBe(true))
     expect(result.current.role).toBe('owner')
-    expect(result.current.consoleKind).toBe('school')
-    expect(result.current.view).toBe('school.dashboard')
+    expect(result.current.consoleKind).toBe('owner')
+    expect(result.current.view).toBe('owner.dashboard')
+    expect(result.current.isPlatform).toBe(false)
+  })
+
+  it('school login applies silver/gold/platinum from /me/schools for gating', async () => {
+    const tenantId = '11111111-2222-3333-4444-555555555555'
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: tenantId, roles: ['admin'], is_platform: false } }))
+      .mockResolvedValueOnce(jsonResponse({
+        data: [{
+          id: tenantId, name: 'Silver High', slug: 'silver-high', country: 'IN', status: 'active',
+          plan_id: null, plan_name: 'Silver', tier: 'silver', mrr: 1000, students_count: 100, staff_count: 10,
+          storage_gb: 1, created: '2026-01-01', contact_name: null, contact_email: null, contact_phone: null,
+          address: null, health_score: 70,
+        }],
+      })))
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await act(async () => { await result.current.loginWithPassword('admin@silver.edu', 'pw') })
+    await waitFor(() => expect(result.current.loggedIn).toBe(true))
+    expect(result.current.plan).toBe('silver')
+    expect(result.current.school.name).toBe('Silver High')
   })
 
   it('logout clears the session and returns to the login screen', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } }))
       .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: 't1', roles: ['admin'] } }))
+      .mockResolvedValueOnce(jsonResponse({ data: [] })) // /me/schools hydrate
       .mockResolvedValueOnce(new Response(null, { status: 204 })))
     const { result } = renderHook(() => useApp(), { wrapper })
     await act(async () => { await result.current.loginWithPassword('admin@greenwood.edu', 'pw') })
     await waitFor(() => expect(result.current.loggedIn).toBe(true))
     await act(async () => { await result.current.logout() })
     expect(result.current.loggedIn).toBe(false)
+  })
+
+  it('enterSchool uses the portfolio school plan for feature gating', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    const goldSchool = {
+      id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      name: 'Gold Academy',
+      city: 'Pune',
+      plan: 'gold' as const,
+      students: 400,
+      staff: 40,
+      status: 'active' as const,
+      mrr: 50000,
+      attendance: 0,
+      fees: 80,
+      payroll: 0,
+      currency: 'INR',
+      tz: 'Asia/Kolkata',
+      logo: 'GA',
+      color: '#4f46e5',
+    }
+    await act(async () => { await result.current.enterSchool(goldSchool.id, goldSchool) })
+    expect(result.current.plan).toBe('gold')
+    expect(result.current.school.name).toBe('Gold Academy')
+    expect(result.current.consoleKind).toBe('school')
   })
 })

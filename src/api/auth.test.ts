@@ -16,6 +16,13 @@ describe('auth', () => {
     expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({ email: 'a@b.edu', password: 'pw' })
   })
 
+  it('login clears a stale tenant id so /auth/me is not sent the wrong X-Tenant-Id', async () => {
+    tokenStore.setTenantId('old-tenant')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } })))
+    await login('a@b.edu', 'pw')
+    expect(tokenStore.getTenantId()).toBeNull()
+  })
+
   it('login sends a mobile identifier as { phone }', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { access_token: 'a3', refresh_token: 'r3' } }))
     vi.stubGlobal('fetch', fetchMock)

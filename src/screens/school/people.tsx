@@ -1,6 +1,6 @@
 /* ============================================================
    SchoolMate — People hub: Teachers, Staff & support, Parents.
-   Phase 3 screens. Frontend-only, mock data.
+   Teachers/Staff/Parents from live APIs (Parents derived from /students).
    NOTE: per the design, calling/phone-call actions were removed —
    these screens only ever offer "Message", never a Call button.
    ============================================================ */
@@ -9,14 +9,16 @@ import { useApp, useToast } from '@/lib/hooks'
 import { can } from '@/lib/gating'
 import {
   PageHead, Card, Btn, Badge, Avatar, Search, Select,
-  Drawer, Icon, Empty, Progress, DataTable,
+  Drawer, Icon, Empty, Progress, DataTable, Spinner,
   type Column, type BadgeTone,
 } from '@/components/ui'
-import { students, depts } from '@/data/mockDb'
+import { depts } from '@/data/mockDb'
 import { fmtMoney } from '@/lib/format'
 import type { Teacher, Staff } from '@/types'
 import { useTeachers } from '@/api/hooks/useTeachers'
 import { useStaff } from '@/api/hooks/useStaff'
+import { useStudents } from '@/api/hooks/useStudents'
+import { studentParentLabel } from '@/api/students'
 
 /* ---------- shared helpers ---------- */
 const attColor = (v: number): string => (v >= 90 ? 'var(--success)' : v >= 80 ? 'var(--brand-600)' : v >= 75 ? 'var(--warning)' : 'var(--danger)')
@@ -380,7 +382,7 @@ function StaffScreen() {
 /* ============================================================
    ParentsScreen — derived from students (grouped by guardian)
    ============================================================ */
-interface Ward { name: string; cls: string }
+interface Ward { id: string; name: string; cls: string }
 interface Parent {
   id: string
   name: string
@@ -394,35 +396,45 @@ function ParentsScreen() {
   const app = useApp()
   const toast = useToast()
   const [q, setQ] = useState('')
+  const studentsQ = useStudents()
+  const students = studentsQ.data ?? []
 
+  const openWard = (id: string) => app.go('school.student', { focus: id })
   const message = (p: Parent) => toast.success('Message sent', `Notified ${p.name}.`)
 
   const parents = useMemo<Parent[]>(() => {
     const map = new Map<string, Parent>()
     students.forEach((s) => {
-      const key = s.guardian
+      const name = studentParentLabel(s)
+      const phone = (s.phone || s.father?.phone || s.mother?.phone || '').trim()
+      const key = `${name.toLowerCase()}|${phone}`
+      const ward: Ward = { id: s.id, name: s.name, cls: s.cls }
       const existing = map.get(key)
       if (existing) {
-        existing.wards.push({ name: s.name, cls: s.cls })
+        existing.wards.push(ward)
         existing.due += s.feeDue
       } else {
         map.set(key, {
           id: 'PAR-' + s.id,
-          name: s.guardian,
-          phone: s.phone,
+          name,
+          phone,
           hue: s.avatarHue,
-          wards: [{ name: s.name, cls: s.cls }],
+          wards: [ward],
           due: s.feeDue,
         })
       }
     })
     return Array.from(map.values())
-  }, [])
+  }, [students])
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
     if (!needle) return parents
-    return parents.filter((p) => p.name.toLowerCase().includes(needle))
+    return parents.filter((p) =>
+      p.name.toLowerCase().includes(needle)
+      || p.phone.includes(needle)
+      || p.wards.some((w) => w.name.toLowerCase().includes(needle)),
+    )
   }, [q, parents])
 
   const columns: Column<Parent>[] = [
@@ -442,18 +454,25 @@ function ParentsScreen() {
       key: 'wards', label: 'Wards', sortValue: (p) => p.wards.length,
       render: (p) => (
         <div className="col gap4">
-          {p.wards.map((w, i) => (
-            <div key={i} className="row ai-center gap6 t-sm">
-              <span className="fw6">{w.name}</span>
+          {p.wards.map((w) => (
+            <button
+              key={w.id}
+              type="button"
+              className="row ai-center gap6 t-sm"
+              style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', textAlign: 'left', color: 'inherit' }}
+              onClick={(e) => { e.stopPropagation(); openWard(w.id) }}
+              title="Open student profile"
+            >
+              <span className="fw6" style={{ color: 'var(--brand-600)', textDecoration: 'underline' }}>{w.name}</span>
               <Badge tone="neutral">{w.cls}</Badge>
-            </div>
+            </button>
           ))}
         </div>
       ),
     },
     {
       key: 'phone', label: 'Phone', sortValue: (p) => p.phone,
-      render: (p) => <span className="t-sm muted">{p.phone}</span>,
+      render: (p) => <span className="t-sm muted">{p.phone || '—'}</span>,
     },
     {
       key: 'due', label: 'Outstanding dues', align: 'right', sortValue: (p) => p.due,
@@ -462,10 +481,20 @@ function ParentsScreen() {
     {
       key: 'actions', label: '', align: 'right',
       render: (p) => (
-        <Btn variant="secondary" size="sm" icon="message" onClick={(e) => { e.stopPropagation(); message(p) }}>Message</Btn>
+        <div className="row ai-center gap8 jc-end">
+          <Btn variant="ghost" size="sm" icon="user" onClick={(e) => { e.stopPropagation(); openWard(p.wards[0].id) }}>Profile</Btn>
+          <Btn variant="secondary" size="sm" icon="message" onClick={(e) => { e.stopPropagation(); message(p) }}>Message</Btn>
+        </div>
       ),
     },
   ]
+
+  if (studentsQ.isLoading) {
+    return <div className="col ai-center jc-center gap12" style={{ minHeight: 240 }}><Spinner size={28} /><div className="t-sm muted">Loading parents…</div></div>
+  }
+  if (studentsQ.isError) {
+    return <Empty icon="alert" title="Could not load parents" body="Parents are derived from live students. Check your connection and try again." />
+  }
 
   return (
     <div>
@@ -473,7 +502,7 @@ function ParentsScreen() {
 
       <Card pad={false}>
         <div className="row ai-center gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
-          <Search value={q} onChange={setQ} placeholder="Search guardian name…" style={{ flex: 1, minWidth: 220 }} />
+          <Search value={q} onChange={setQ} placeholder="Search guardian, phone, or student…" style={{ flex: 1, minWidth: 220 }} />
         </div>
 
         <DataTable<Parent>
@@ -482,7 +511,8 @@ function ParentsScreen() {
           pageSize={10}
           rowKey={(p) => p.id}
           initialSort={{ key: 'name', dir: 'asc' }}
-          empty={<Empty icon="users" title="No parents match" body="Try a different guardian name." />}
+          onRowClick={(p) => openWard(p.wards[0].id)}
+          empty={<Empty icon="users" title="No parents yet" body="Add students to see parents here." />}
         />
       </Card>
     </div>

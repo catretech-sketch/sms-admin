@@ -17,6 +17,7 @@ const OWNER_NAV: NavGroup[] = [
   ] },
   { label: 'Insights', items: [
     { label: 'Cross-school reports', view: 'owner.reports', icon: 'trend' },
+    { label: 'Fee collection', view: 'owner.revenue', icon: 'rupee' },
     { label: 'Subscriptions & billing', view: 'owner.billing', icon: 'wallet' },
   ] },
   { label: 'Workspace', items: [

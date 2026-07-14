@@ -2,16 +2,21 @@
    SchoolMate — Owner console: Portfolio overview, Schools list
    (+ branded account report) and the 5-step Create-school wizard.
    ============================================================ */
-import { useMemo, useState, type ComponentType } from 'react'
+import { useMemo, useState, useEffect, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import {
   PageHead, Card, CardHead, Kpi, Btn, Badge, TierPill, Avatar, Search, Select, Segmented,
-  Field, Input, Modal, Icon, Empty, Donut, Bars, LineChart, Legend, DataTable,
-  type Column, type BadgeTone, DemoBadge,
+  Field, Input, Modal, Icon, Empty, Donut, HBars, Legend, DataTable, Spinner,
+  type Column, type BadgeTone,
 } from '@/components/ui'
-import { schools, TIERS, TIER_META } from '@/data/mockDb'
+import { TIERS, TIER_META } from '@/data/mockDb'
 import { fmtMoney, fmtNum } from '@/lib/format'
 import type { School, Tier } from '@/types'
+import { usePortfolioSchools, useOwnerPlans, useCreateSchool, useOwnerFeeSummary } from '@/api/hooks/useOwner'
+import { clientToSchool, slugify } from '@/api/ownerMap'
+import { ApiError } from '@/api/client'
+
+const FEE_COLORS = ['#4f46e5', '#0ea5e9', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#14b8a6']
 
 /* ============================================================
    Shared: student-strength-based per-student pricing bands
@@ -29,11 +34,6 @@ function priceBand(strength: number): [number, number, number] {
 }
 function rateFor(strength: number, tier: Tier): number {
   return priceBand(strength)[TIERS.indexOf(tier)]
-}
-function recommendedTier(strength: number): Tier {
-  if (strength <= 500) return 'silver'
-  if (strength <= 2000) return 'gold'
-  return 'platinum'
 }
 
 const STATUS_TONE: Record<School['status'], BadgeTone> = {
@@ -60,143 +60,184 @@ function fmtCompact(n: number): string {
    ============================================================ */
 function OwnerDashboard() {
   const app = useApp()
+  const { data: clients = [], isLoading, isError } = usePortfolioSchools(app.isPlatform)
+  const feeQ = useOwnerFeeSummary(true)
+  const schools = useMemo(() => clients.map(clientToSchool), [clients])
 
   const totals = useMemo(() => {
     const students = schools.reduce((a, s) => a + s.students, 0)
     const staff = schools.reduce((a, s) => a + s.staff, 0)
-    const mrr = schools.reduce((a, s) => a + s.mrr, 0)
-    const att = schools.reduce((a, s) => a + s.attendance, 0) / schools.length
-    return { students, staff, mrr, att: +att.toFixed(1) }
-  }, [])
+    return { students, staff }
+  }, [schools])
 
   const planCounts = useMemo(() => {
     const c: Record<Tier, number> = { silver: 0, gold: 0, platinum: 0 }
     schools.forEach((s) => { c[s.plan]++ })
     return c
-  }, [])
+  }, [schools])
 
-  const months = ['Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun']
-  /* synthetic monthly trend climbing to the live totals */
-  const mrrTrend = [0.86, 0.88, 0.91, 0.93, 0.96, 0.98, 1].map((f) => Math.round(totals.mrr * f))
-  const enrolTrend = [0.9, 0.92, 0.94, 0.95, 0.97, 0.99, 1].map((f) => Math.round(totals.students * f))
+  const feeTotals = feeQ.data?.totals
+  const feeSchools = feeQ.data?.schools ?? []
+  const feeCollected = Number(feeTotals?.collected ?? 0)
+  const feeOutstanding = Number(feeTotals?.outstanding ?? 0)
+  const feeRate = feeCollected + feeOutstanding > 0
+    ? Math.round((feeCollected / (feeCollected + feeOutstanding)) * 1000) / 10
+    : 0
+  const schoolsWithCash = feeSchools.filter((s) => Number(s.collected) > 0).length
 
-  const alerts = schools.filter((s) => s.status !== 'active' || s.fees < 70)
+  const feeDonut = useMemo(
+    () => feeSchools
+      .filter((s) => Number(s.collected) > 0)
+      .map((s, i) => ({ value: Number(s.collected), color: FEE_COLORS[i % FEE_COLORS.length], label: s.name })),
+    [feeSchools],
+  )
+  const feeBars = useMemo(
+    () => [...feeSchools]
+      .sort((a, b) => Number(b.collected) - Number(a.collected))
+      .map((s, i) => ({ value: Number(s.collected), label: s.name, color: FEE_COLORS[i % FEE_COLORS.length] })),
+    [feeSchools],
+  )
+  const outstandingBars = useMemo(
+    () => [...feeSchools]
+      .filter((s) => Number(s.outstanding) > 0)
+      .sort((a, b) => Number(b.outstanding) - Number(a.outstanding))
+      .map((s, i) => ({ value: Number(s.outstanding), label: s.name, color: FEE_COLORS[i % FEE_COLORS.length] })),
+    [feeSchools],
+  )
+
+  const alerts = schools.filter((s) => {
+    const row = feeSchools.find((f) => f.tenant_id === s.id)
+    const collected = Number(row?.collected ?? 0)
+    const outstanding = Number(row?.outstanding ?? 0)
+    if (outstanding > 0 && collected + outstanding > 0) {
+      return collected / (collected + outstanding) < 0.5
+    }
+    return outstanding > 0 && collected === 0
+  })
+
+  if (isLoading) {
+    return <div className="col ai-center jc-center gap12" style={{ minHeight: 280 }}><Spinner size={28} /><div className="t-sm muted">Loading portfolio…</div></div>
+  }
+  if (isError) {
+    return <Empty icon="alert" title="Could not load portfolio" body="Check your connection and try again." />
+  }
 
   return (
     <div className="col gap20">
       <PageHead
         title="Portfolio overview"
-        sub="Consolidated performance across all schools"
+        sub={app.isPlatform ? 'All schools on the platform' : 'School fee revenue across your schools'}
         actions={
           <div className="row gap8">
-            <DemoBadge />
+            <Btn icon="rupee" onClick={() => app.go('owner.revenue')}>Fee collection</Btn>
             <Btn icon="building" onClick={() => app.go('owner.schools')}>All schools</Btn>
             <Btn variant="primary" icon="plus" onClick={() => app.go('owner.create')}>Create school</Btn>
           </div>
         }
       />
 
-      {/* ---- KPI row ---- */}
       <div className="sm-kpi-grid">
         <Kpi
           icon="building" iconBg="var(--brand-50)" iconColor="var(--brand-600)"
           label="Total schools" value={fmtNum(schools.length)}
-          delta="1" deltaDir="up" foot={`${planCounts.platinum} Platinum · ${planCounts.gold} Gold · ${planCounts.silver} Silver`}
+          foot={`${planCounts.platinum} Platinum · ${planCounts.gold} Gold · ${planCounts.silver} Silver`}
         />
         <Kpi
           icon="users" iconBg="var(--info-bg)" iconColor="var(--info)"
           label="Total students" value={fmtNum(totals.students)}
-          delta="4.2%" deltaDir="up" foot={`${fmtNum(totals.staff)} staff across portfolio`}
-          spark={enrolTrend} sparkColor="var(--info)"
+          foot={`${fmtNum(totals.staff)} staff across portfolio`}
         />
         <Kpi
           icon="rupee" iconBg="var(--success-bg)" iconColor="var(--success)"
-          label="Total MRR" value={fmtMoney(totals.mrr)}
-          delta="6.1%" deltaDir="up" foot={`${fmtMoney(totals.mrr * 12)} annual run-rate`}
-          spark={mrrTrend} sparkColor="var(--success)"
+          label="School fee revenue" value={feeQ.isLoading ? '…' : fmtMoney(feeCollected)}
+          foot={feeQ.isError ? 'Could not load fees' : `${fmtNum(schoolsWithCash)} schools with cash this period`}
         />
         <Kpi
-          icon="check" iconBg="var(--warning-bg)" iconColor="var(--warning)"
-          label="Avg attendance" value={totals.att + '%'}
-          delta="0.4%" deltaDir="up" foot="Weighted across active schools"
+          icon="alert" iconBg="var(--warning-bg)" iconColor="var(--warning)"
+          label="Fees outstanding" value={feeQ.isLoading ? '…' : fmtMoney(feeOutstanding)}
+          foot={feeQ.isError ? '—' : `${feeRate}% collection rate`}
         />
       </div>
 
-      {/* ---- Trend + plan distribution ---- */}
       <div className="sm-grid-2">
         <Card>
-          <CardHead title="MRR & enrolment trend" sub="Last 7 months · portfolio-wide" icon="trend" />
+          <CardHead title="School revenue by school" sub="Student fees collected this period" icon="trend"
+            action={<Btn size="sm" onClick={() => app.go('owner.revenue')}>Details</Btn>} />
           <div style={{ marginTop: 12 }}>
-            <LineChart
-              series={[
-                { data: mrrTrend, color: 'var(--success)', label: 'MRR' },
-                { data: enrolTrend, color: 'var(--info)', label: 'Students' },
-              ]}
-              labels={months}
-              yFmt={(v) => fmtCompact(v)}
-            />
-          </div>
-          <div style={{ marginTop: 12 }}>
-            <Legend items={[
-              { color: 'var(--success)', label: 'MRR (₹)' },
-              { color: 'var(--info)', label: 'Students' },
-            ]} />
+            {feeQ.isLoading ? (
+              <div className="col ai-center gap8" style={{ minHeight: 160 }}><Spinner size={24} /></div>
+            ) : feeBars.length === 0 ? (
+              <Empty icon="rupee" title="No fee cash yet" body="Payments posted in your schools show up here." />
+            ) : (
+              <HBars data={feeBars} labelWidth={160} valueFmt={(v) => fmtCompact(v)} />
+            )}
           </div>
         </Card>
 
         <Card>
-          <CardHead title="Plan distribution" sub="Schools by subscription tier" icon="layers" />
+          <CardHead title="Fee collected share" sub="Pie by school (cash this period)" icon="layers"
+            action={<Btn size="sm" onClick={() => app.go('owner.revenue')}>Fee collection</Btn>} />
           <div className="row ai-center jc-between gap16 wrap" style={{ marginTop: 12 }}>
-            <Donut
-              segments={TIERS.map((t) => ({ value: planCounts[t], color: TIER_META[t].color, label: TIER_META[t].label }))}
-              size={148} thickness={18}
-              center={
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: 26, fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1 }}>{schools.length}</div>
-                  <div className="t-xs muted3" style={{ marginTop: 2 }}>schools</div>
+            {feeQ.isLoading ? (
+              <div className="col ai-center gap8" style={{ minHeight: 148 }}><Spinner size={24} /></div>
+            ) : feeDonut.length === 0 ? (
+              <Empty icon="rupee" title="No collection to chart" body="When schools take fee payments, the pie appears here." />
+            ) : (
+              <>
+                <Donut
+                  segments={feeDonut}
+                  size={148} thickness={18}
+                  center={
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1 }}>{fmtCompact(feeCollected)}</div>
+                      <div className="t-xs muted3" style={{ marginTop: 2 }}>collected</div>
+                    </div>
+                  }
+                />
+                <div className="col gap12" style={{ flex: 1, minWidth: 160 }}>
+                  <Legend items={feeDonut.map((d) => ({ color: d.color, label: d.label }))} />
                 </div>
-              }
-            />
-            <div className="col gap12" style={{ flex: 1, minWidth: 160 }}>
-              <Legend items={TIERS.map((t) => ({ color: TIER_META[t].color, label: `${TIER_META[t].label} — ${planCounts[t]}` }))} />
-              <div className="t-sm muted">Platinum tenants drive the largest share of MRR.</div>
-            </div>
+              </>
+            )}
           </div>
         </Card>
       </div>
 
-      {/* ---- Per-school revenue + alerts ---- */}
       <div className="sm-grid-2">
         <Card>
-          <CardHead title="Revenue by school" sub="Monthly recurring revenue" icon="rupee" />
+          <CardHead title="Outstanding by school" sub="Open student fee invoices" icon="alert"
+            action={<Btn size="sm" onClick={() => app.go('owner.revenue')}>Fee collection</Btn>} />
           <div style={{ marginTop: 12 }}>
-            <Bars
-              data={schools.map((s) => ({ value: s.mrr, label: s.logo, color: s.color }))}
-              h={160} valueFmt={(v) => fmtCompact(v)}
-            />
+            {feeQ.isLoading ? (
+              <div className="col ai-center gap8" style={{ minHeight: 160 }}><Spinner size={24} /></div>
+            ) : outstandingBars.length === 0 ? (
+              <Empty icon="checkCircle" title="Nothing outstanding" body="No open fee invoices across your schools." />
+            ) : (
+              <HBars data={outstandingBars} labelWidth={160} valueFmt={(v) => fmtCompact(v)} />
+            )}
           </div>
         </Card>
 
         <Card>
-          <CardHead title="Attention needed" sub="Trials, billing & low collection" icon="alert" action={<Badge tone="warning">{alerts.length}</Badge>} />
+          <CardHead title="Attention needed" sub="Low school fee collection" icon="alert" action={<Badge tone="warning">{alerts.length}</Badge>} />
           {alerts.length === 0 ? (
-            <Empty icon="checkCircle" title="All healthy" body="No schools need attention right now." />
+            <Empty icon="checkCircle" title="All healthy" body="No schools need fee-collection attention right now." />
           ) : (
             <div className="col gap12" style={{ marginTop: 12 }}>
               {alerts.map((s) => {
-                const reason = s.status === 'past_due' ? 'Payment past due'
-                  : s.status === 'trial' ? 'On trial — convert to paid'
-                    : `Low fee collection — ${s.fees}%`
-                const tone: BadgeTone = s.status === 'past_due' ? 'danger' : s.status === 'trial' ? 'info' : 'warning'
+                const row = feeSchools.find((f) => f.tenant_id === s.id)
+                const collected = Number(row?.collected ?? 0)
+                const outstanding = Number(row?.outstanding ?? 0)
+                const rate = collected + outstanding > 0 ? Math.round((collected / (collected + outstanding)) * 100) : 0
                 return (
                   <div key={s.id} className="row ai-center gap12">
                     <Avatar name={s.logo} size={34} style={{ background: s.color, borderRadius: 9 }} />
                     <div style={{ flex: 1 }}>
                       <div className="t-md fw6">{s.name}</div>
-                      <div className="t-xs muted3">{s.city}</div>
+                      <div className="t-xs muted3">{fmtMoney(outstanding)} outstanding</div>
                     </div>
-                    <Badge tone={tone}>{reason}</Badge>
-                    <Btn size="sm" onClick={() => app.enterSchool(s.id)}>Open</Btn>
+                    <Badge tone="warning">Low fee collection — {rate}%</Badge>
+                    <Btn size="sm" onClick={() => void app.enterSchool(s.id, s)}>Open</Btn>
                   </div>
                 )
               })}
@@ -214,6 +255,8 @@ function OwnerDashboard() {
 function OwnerSchools() {
   const app = useApp()
   const toast = useToast()
+  const { data: clients = [], isLoading, isError } = usePortfolioSchools(app.isPlatform)
+  const schoolsList = useMemo(() => clients.map(clientToSchool), [clients])
   const [q, setQ] = useState('')
   const [plan, setPlan] = useState('all')
   const [status, setStatus] = useState('all')
@@ -222,13 +265,13 @@ function OwnerSchools() {
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
-    return schools.filter((s) => {
+    return schoolsList.filter((s) => {
       if (plan !== 'all' && s.plan !== plan) return false
       if (status !== 'all' && s.status !== status) return false
       if (needle && !(s.name.toLowerCase().includes(needle) || s.city.toLowerCase().includes(needle))) return false
       return true
     })
-  }, [q, plan, status])
+  }, [schoolsList, q, plan, status])
 
   const columns: Column<School>[] = [
     {
@@ -246,29 +289,35 @@ function OwnerSchools() {
     { key: 'plan', label: 'Plan', sortValue: (s) => s.plan, render: (s) => <TierPill plan={s.plan} /> },
     { key: 'students', label: 'Students', align: 'right', sortValue: (s) => s.students, render: (s) => fmtNum(s.students) },
     { key: 'staff', label: 'Staff', align: 'right', sortValue: (s) => s.staff, render: (s) => fmtNum(s.staff) },
-    { key: 'attendance', label: 'Attendance', align: 'right', sortValue: (s) => s.attendance, render: (s) => s.attendance + '%' },
-    { key: 'fees', label: 'Fees %', align: 'right', sortValue: (s) => s.fees, render: (s) => <span style={{ color: s.fees < 70 ? 'var(--warning)' : undefined }}>{s.fees}%</span> },
+    { key: 'fees', label: 'Health', align: 'right', sortValue: (s) => s.fees, render: (s) => <span style={{ color: s.fees < 70 ? 'var(--warning)' : undefined }}>{s.fees}</span> },
     { key: 'mrr', label: 'MRR', align: 'right', sortValue: (s) => s.mrr, render: (s) => fmtMoney(s.mrr, s.currency) },
     { key: 'status', label: 'Status', sortValue: (s) => s.status, render: (s) => <Badge tone={STATUS_TONE[s.status]}>{STATUS_LABEL[s.status]}</Badge> },
     {
       key: 'actions', label: '', align: 'right',
       render: (s) => (
         <div className="row gap6 jc-end">
-          {s.plan !== 'platinum' && (
+          {app.isPlatform && s.plan !== 'platinum' && (
             <Btn size="sm" variant="secondary" icon="sparkle" onClick={() => setUpgrade(s)}>Upgrade</Btn>
           )}
-          <Btn size="sm" variant="primary" icon="arrowRight" onClick={() => app.enterSchool(s.id)}>Open</Btn>
+          <Btn size="sm" variant="primary" icon="arrowRight" onClick={() => void app.enterSchool(s.id, s)}>Open</Btn>
           <Btn size="sm" icon="doc" onClick={() => setReport(s)}>Account report</Btn>
         </div>
       ),
     },
   ]
 
+  if (isLoading) {
+    return <div className="col ai-center jc-center gap12" style={{ minHeight: 280 }}><Spinner size={28} /><div className="t-sm muted">Loading schools…</div></div>
+  }
+  if (isError) {
+    return <Empty icon="alert" title="Could not load schools" body="Check your connection and try again." />
+  }
+
   return (
     <div className="col gap20">
       <PageHead
         title="Schools"
-        sub={`${schools.length} tenants in your portfolio`}
+        sub={`${schoolsList.length} ${schoolsList.length === 1 ? 'school' : 'schools'} in your portfolio`}
         actions={<Btn variant="primary" icon="plus" onClick={() => app.go('owner.create')}>Create school</Btn>}
       />
 
@@ -303,7 +352,7 @@ function OwnerSchools() {
               <Btn size="sm" icon="download" onClick={() => { toast.success('Export started', `${selected.length} schools queued for export.`); clear() }}>Export</Btn>
             </>
           )}
-          empty={<Empty icon="building" title="No schools match" body="Try adjusting your search or filters." />}
+          empty={<Empty icon="building" title="No schools match" body="Try adjusting your search or create a school." />}
         />
       </Card>
 
@@ -485,7 +534,7 @@ function ReportTile({ label, value, sub }: { label: string; value: React.ReactNo
 /* ============================================================
    3) Create-school wizard (5 steps)
    ============================================================ */
-const WIZARD_STEPS = ['Basics', 'Admin contact', 'Plan & tier', 'Modules', 'Review']
+const WIZARD_STEPS = ['Basics', 'Admin contact', 'Select plan', 'Modules', 'Review']
 
 const TIMEZONES = ['Asia/Kolkata', 'Asia/Dubai', 'Asia/Singapore', 'Europe/London', 'America/New_York']
 
@@ -516,23 +565,60 @@ interface WizardData {
   adminPhone: string
   strength: number
   tier: Tier
+  planId: string
   cycle: BillingCycle
   modules: Set<string>
+}
+
+function planTier(plan: { tier: string } | undefined): Tier {
+  const t = (plan?.tier ?? 'gold').toLowerCase()
+  return (TIERS as readonly string[]).includes(t) ? (t as Tier) : 'gold'
+}
+
+function estimatePlanAmount(plan: import('@/api/ownerTypes').Plan, strength: number): number {
+  if (plan.pricing === 'per_student') {
+    const rate = Number(plan.per_student) || 0
+    const min = Number(plan.min_students) || 0
+    const seats = Math.max(strength, min, 1)
+    return rate * seats
+  }
+  return Number(plan.price) || 0
 }
 
 function CreateSchoolWizard() {
   const app = useApp()
   const toast = useToast()
+  const plansQuery = useOwnerPlans(app.isPlatform)
+  const createMut = useCreateSchool(app.isPlatform)
+  const publishedPlans = plansQuery.data ?? []
   const [step, setStep] = useState(0)
   const [data, setData] = useState<WizardData>({
     name: '', city: '', tz: 'Asia/Kolkata',
-    adminName: '', adminEmail: '', adminPhone: '',
-    strength: 800, tier: 'gold', cycle: 'yearly',
+    adminName: app.user?.name ?? '', adminEmail: app.user?.email ?? '', adminPhone: '',
+    strength: 800, tier: 'gold', planId: '', cycle: 'yearly',
     modules: new Set(['sis', 'attendance', 'exams', 'fees', 'communication']),
   })
 
+  // Default to the first published plan once catalog loads.
+  useEffect(() => {
+    if (data.planId || publishedPlans.length === 0) return
+    const first = publishedPlans[0]
+    setData((d) => ({ ...d, planId: first.id, tier: planTier(first) }))
+  }, [publishedPlans, data.planId])
+
+  const selectedPlan = publishedPlans.find((p) => p.id === data.planId) ?? publishedPlans[0]
+
   const set = <K extends keyof WizardData>(key: K, value: WizardData[K]) =>
     setData((d) => ({ ...d, [key]: value }))
+
+  const selectPlan = (planId: string) => {
+    const plan = publishedPlans.find((p) => p.id === planId)
+    setData((d) => ({
+      ...d,
+      planId,
+      tier: planTier(plan),
+    }))
+  }
 
   const toggleModule = (key: string) =>
     setData((d) => {
@@ -543,18 +629,55 @@ function CreateSchoolWizard() {
 
   const canNext = (() => {
     if (step === 0) return data.name.trim() !== '' && data.city.trim() !== ''
-    if (step === 1) return data.adminName.trim() !== '' && data.adminEmail.trim() !== ''
-    if (step === 2) return data.strength > 0
+    if (step === 1) return app.isPlatform
+      ? data.adminName.trim() !== '' && data.adminEmail.trim() !== ''
+      : true
+    if (step === 2) return data.strength > 0 && !!data.planId && publishedPlans.length > 0
     return true
   })()
 
-  const annual = data.strength * rateFor(data.strength, data.tier)
+  const annual = selectedPlan
+    ? estimatePlanAmount(selectedPlan, data.strength)
+    : data.strength * rateFor(data.strength, data.tier)
   const cycleMeta = CYCLE_META[data.cycle]
   const cyclePrice = Math.round(annual / cycleMeta.div)
 
-  const create = () => {
-    toast.success('School created', `${data.name} is ready — ${TIER_META[data.tier].label} plan · ${fmtMoney(cyclePrice)}${cycleMeta.per} (${cycleMeta.label.toLowerCase()}).`)
-    app.go('owner.schools')
+  const create = async () => {
+    const planId = data.planId || selectedPlan?.id
+    if (!planId) {
+      toast.danger('No plan available', 'Catre admin must publish a plan before you can create a school.')
+      return
+    }
+    try {
+      const slug = slugify(data.name)
+      if (app.isPlatform) {
+        await createMut.mutateAsync({
+          name: data.name.trim(),
+          slug,
+          country: data.city.trim(),
+          admin_name: data.adminName.trim(),
+          admin_email: data.adminEmail.trim(),
+          admin_phone: data.adminPhone.trim() || undefined,
+          plan_id: planId,
+          trial_days: 14,
+        })
+      } else {
+        await createMut.mutateAsync({
+          name: data.name.trim(),
+          slug,
+          country: data.city.trim(),
+          plan_id: planId,
+          admin_name: data.adminName.trim() || app.user?.name,
+          admin_phone: data.adminPhone.trim() || undefined,
+          trial_days: 14,
+        })
+      }
+      const planLabel = selectedPlan?.name ?? TIER_META[data.tier].label
+      toast.success('School created', `${data.name} is on trial with ${planLabel}. Catre admin can activate the client to make the plan active.`)
+      app.go('owner.schools')
+    } catch (e) {
+      toast.danger('Could not create school', e instanceof ApiError ? e.message : 'Try again.')
+    }
   }
 
   return (
@@ -626,7 +749,18 @@ function CreateSchoolWizard() {
           </div>
         )}
 
-        {step === 2 && <PlanStep data={data} onStrength={(v) => set('strength', v)} onTier={(t) => set('tier', t)} onCycle={(c) => set('cycle', c)} />}
+        {step === 2 && (
+          <PlanStep
+            data={data}
+            plans={publishedPlans}
+            loading={plansQuery.isLoading}
+            error={plansQuery.isError}
+            selectedPlan={selectedPlan}
+            onStrength={(v) => set('strength', v)}
+            onSelectPlan={selectPlan}
+            onCycle={(c) => set('cycle', c)}
+          />
+        )}
 
         {step === 3 && (
           <div className="col gap16">
@@ -661,7 +795,7 @@ function CreateSchoolWizard() {
           </div>
         )}
 
-        {step === 4 && <ReviewStep data={data} />}
+        {step === 4 && <ReviewStep data={data} plan={selectedPlan} />}
 
         {/* nav buttons + running price summary */}
         <div className="sm-divider" style={{ margin: '20px 0 16px' }} />
@@ -669,14 +803,16 @@ function CreateSchoolWizard() {
           <Btn icon="arrowLeft" disabled={step === 0} onClick={() => setStep((s) => Math.max(0, s - 1))}>Back</Btn>
           <div className="row ai-center gap8 t-sm muted" style={{ marginLeft: 'auto' }}>
             <TierPill plan={data.tier} />
+            <span className="t-xs">{selectedPlan?.name ?? 'No plan'}</span>
             <span>{fmtNum(data.strength)} students ·</span>
             <span className="fw7" style={{ color: 'var(--text)' }}>{fmtMoney(cyclePrice)}{cycleMeta.per}</span>
-            {data.cycle !== 'yearly' && <span className="t-xs muted3">({fmtMoney(annual)}/yr)</span>}
           </div>
           {step < WIZARD_STEPS.length - 1 ? (
             <Btn variant="primary" iconRight="arrowRight" disabled={!canNext} onClick={() => setStep((s) => s + 1)}>Next</Btn>
           ) : (
-            <Btn variant="primary" icon="check" onClick={create}>Create school · {fmtMoney(cyclePrice)}{cycleMeta.per}</Btn>
+            <Btn variant="primary" icon="check" disabled={createMut.isPending || !data.planId} onClick={() => void create()}>
+              {createMut.isPending ? 'Creating…' : <>Create school · {fmtMoney(cyclePrice)}{cycleMeta.per}</>}
+            </Btn>
           )}
         </div>
       </Card>
@@ -684,71 +820,107 @@ function CreateSchoolWizard() {
   )
 }
 
-/* ---------- Wizard step 3: plan & tier driven by student strength ---------- */
-function PlanStep({ data, onStrength, onTier, onCycle }: { data: WizardData; onStrength: (v: number) => void; onTier: (t: Tier) => void; onCycle: (c: BillingCycle) => void }) {
+/* ---------- Wizard step 3: pick a published Catre plan ---------- */
+function PlanStep({
+  data, plans, loading, error, selectedPlan, onStrength, onSelectPlan, onCycle,
+}: {
+  data: WizardData
+  plans: import('@/api/ownerTypes').Plan[]
+  loading: boolean
+  error?: boolean
+  selectedPlan: import('@/api/ownerTypes').Plan | undefined
+  onStrength: (v: number) => void
+  onSelectPlan: (planId: string) => void
+  onCycle: (c: BillingCycle) => void
+}) {
   const strength = data.strength
-  const band = priceBand(strength)
-  const rec = recommendedTier(strength)
-  const tierIdx = TIERS.indexOf(data.tier)
-  const nextTier: Tier | null = tierIdx < TIERS.length - 1 ? TIERS[tierIdx + 1] : null
   const cm = CYCLE_META[data.cycle]
-  const annualSel = strength * rateFor(strength, data.tier)
-  const cycleSel = Math.round(annualSel / cm.div)
+  const amount = selectedPlan ? estimatePlanAmount(selectedPlan, strength) : 0
+  const cycleSel = Math.round(amount / cm.div)
+
+  if (loading) {
+    return (
+      <div className="col ai-center jc-center gap12" style={{ minHeight: 200 }}>
+        <Spinner size={28} />
+        <div className="t-sm muted">Loading published plans…</div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <Empty
+        icon="alert"
+        title="Could not load plans"
+        body="Check your connection, then reopen Create school. School owners need GET /me/plans."
+      />
+    )
+  }
+
+  if (plans.length === 0) {
+    return (
+      <Empty
+        icon="layers"
+        title="No published plans"
+        body="Ask Catre admin to publish a plan (visibility public/published). Only those plans appear here."
+      />
+    )
+  }
 
   return (
     <div className="col gap16">
-      <CardHead title="Plan & tier" sub="Pricing scales with expected student strength" icon="rupee" />
+      <CardHead
+        title="Select published plan"
+        sub="Plans published by Catre admin. School starts on trial; plan becomes active when Catre activates the client."
+        icon="rupee"
+      />
 
       <div className="sm-grid-2">
-        <Field label="Expected student strength" hint="Larger schools get volume discounts on the per-student rate.">
+        <Field label="Expected student strength" hint="Used for per-student plan estimates.">
           <Input icon="users" type="number" min={1} value={strength}
             onChange={(e) => onStrength(Math.max(0, parseInt(e.target.value || '0', 10)))} />
         </Field>
-        <div className="col jc-center">
-          <div className="t-xs muted3">Current pricing band</div>
-          <div className="t-md fw6">
-            {strength <= 500 ? '≤ 500 students' : strength <= 1500 ? '501–1,500 students' : strength <= 3000 ? '1,501–3,000 students' : '3,000+ students'}
-          </div>
-          <div className="t-xs muted3" style={{ marginTop: 2 }}>Silver ₹{band[0]} · Gold ₹{band[1]} · Platinum ₹{band[2]} per student/yr</div>
-        </div>
+        <Field label="Billing cycle" hint="Display only — billing starts when Catre activates the client.">
+          <Segmented
+            value={data.cycle}
+            onChange={(v) => onCycle(v as BillingCycle)}
+            options={(Object.keys(CYCLE_META) as BillingCycle[]).map((c) => ({ value: c, label: CYCLE_META[c].label }))}
+          />
+        </Field>
       </div>
 
-      <Field label="Billing cycle" hint="Charged per student; the cycle only changes how often you're billed.">
-        <Segmented
-          value={data.cycle}
-          onChange={(v) => onCycle(v as BillingCycle)}
-          options={(Object.keys(CYCLE_META) as BillingCycle[]).map((c) => ({ value: c, label: CYCLE_META[c].label }))}
-        />
-      </Field>
-
       <div className="sm-grid-3">
-        {TIERS.map((t) => {
-          const rate = rateFor(strength, t)
-          const total = strength * rate
+        {plans.map((p) => {
+          const tier = planTier(p)
+          const m = TIER_META[tier]
+          const total = estimatePlanAmount(p, strength)
           const cyclePrice = Math.round(total / cm.div)
-          const selected = data.tier === t
-          const m = TIER_META[t]
+          const selected = data.planId === p.id
+          const accent = p.color || m.color
+          const rateLabel = p.pricing === 'per_student'
+            ? `₹${Number(p.per_student) || 0}/student`
+            : `${fmtMoney(Number(p.price) || 0)} flat`
           return (
-            <div key={t}
+            <div key={p.id}
               className="sm-card pad col gap10"
-              style={{ cursor: 'pointer', borderColor: selected ? m.color : undefined, borderWidth: selected ? 2 : undefined }}
-              onClick={() => onTier(t)}
+              style={{ cursor: 'pointer', borderColor: selected ? accent : undefined, borderWidth: selected ? 2 : undefined }}
+              onClick={() => onSelectPlan(p.id)}
             >
-              <div className="row ai-center jc-between">
-                <TierPill plan={t} size="md" />
-                {rec === t && <Badge tone="success" icon="sparkle">Recommended</Badge>}
+              <div className="row ai-center jc-between gap8 wrap">
+                <div className="t-md fw7">{p.name}</div>
+                <TierPill plan={tier} size="md" />
               </div>
+              {p.description && <div className="t-xs muted3">{p.description}</div>}
               <div>
                 <div className="row ai-end gap6">
                   <div style={{ fontSize: 24, fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1 }}>{fmtMoney(cyclePrice)}</div>
                   <div className="t-xs muted3" style={{ marginBottom: 2 }}>{cm.per}</div>
                 </div>
                 <div className="t-xs muted3" style={{ marginTop: 3 }}>
-                  {data.cycle === 'yearly' ? `₹${rate}/student/yr` : `${fmtMoney(total)}/yr · ₹${rate}/student`}
+                  {rateLabel} · {p.period || 'monthly'} · published
                 </div>
               </div>
-              <div className="t-xs muted">{fmtNum(strength)} students × ₹{rate} = {fmtMoney(total)}/yr</div>
-              <div className="row ai-center gap6 t-sm" style={{ color: selected ? m.color : 'var(--text-3)' }}>
+              <div className="row ai-center gap6 t-sm" style={{ color: selected ? accent : 'var(--text-3)' }}>
                 <Icon name={selected ? 'checkCircle' : 'plus'} size={15} />
                 {selected ? 'Selected' : 'Choose plan'}
               </div>
@@ -760,30 +932,19 @@ function PlanStep({ data, onStrength, onTier, onCycle }: { data: WizardData; onS
       <div className="sm-card pad row ai-center gap10 wrap" style={{ background: 'var(--brand-50)' }}>
         <Icon name="rupee" size={18} style={{ color: 'var(--brand-600)' }} />
         <span className="t-md fw6">
-          {cm.label} · {fmtMoney(cycleSel)}{cm.per}
-          {data.cycle !== 'yearly' && <span className="t-sm muted"> ({fmtMoney(annualSel)}/yr)</span>}
+          {selectedPlan?.name ?? 'Plan'} · {cm.label} · {fmtMoney(cycleSel)}{cm.per}
         </span>
-        {nextTier ? (
-          <Btn
-            size="sm" variant="secondary" icon="sparkle" style={{ marginLeft: 'auto' }}
-            onClick={() => onTier(nextTier)}
-          >
-            Upgrade to {TIER_META[nextTier].label} (+{fmtMoney(strength * rateFor(strength, nextTier) - strength * rateFor(strength, data.tier))}/yr)
-          </Btn>
-        ) : (
-          <Badge tone="success" icon="checkCircle" style={{ marginLeft: 'auto' }}>Top tier selected</Badge>
-        )}
+        <Badge tone="info" style={{ marginLeft: 'auto' }}>Active after Catre activates client</Badge>
       </div>
     </div>
   )
 }
 
 /* ---------- Wizard step 5: review ---------- */
-function ReviewStep({ data }: { data: WizardData }) {
-  const rate = rateFor(data.strength, data.tier)
-  const annual = data.strength * rate
+function ReviewStep({ data, plan }: { data: WizardData; plan: import('@/api/ownerTypes').Plan | undefined }) {
+  const amount = plan ? estimatePlanAmount(plan, data.strength) : data.strength * rateFor(data.strength, data.tier)
   const cm = CYCLE_META[data.cycle]
-  const cyclePrice = Math.round(annual / cm.div)
+  const cyclePrice = Math.round(amount / cm.div)
   const rows: { label: string; value: React.ReactNode }[] = [
     { label: 'School name', value: data.name || '—' },
     { label: 'City', value: data.city || '—' },
@@ -792,11 +953,11 @@ function ReviewStep({ data }: { data: WizardData }) {
     { label: 'Admin email', value: data.adminEmail || '—' },
     { label: 'Admin phone', value: data.adminPhone || '—' },
     { label: 'Student strength', value: fmtNum(data.strength) },
-    { label: 'Plan', value: <TierPill plan={data.tier} /> },
+    { label: 'Published plan', value: plan?.name ?? '—' },
+    { label: 'Tier', value: <TierPill plan={data.tier} /> },
     { label: 'Billing cycle', value: cm.label },
-    { label: 'Per-student rate', value: `₹${rate}/yr` },
-    { label: `Billed ${cm.label.toLowerCase()}`, value: <span className="fw7">{fmtMoney(cyclePrice)}{cm.per}</span> },
-    { label: 'Annual value', value: <span className="fw7">{fmtMoney(annual)}</span> },
+    { label: `Estimate (${cm.label.toLowerCase()})`, value: <span className="fw7">{fmtMoney(cyclePrice)}{cm.per}</span> },
+    { label: 'Status after create', value: 'Trial — plan activates when Catre admin activates the client' },
     { label: 'Modules enabled', value: `${data.modules.size} modules` },
   ]
   return (
@@ -806,7 +967,7 @@ function ReviewStep({ data }: { data: WizardData }) {
         {rows.map((r) => (
           <div key={r.label} className="row ai-center jc-between" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
             <span className="t-sm muted">{r.label}</span>
-            <span className="t-sm fw6">{r.value}</span>
+            <span className="t-sm fw6" style={{ textAlign: 'right', maxWidth: '60%' }}>{r.value}</span>
           </div>
         ))}
       </div>

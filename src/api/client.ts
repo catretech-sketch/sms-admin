@@ -31,8 +31,9 @@ async function rawFetch(path: string, opts: RequestOpts, accessToken: string | n
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json'
   const useAuth = opts.auth !== false && !NO_AUTH.has(path)
   if (useAuth && accessToken) headers.Authorization = `Bearer ${accessToken}`
+  // Tenant comes from /auth/me — never send X-Tenant-Id on /auth/* (stale header → 403).
   const tenant = tokenStore.getTenantId()
-  if (useAuth && tenant) headers['X-Tenant-Id'] = tenant
+  if (useAuth && tenant && !path.startsWith('/auth/')) headers['X-Tenant-Id'] = tenant
   return fetch(buildUrl(path, opts.query), {
     method: opts.method ?? 'GET',
     headers,

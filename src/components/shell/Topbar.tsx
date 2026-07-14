@@ -5,7 +5,6 @@
 import { useState } from 'react'
 import { useApp, useTheme } from '@/lib/hooks'
 import { Icon, IconBtn, Avatar, Badge, Popover, MenuItem, MenuSep, MenuLabel, TierPill } from '@/components/ui'
-import { schools } from '@/data/mockDb'
 import { ROLE_META } from '@/data/mockDb'
 import { useNotifications } from '@/api/hooks/useNotifications'
 
@@ -37,8 +36,8 @@ export function Topbar() {
           </button>
         )}>
           <MenuLabel>Switch school</MenuLabel>
-          {schools.map((s) => (
-            <MenuItem key={s.id} onClick={() => app.setSchoolId(s.id)}>
+          {app.schoolChoices.map((s) => (
+            <MenuItem key={s.id} onClick={() => { void (app.ownerViewingSchool ? app.enterSchool(s.id, s) : app.setSchoolId(s.id)) }}>
               <span className="sm-school-logo" style={{ background: s.color, width: 24, height: 24, fontSize: 10 }}>{s.logo}</span>
               <span className="flex1">{s.name}</span>
               <TierPill plan={s.plan} />

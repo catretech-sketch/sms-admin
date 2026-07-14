@@ -15,6 +15,9 @@ export async function login(identifier: string, password: string): Promise<AuthT
   const body = identifier.includes('@') ? { email: identifier, password } : { phone: identifier, password }
   const tokens = await request<AuthTokens>('/auth/login', { method: 'POST', body })
   tokenStore.set(tokens)
+  // Drop any previous school tenant — a stale X-Tenant-Id on /auth/me causes the API to 403
+  // when it does not match the new JWT (TenantResolutionMiddleware).
+  tokenStore.setTenantId(null)
   return tokens
 }
 

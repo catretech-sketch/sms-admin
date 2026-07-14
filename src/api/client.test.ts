@@ -25,6 +25,17 @@ describe('request', () => {
     expect(headers['X-Tenant-Id']).toBe('t9')
   })
 
+  it('does not send X-Tenant-Id on /auth/me even when a tenant is stored', async () => {
+    tokenStore.set({ access_token: 'a1', refresh_token: 'r1' })
+    tokenStore.setTenantId('t9')
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { id: 'u1' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await request('/auth/me')
+    const headers = (fetchMock.mock.calls[0][1] as RequestInit).headers as Record<string, string>
+    expect(headers.Authorization).toBe('Bearer a1')
+    expect(headers['X-Tenant-Id']).toBeUndefined()
+  })
+
   it('does not send Bearer on auth bootstrap routes', async () => {
     tokenStore.set({ access_token: 'a1', refresh_token: 'r1' })
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: {} }))
