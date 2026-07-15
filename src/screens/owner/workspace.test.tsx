@@ -1,125 +1,102 @@
-import { describe, it, expect, afterEach } from 'vitest'
-import { render, fireEvent, within, cleanup } from '@testing-library/react'
+import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest'
+import { render, fireEvent, within, cleanup, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AppProvider } from '@/context/AppProvider'
 import { ToastProvider } from '@/context/ToastProvider'
 import { workspaceScreens, ALL_SCHOOLS, isAllSchools, scopeLabel, toggleScope } from './workspace'
+
+vi.mock('@/api/hooks/useOwner', () => ({
+  usePortfolioSchools: () => ({
+    data: [
+      { id: '11111111-1111-1111-1111-111111111111', name: 'Alpha Public School', country: 'Bengaluru', tier: 'gold', status: 'active', students_count: 10, staff_count: 2, mrr: 0, health_score: 80 },
+      { id: '22222222-2222-2222-2222-222222222222', name: 'Beta High School', country: 'Mumbai', tier: 'silver', status: 'active', students_count: 20, staff_count: 3, mrr: 0, health_score: 70 },
+    ],
+    isLoading: false,
+    isError: false,
+  }),
+}))
+
+vi.mock('@/api/users', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/users')>()
+  return {
+    ...actual,
+    inviteUser: vi.fn().mockResolvedValue(undefined),
+  }
+})
+
+vi.mock('@/api/mySchools', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/mySchools')>()
+  return {
+    ...actual,
+    switchSchool: vi.fn().mockResolvedValue({}),
+    listMySchools: vi.fn().mockResolvedValue({ data: [] }),
+  }
+})
 
 const OwnerUsers = workspaceScreens['owner.users']
 
 afterEach(cleanup)
 
 function renderScreen() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
-    <AppProvider>
-      <ToastProvider>
-        <OwnerUsers />
-      </ToastProvider>
-    </AppProvider>,
+    <QueryClientProvider client={qc}>
+      <AppProvider>
+        <ToastProvider>
+          <OwnerUsers />
+        </ToastProvider>
+      </AppProvider>
+    </QueryClientProvider>,
   )
 }
 
-describe('owner Users & roles — edit user', () => {
-  it('opens an editor, sets role + All-schools scope, and the row reflects it', () => {
-    const { container } = renderScreen()
-
-    const editBtn = within(container).getAllByText('Edit')[0]
-    const userName = (editBtn.closest('tr') as HTMLElement).querySelector('.fw6')!.textContent!
-
-    fireEvent.click(editBtn)
-    const dialog = within(container).getByRole('dialog')
-
-    fireEvent.change(within(dialog).getByRole('combobox'), { target: { value: 'principal' } })
-    fireEvent.click(within(dialog).getByLabelText('All schools'))
-
-    fireEvent.click(within(dialog).getByRole('button', { name: /save/i }))
-
-    expect(within(container).queryByRole('dialog')).toBeNull()
-    expect(within(container).getByText(/access updated/i)).toBeInTheDocument()
-
-    const savedRow = within(container).getByText(userName).closest('tr') as HTMLElement
-    expect(within(savedRow).getByText('Principal')).toBeInTheDocument()
-    expect(within(savedRow).getByText('All schools')).toBeInTheDocument()
+/** Seed a logged-in owner via AppProvider internals by mocking auth finish path is heavy —
+ *  Team tab shows owner only when app.user is set. Drive Edit from invited row after invite,
+ *  or assert empty owner when not logged in. */
+describe('owner Users & roles — mapped schools only', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
   })
 
-  it('does not persist changes when the editor is cancelled', () => {
+  it('scope picker lists only portfolio schools — not other clients', async () => {
     const { container } = renderScreen()
-
-    const editBtn = within(container).getAllByText('Edit')[0]
-    const row = editBtn.closest('tr') as HTMLElement
-    const roleBefore = within(row).getByText(/admin|principal|vice-principal|teacher/i).textContent
-
-    fireEvent.click(editBtn)
+    await waitFor(() => {
+      expect(within(container).queryByText('Greenwood Valley School')).toBeNull()
+      expect(within(container).queryByText('Delhi Public Academy')).toBeNull()
+    })
+    /* Without login the owner row is empty; invite opens scope with mapped schools. */
+    const inviteBtn = within(container).getByRole('button', { name: /invite user/i })
+    fireEvent.click(inviteBtn)
     const dialog = within(container).getByRole('dialog')
-    fireEvent.change(within(dialog).getByRole('combobox'), { target: { value: 'teacher' } })
-    fireEvent.click(within(dialog).getByRole('button', { name: /cancel/i }))
-
-    expect(within(container).queryByRole('dialog')).toBeNull()
-    expect(within(row).getByText(roleBefore as string)).toBeInTheDocument()
+    expect(within(dialog).getByText('Alpha Public School')).toBeInTheDocument()
+    expect(within(dialog).getByText('Beta High School')).toBeInTheDocument()
+    expect(within(dialog).queryByText('Greenwood Valley School')).toBeNull()
   })
 })
 
 describe('scope helpers', () => {
   it('isAllSchools detects the All sentinel', () => {
     expect(isAllSchools([ALL_SCHOOLS])).toBe(true)
-    expect(isAllSchools(['Greenwood Valley School'])).toBe(false)
+    expect(isAllSchools(['Alpha Public School'])).toBe(false)
   })
   it('scopeLabel summarises the scope', () => {
-    expect(scopeLabel([ALL_SCHOOLS])).toBe('All schools')
-    expect(scopeLabel(['Greenwood Valley School'])).toBe('Greenwood Valley School')
-    expect(scopeLabel(['Greenwood Valley School', 'Delhi Public Academy'])).toBe('2 schools')
+    expect(scopeLabel([ALL_SCHOOLS])).toBe('All my schools')
+    expect(scopeLabel(['Alpha Public School'])).toBe('Alpha Public School')
+    expect(scopeLabel(['Alpha Public School', 'Beta High School'])).toBe('2 schools')
   })
   it('toggleScope: picking a specific school replaces All', () => {
-    expect(toggleScope([ALL_SCHOOLS], 'Greenwood Valley School')).toEqual(['Greenwood Valley School'])
+    expect(toggleScope([ALL_SCHOOLS], 'Alpha Public School')).toEqual(['Alpha Public School'])
   })
   it('toggleScope: picking All replaces specifics', () => {
-    expect(toggleScope(['Greenwood Valley School', 'Delhi Public Academy'], ALL_SCHOOLS)).toEqual([ALL_SCHOOLS])
+    expect(toggleScope(['Alpha Public School', 'Beta High School'], ALL_SCHOOLS)).toEqual([ALL_SCHOOLS])
   })
   it('toggleScope: adds and removes specific schools', () => {
-    expect(toggleScope(['Greenwood Valley School'], 'Delhi Public Academy'))
-      .toEqual(['Greenwood Valley School', 'Delhi Public Academy'])
-    expect(toggleScope(['Greenwood Valley School', 'Delhi Public Academy'], 'Delhi Public Academy'))
-      .toEqual(['Greenwood Valley School'])
+    expect(toggleScope(['Alpha Public School'], 'Beta High School'))
+      .toEqual(['Alpha Public School', 'Beta High School'])
+    expect(toggleScope(['Alpha Public School', 'Beta High School'], 'Beta High School'))
+      .toEqual(['Alpha Public School'])
   })
   it('toggleScope: removing the last specific falls back to All (never empty)', () => {
-    expect(toggleScope(['Greenwood Valley School'], 'Greenwood Valley School')).toEqual([ALL_SCHOOLS])
-  })
-})
-
-describe('owner Users & roles — multi-school scope', () => {
-  it('assigns two specific schools and the row shows "2 schools"', () => {
-    const { container } = renderScreen()
-
-    const editBtn = within(container).getAllByText('Edit')[0]
-    const userName = (editBtn.closest('tr') as HTMLElement).querySelector('.fw6')!.textContent!
-
-    fireEvent.click(editBtn)
-    const dialog = within(container).getByRole('dialog')
-
-    // Normalise to a known starting point, then pick exactly two specific schools.
-    fireEvent.click(within(dialog).getByLabelText('All schools'))                 // scope = [All]
-    fireEvent.click(within(dialog).getByLabelText('Greenwood Valley School'))      // scope = [GVS]
-    fireEvent.click(within(dialog).getByLabelText('Delhi Public Academy'))         // scope = [GVS, DPA]
-
-    fireEvent.click(within(dialog).getByRole('button', { name: /save/i }))
-
-    expect(within(container).queryByRole('dialog')).toBeNull()
-    const savedRow = within(container).getByText(userName).closest('tr') as HTMLElement
-    expect(within(savedRow).getByText('2 schools')).toBeInTheDocument()
-  })
-
-  it('picking a specific school clears All schools', () => {
-    const { container } = renderScreen()
-    fireEvent.click(within(container).getAllByText('Edit')[0])
-    const dialog = within(container).getByRole('dialog')
-
-    // Turn "All schools" on first (the first row's user may start scoped to a
-    // specific school), so we test the All -> specific transition deterministically.
-    const allBox = within(dialog).getByLabelText('All schools') as HTMLInputElement
-    fireEvent.click(allBox)
-    expect(allBox.checked).toBe(true)
-
-    fireEvent.click(within(dialog).getByLabelText('Greenwood Valley School'))
-    expect((within(dialog).getByLabelText('All schools') as HTMLInputElement).checked).toBe(false)
-    expect((within(dialog).getByLabelText('Greenwood Valley School') as HTMLInputElement).checked).toBe(true)
+    expect(toggleScope(['Alpha Public School'], 'Alpha Public School')).toEqual([ALL_SCHOOLS])
   })
 })

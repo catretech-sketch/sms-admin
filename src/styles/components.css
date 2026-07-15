@@ -36,6 +36,15 @@
 .sm-btn-ghost:hover:not(:disabled){ background:var(--surface-3); color:var(--text); }
 .sm-btn-danger { background:var(--danger); color:#fff; }
 .sm-btn-danger:hover:not(:disabled){ filter:brightness(.93); }
+/* Compact red dustbin control (e.g. Schools row actions) */
+.sm-btn.sm-btn-delete-icon {
+  width: 28px; height: 28px; min-width: 28px; padding: 0; gap: 0;
+  color: var(--danger); background: transparent; border-color: transparent;
+}
+.sm-btn.sm-btn-delete-icon:hover:not(:disabled) {
+  color: #fff; background: var(--danger); border-color: var(--danger);
+}
+.sm-btn.sm-btn-delete-icon svg { width: 14px; height: 14px; }
 .sm-btn-success { background:var(--success); color:#fff; }
 .sm-btn-success:hover:not(:disabled){ filter:brightness(.93); }
 .sm-btn-gold { background:linear-gradient(135deg,var(--gold-2),var(--gold)); color:#fff; }

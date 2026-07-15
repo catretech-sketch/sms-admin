@@ -58,6 +58,10 @@ html[data-theme=dark] .sm-nav-item.on { color: #fff; }
 .sm-school-switch { display: flex; align-items: center; gap: 9px; padding: 5px 10px; border: 1px solid var(--border-2); border-radius: var(--r-sm); background: var(--surface); cursor: pointer; }
 .sm-school-switch:hover { background: var(--surface-3); }
 .sm-school-logo { display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-family: var(--font-display); border-radius: 9px; width: 30px; height: 30px; font-size: 12px; flex: 0 0 auto; }
+/* Real logo photos — never use .sm-school-logo on <img> (flex + fixed size breaks the photo). */
+.sm-school-mark-img { display: block; flex: 0 0 auto; object-fit: cover; }
+.sm-school-photo { display: block; flex: 0 0 auto; object-fit: cover; border-radius: 50%; }
+.sm-school-cover { flex: 0 0 auto; }
 
 /* ---------- Page head ---------- */
 .sm-pagehead { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
@@ -89,8 +93,11 @@ html[data-theme=dark] .sm-nav-item.on { color: #fff; }
 @keyframes sm-live { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 55%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
 
 /* ---------- Tables ---------- */
-.sm-table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--sh-xs); overflow: hidden; }
-.sm-table { width: 100%; border-collapse: collapse; }
+.sm-table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--sh-xs); overflow-x: auto; overflow-y: hidden; }
+.sm-table { width: 100%; border-collapse: collapse; min-width: 960px; }
+.sm-table th.sm-col-actions,
+.sm-table td.sm-col-actions { position: sticky; right: 0; background: var(--surface); z-index: 1; box-shadow: -8px 0 12px -10px rgba(15, 23, 42, .25); }
+.sm-table thead th.sm-col-actions { background: var(--surface-2); }
 .sm-table thead th { text-align: left; font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-3); padding: 12px 16px; border-bottom: 1px solid var(--border); white-space: nowrap; background: var(--surface-2); }
 .sm-table thead th.sortable { cursor: pointer; user-select: none; }
 .sm-table thead th.sortable:hover { color: var(--text-2); }

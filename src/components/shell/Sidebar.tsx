@@ -3,6 +3,7 @@
    ============================================================ */
 import { useApp } from '@/lib/hooks'
 import { Icon, Btn, Tip, TierPill } from '@/components/ui'
+import { SchoolMark } from '@/components/SchoolMark'
 import { tierIncludes, gateRole } from '@/lib/gating'
 import { approvals } from '@/data/mockDb'
 import type { Tier, Role } from '@/types'
@@ -75,7 +76,7 @@ export function Sidebar() {
       {!isOwner && (
         <div style={{ padding: '12px 12px 0' }}>
           <div className="sm-school-switch" style={{ width: '100%' }}>
-            <span className="sm-school-logo" style={{ background: app.school.color }}>{app.school.logo}</span>
+            <SchoolMark school={app.school} size={34} />
             <div className="flex1" style={{ minWidth: 0 }}>
               <div className="fw6 t-sm" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{app.school.name}</div>
               <div className="t-xs muted3">{app.school.city}</div>

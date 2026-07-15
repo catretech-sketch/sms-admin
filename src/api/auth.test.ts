@@ -5,7 +5,12 @@ import { tokenStore } from './auth/tokenStore'
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
-beforeEach(() => { localStorage.clear(); tokenStore.clear(); vi.restoreAllMocks() })
+beforeEach(() => {
+  localStorage.clear()
+  sessionStorage.clear()
+  tokenStore.clear()
+  vi.restoreAllMocks()
+})
 
 describe('auth', () => {
   it('login stores tokens and sends an email identifier as { email }', async () => {

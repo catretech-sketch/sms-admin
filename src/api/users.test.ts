@@ -8,6 +8,7 @@ beforeEach(() => { localStorage.clear(); vi.restoreAllMocks() })
 
 describe('toApiRole', () => {
   it('maps UI roles to school.* / staff policies', () => {
+    expect(toApiRole('owner')).toBe('school.owner')
     expect(toApiRole('teacher')).toBe('school.teacher')
     expect(toApiRole('admin')).toBe('school.admin')
     expect(toApiRole('principal')).toBe('school.principal')
@@ -16,11 +17,21 @@ describe('toApiRole', () => {
   })
 })
 
+describe('assignableSchoolRoles', () => {
+  it('Send invite is CRM-only: Admin / Principal / Vice-Principal (not teacher/staff)', async () => {
+    const { assignableSchoolRoles } = await import('./users')
+    expect(assignableSchoolRoles('owner')).toEqual(['admin', 'principal', 'vice_principal', 'owner'])
+    expect(assignableSchoolRoles('admin')).toEqual(['admin', 'principal', 'vice_principal'])
+    expect(assignableSchoolRoles('principal')).toEqual(['vice_principal'])
+  })
+})
+
 describe('inviteUser', () => {
   it('POSTs /users with email + roles array', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { id: 'u1' } }))
     vi.stubGlobal('fetch', fetchMock)
-    await inviteUser('a@b.edu', 'teacher')
+    const res = await inviteUser('a@b.edu', 'teacher')
+    expect(res).toEqual({ id: 'u1' })
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toContain('/users')
     expect((init as RequestInit).method).toBe('POST')

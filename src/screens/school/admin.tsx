@@ -10,9 +10,24 @@
    - Identity & access is Admin-only (the router guards non-admins)
      and pairs a Users table with an interactive permission matrix.
    ============================================================ */
-import { useMemo, useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast, useTheme } from '@/lib/hooks'
 import { useInviteUser } from '@/api/hooks/useUserMutations'
+import { SchoolPhoto } from '@/components/SchoolMark'
+import { EditSchoolProfileModal } from '@/components/EditSchoolProfileModal'
+import { usePortfolioSchools } from '@/api/hooks/useOwner'
+import { useQueryClient } from '@tanstack/react-query'
+import {
+  assignableSchoolRoles,
+  fromApiRole,
+  getUserPermissions,
+  listSchoolUsers,
+  overridesFromApi,
+  setUserPermissions,
+  setUserRoles,
+  type SchoolUserDto,
+} from '@/api/users'
+import { ApiError } from '@/api/client'
 import { tierIncludes, caps, effectiveCaps, cellState, overrideCount, NEXT_CELL_STATE } from '@/lib/gating'
 import {
   PageHead, Tabs, Card, CardHead, Btn, Badge, TierPill, Avatar, Search, Select,
@@ -145,33 +160,56 @@ const FEATURE_GROUPS: { tier: Tier; key: string; features: string[] }[] = [
 function SettingsScreen() {
   const app = useApp()
   const toast = useToast()
+  const qc = useQueryClient()
   const { theme, toggleTheme } = useTheme()
+  const { data: clients = [] } = usePortfolioSchools(app.isPlatform)
+  const [editOpen, setEditOpen] = useState(false)
+  const client = clients.find((c) => c.id === app.school.id) ?? null
 
   const nextTier: Tier = app.plan === 'silver' ? 'gold' : 'platinum'
+  const canEditProfile = app.role === 'owner' || app.role === 'admin' || app.isPlatform
 
   return (
     <div>
       <PageHead title="Settings" sub={app.school.name} />
+      <EditSchoolProfileModal
+        open={editOpen}
+        school={app.school}
+        client={client}
+        isPlatform={app.isPlatform}
+        onClose={() => setEditOpen(false)}
+        onSaved={(s) => {
+          app.rememberSchool(s)
+          void qc.invalidateQueries({ queryKey: ['owner'] })
+        }}
+      />
       <div className="sm-grid-2" style={{ gridTemplateColumns: '1fr 1fr', alignItems: 'flex-start' }}>
         {/* Left column */}
         <div className="col gap16">
           <Card>
-            <CardHead title="School profile & branding" icon="building" />
+            <CardHead
+              title="School profile & branding"
+              sub="Name, address, logo and round school photo"
+              icon="building"
+              action={canEditProfile ? (
+                <Btn size="sm" variant="secondary" icon="edit" onClick={() => setEditOpen(true)}>Edit</Btn>
+              ) : undefined}
+            />
             <div className="row ai-center gap14" style={{ marginTop: 16 }}>
-              <div className="sm-card-ic" style={{ background: app.school.color, color: '#fff', width: 54, height: 54, fontSize: 20, fontWeight: 700, borderRadius: 14 }}>
-                {app.school.logo}
-              </div>
+              <SchoolPhoto school={app.school} size={72} />
               <div className="flex1" style={{ flex: 1 }}>
-                <Field label="School name"><Input defaultValue={app.school.name} /></Field>
+                <div className="t-md fw7">{app.school.name}</div>
+                <div className="t-sm muted">{app.school.city}{app.school.tz ? ` · ${app.school.tz}` : ''}</div>
+                {!canEditProfile && (
+                  <div className="t-xs muted3" style={{ marginTop: 6 }}>Ask a school owner or admin to update branding.</div>
+                )}
               </div>
             </div>
-            <div className="sm-grid-2" style={{ marginTop: 14 }}>
-              <Field label="City"><Input icon="pin" defaultValue={app.school.city} /></Field>
-              <Field label="Timezone"><Input icon="globe" defaultValue={app.school.tz} /></Field>
-            </div>
-            <div className="row gap8 jc-end" style={{ marginTop: 16 }}>
-              <Btn variant="primary" icon="check" onClick={() => toast.success('Profile saved', 'School profile & branding updated.')}>Save changes</Btn>
-            </div>
+            {canEditProfile && (
+              <div className="row gap8 jc-end" style={{ marginTop: 16 }}>
+                <Btn variant="primary" icon="edit" onClick={() => setEditOpen(true)}>Edit school profile</Btn>
+              </div>
+            )}
           </Card>
 
           <Card>
@@ -309,22 +347,34 @@ const SCHOOL_USERS: SchoolUser[] = (() => {
   return out
 })()
 
-/* A couple of users ship with per-user overrides so the feature is visible on load. */
-const SAMPLE_OVERRIDES: Record<string, UserOverrides> = {
-  [SCHOOL_USERS[3].id]: { fees: { V: 'grant' } },        // a teacher granted fee visibility
-  [SCHOOL_USERS[4].id]: { attendance: { E: 'revoke' } }, // a teacher with attendance edit removed
-}
-
 const userStatus: Record<SchoolUser['status'], { tone: BadgeTone; label: string }> = {
   active: { tone: 'success', label: 'Active' },
   invited: { tone: 'warning', label: 'Invited' },
   suspended: { tone: 'danger', label: 'Suspended' },
 }
 
+function mapDto(u: SchoolUserDto, i: number): SchoolUser {
+  const primary = u.roles[0] ? fromApiRole(u.roles[0]) : 'teacher'
+  const email = u.email ?? '—'
+  return {
+    id: u.id,
+    name: email.includes('@') ? email.split('@')[0] : email,
+    email,
+    role: primary,
+    hue: (i * 37) % 360,
+    status: u.status === 'suspended' ? 'suspended' : u.status === 'invited' ? 'invited' : 'active',
+    last: u.created_at ? new Date(u.created_at).toLocaleDateString() : '—',
+  }
+}
+
 function InviteModalContent({ onDone }: { onDone: () => void }) {
+  const app = useApp()
   const toast = useToast()
+  const roleOptions = assignableSchoolRoles(app.role)
   const [email, setEmail] = useState('')
-  const [role, setRole] = useState<Role>('teacher')
+  const [role, setRole] = useState<Role>(() =>
+    roleOptions.includes('admin') ? 'admin' : roleOptions[0] ?? 'teacher',
+  )
   const invite = useInviteUser()
 
   const submit = () => {
@@ -334,7 +384,10 @@ function InviteModalContent({ onDone }: { onDone: () => void }) {
     }
     invite.mutate({ email: email.trim(), role }, {
       onSuccess: () => {
-        toast.success('Invitation sent', `${email} invited as ${ROLE_META[role].label}.`)
+        toast.success(
+          'Invite sent',
+          `${email} got a 6-digit setup code by email (not a link). They open SchoolMate → set password with that code → then they can sign in as ${ROLE_META[role].label}.`,
+        )
         onDone()
       },
       onError: (err) => {
@@ -345,20 +398,29 @@ function InviteModalContent({ onDone }: { onDone: () => void }) {
 
   return (
     <Card>
-      <CardHead title="Invite staff member" sub="Send an access invitation by email" icon="user" />
+      <CardHead
+        title="Send invite"
+        sub="CRM access only: Admin · Principal · Vice-Principal. Teachers & staff use People → onboard form (name, address, documents)."
+        icon="user"
+      />
       <div className="col gap16" style={{ marginTop: 16 }}>
         <Field label="Work email" required>
-          <Input icon="message" type="email" value={email} placeholder="name@school.edu" onChange={(e) => setEmail(e.target.value)} />
+          <Input icon="message" type="email" value={email} placeholder="admin@school.edu" onChange={(e) => setEmail(e.target.value)} />
         </Field>
-        <Field label="Role" required hint={ROLE_META[role].desc}>
+        <Field label="CRM role" required hint={ROLE_META[role]?.desc}>
           <Select
-            options={ROLES.map((r) => ({ value: r, label: `${ROLE_META[r].label} — ${ROLE_META[r].short}` }))}
+            options={roleOptions.map((r) => ({
+              value: r,
+              label: `${ROLE_META[r].label} — CRM access`,
+            }))}
             value={role} onChange={(e) => setRole(e.target.value as Role)}
           />
         </Field>
         <div className="row gap8 jc-end">
           <Btn variant="ghost" onClick={onDone}>Cancel</Btn>
-          <Btn variant="primary" icon="check" onClick={submit}>Send invite</Btn>
+          <Btn variant="secondary" icon="cap" onClick={() => { onDone(); app.go('school.teachers.add') }}>Onboard teacher</Btn>
+          <Btn variant="secondary" icon="briefcase" onClick={() => { onDone(); app.go('school.staff.add') }}>Onboard staff</Btn>
+          <Btn variant="primary" icon="check" onClick={submit} disabled={roleOptions.length === 0}>Send invite</Btn>
         </div>
       </div>
     </Card>
@@ -366,21 +428,53 @@ function InviteModalContent({ onDone }: { onDone: () => void }) {
 }
 
 function UsersTab() {
+  const app = useApp()
   const toast = useToast()
   const [q, setQ] = useState('')
   const [roleF, setRoleF] = useState('all')
   const [inviting, setInviting] = useState(false)
-  const [overrides, setOverrides] = useState<Record<string, UserOverrides>>(SAMPLE_OVERRIDES)
+  const [overrides, setOverrides] = useState<Record<string, UserOverrides>>({})
   const [editing, setEditing] = useState<SchoolUser | null>(null)
+  const [users, setUsers] = useState<SchoolUser[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const reload = async () => {
+    setLoading(true)
+    try {
+      const rows = await listSchoolUsers()
+      setUsers(rows.map(mapDto))
+    } catch (e) {
+      toast.danger('Could not load users', e instanceof ApiError ? e.message : 'Try again.')
+      setUsers([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { void reload() }, [app.schoolId])
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
-    return SCHOOL_USERS.filter((u) => {
-      if (needle && !(u.name.toLowerCase().includes(needle) || u.email.toLowerCase().includes(needle))) return false
+    return users.filter((u) => {
+      if (needle && !(
+        u.name.toLowerCase().includes(needle)
+        || u.email.toLowerCase().includes(needle)
+        || u.id.toLowerCase().includes(needle)
+      )) return false
       if (roleF !== 'all' && u.role !== roleF) return false
       return true
     })
-  }, [q, roleF])
+  }, [q, roleF, users])
+
+  const openEditor = async (u: SchoolUser) => {
+    try {
+      const perms = await getUserPermissions(u.id)
+      setOverrides((m) => ({ ...m, [u.id]: overridesFromApi(perms) }))
+    } catch {
+      setOverrides((m) => ({ ...m, [u.id]: m[u.id] ?? {} }))
+    }
+    setEditing(u)
+  }
 
   const columns: Column<SchoolUser>[] = [
     {
@@ -391,6 +485,7 @@ function UsersTab() {
           <div>
             <div className="fw6">{u.name}</div>
             <div className="t-xs muted">{u.email}</div>
+            <div className="t-xs muted" title={u.id}>id · {u.id.slice(0, 8)}…</div>
           </div>
         </div>
       ),
@@ -412,50 +507,79 @@ function UsersTab() {
       render: (u) => <Badge tone={userStatus[u.status].tone}>{userStatus[u.status].label}</Badge>,
     },
     {
-      key: 'last', label: 'Last active', align: 'right', sortValue: (u) => u.last,
+      key: 'last', label: 'Joined', align: 'right', sortValue: (u) => u.last,
       render: (u) => <span className="t-sm muted">{u.last}</span>,
     },
     {
       key: 'actions', label: '', align: 'right',
       render: (u) => (
-        <div className="row gap6 jc-end">
-          <Btn variant="secondary" size="sm" icon="edit" onClick={() => setEditing(u)}>Edit</Btn>
-          {u.status === 'suspended'
-            ? <Btn variant="secondary" size="sm" icon="refresh" onClick={() => toast.success('User reactivated', `${u.name} can sign in again.`)}>Restore</Btn>
-            : <Btn variant="ghost" size="sm" icon="lock" onClick={() => toast.danger('User suspended', `${u.name} can no longer sign in.`)}>Suspend</Btn>}
+        <div className="row gap6 jc-end wrap">
+          <Btn variant="secondary" size="sm" icon="edit" onClick={() => { void openEditor(u) }}>Permissions</Btn>
+          <Select
+            options={assignableSchoolRoles(app.role).map((r) => ({ value: r, label: ROLE_META[r].label }))}
+            value={assignableSchoolRoles(app.role).includes(u.role) ? u.role : assignableSchoolRoles(app.role)[0]}
+            onChange={(e) => {
+              const role = e.target.value as Role
+              void setUserRoles(u.id, [role]).then(
+                () => {
+                  setUsers((list) => list.map((x) => (x.id === u.id ? { ...x, role } : x)))
+                  toast.success('Role updated', `${ROLE_META[role].label} · user ${u.id.slice(0, 8)}…`)
+                },
+                (err) => toast.danger('Role update failed', err instanceof ApiError ? err.message : 'Try again.'),
+              )
+            }}
+            style={{ maxWidth: 130 }}
+          />
         </div>
       ),
     },
   ]
 
-  if (inviting) return <InviteModalContent onDone={() => setInviting(false)} />
-  if (editing) return (
-    <UserAccessEditor
-      user={editing}
-      initial={overrides[editing.id] ?? {}}
-      onSave={(ov) => { setOverrides((m) => ({ ...m, [editing.id]: ov })); setEditing(null) }}
-      onCancel={() => setEditing(null)}
-    />
-  )
+  if (inviting) return <InviteModalContent onDone={() => { setInviting(false); void reload() }} />
+  if (editing) {
+    return (
+      <UserAccessEditor
+        user={editing}
+        initial={overrides[editing.id] ?? {}}
+        onSave={(ov) => {
+          void (async () => {
+            try {
+              const saved = await setUserPermissions(editing.id, ov)
+              setOverrides((m) => ({ ...m, [editing.id]: overridesFromApi(saved) }))
+              setEditing(null)
+              toast.success('Permissions saved', `Stored for user id ${editing.id.slice(0, 8)}…`)
+            } catch (e) {
+              toast.danger('Save failed', e instanceof ApiError ? e.message : 'Try again.')
+            }
+          })()
+        }}
+        onCancel={() => setEditing(null)}
+      />
+    )
+  }
 
   return (
     <Card pad={false}>
       <div className="row ai-center gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
-        <Search value={q} onChange={setQ} placeholder="Search name or email…" style={{ flex: 1, minWidth: 220 }} />
+        <Search value={q} onChange={setQ} placeholder="Search name, email, or user id…" style={{ flex: 1, minWidth: 220 }} />
         <Select
-          options={[{ value: 'all', label: 'All roles' }, ...ROLES.map((r) => ({ value: r, label: ROLE_META[r].label }))]}
+          options={[{ value: 'all', label: 'All roles' }, ...assignableSchoolRoles('owner').map((r) => ({ value: r, label: ROLE_META[r].label }))]}
           value={roleF} onChange={(e) => setRoleF(e.target.value)}
         />
-        <Btn variant="primary" icon="plus" onClick={() => setInviting(true)}>Invite user</Btn>
+        <Btn variant="primary" icon="plus" onClick={() => setInviting(true)}>Send invite</Btn>
       </div>
-      <DataTable<SchoolUser>
-        columns={columns}
-        rows={rows}
-        pageSize={10}
-        rowKey={(u) => u.id}
-        initialSort={{ key: 'name', dir: 'asc' }}
-        empty={<Empty icon="users" title="No users match" body="Try a different search or role filter." />}
-      />
+      {loading
+        ? <div className="pad t-sm muted">Loading users for this school…</div>
+        : (
+          <DataTable<SchoolUser>
+            columns={columns}
+            rows={rows}
+            pageSize={10}
+            rowKey={(u) => u.id}
+            initialSort={{ key: 'name', dir: 'asc' }}
+            empty={<Empty icon="users" title="No users in this school" body="Invite staff — roles & permissions are stored by user id for this school only." />}
+          />
+        )}
     </Card>
   )
 }
@@ -466,7 +590,7 @@ type Matrix = Record<string, Record<GateRole, Cap[]>>
 function clonePerms(): Matrix {
   const out: Matrix = {}
   for (const mod of Object.keys(PERMS)) {
-    out[mod] = { admin: [], principal: [], vice_principal: [], teacher: [] }
+    out[mod] = { admin: [], principal: [], vice_principal: [], teacher: [], staff: [] }
     for (const r of ROLES) out[mod][r] = [...PERMS[mod][r]]
   }
   return out
@@ -543,10 +667,7 @@ function UserAccessEditor({ user, initial, onSave, onCancel }: {
 
   const count = overrideCount(ov)
   const reset = () => { setOv(initial); toast.info('Overrides reset', 'Reverted to the last saved overrides.') }
-  const save = () => {
-    onSave(ov)
-    toast.success('Permissions saved', `${count} override${count === 1 ? '' : 's'} for ${user.name}.`)
-  }
+  const save = () => { onSave(ov) }
 
   return (
     <div className="col gap16">
@@ -556,6 +677,7 @@ function UserAccessEditor({ user, initial, onSave, onCancel }: {
           <div style={{ flex: 1, minWidth: 200 }}>
             <div className="fw7">{user.name}</div>
             <div className="t-sm muted">{user.email}</div>
+            <div className="t-xs muted" title={user.id}>User id · {user.id}</div>
           </div>
           <Badge tone={roleTone(user.role)}>{ROLE_META[user.role].label}</Badge>
           <Btn variant="ghost" size="sm" icon="arrowLeft" onClick={onCancel}>Back</Btn>
@@ -564,8 +686,8 @@ function UserAccessEditor({ user, initial, onSave, onCancel }: {
 
       <Card pad={false}>
         <CardHead
-          title="Per-user access"
-          sub="Tap V / E / A to cycle inherit → grant → revoke for this user"
+          title="Per-user access (by id)"
+          sub="Tap V / E / A to cycle inherit → grant → revoke — saved against this user id"
           icon="user"
           action={
             <div className="row ai-center gap8">

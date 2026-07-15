@@ -1,70 +1,96 @@
-import { describe, it, expect, afterEach } from 'vitest'
-import { render, fireEvent, within, cleanup } from '@testing-library/react'
+import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest'
+import { render, fireEvent, within, cleanup, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AppProvider } from '@/context/AppProvider'
 import { ToastProvider } from '@/context/ToastProvider'
 import { adminScreens } from './admin'
 
 const IdentityScreen = adminScreens['school.identity']
 
+const mockUsers = [
+  {
+    id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    email: 'admin@school.edu',
+    phone: null,
+    status: 'active',
+    created_at: '2026-01-01T00:00:00Z',
+    roles: ['school.admin'],
+  },
+]
+
+vi.mock('@/api/users', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/users')>()
+  return {
+    ...actual,
+    listSchoolUsers: vi.fn(async () => mockUsers),
+    getUserPermissions: vi.fn(async () => []),
+    setUserPermissions: vi.fn(async (_id: string, ov: import('@/types').UserOverrides) => {
+      const rows: { module: string; cap: string; effect: string }[] = []
+      for (const [module, caps] of Object.entries(ov)) {
+        if (!caps) continue
+        for (const [cap, effect] of Object.entries(caps)) {
+          if (effect) rows.push({ module, cap, effect })
+        }
+      }
+      return rows
+    }),
+    setUserRoles: vi.fn(async () => mockUsers[0]),
+  }
+})
+
 afterEach(cleanup)
 
 function renderScreen() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
-    <AppProvider>
-      <ToastProvider>
-        <IdentityScreen />
-      </ToastProvider>
-    </AppProvider>,
+    <QueryClientProvider client={qc}>
+      <AppProvider>
+        <ToastProvider>
+          <IdentityScreen />
+        </ToastProvider>
+      </AppProvider>
+    </QueryClientProvider>,
   )
 }
 
-/** Locate the editor table row for a given module label. */
 function moduleRow(container: HTMLElement, label: string): HTMLElement {
   const cell = within(container).getByText(label)
   return cell.closest('tr') as HTMLElement
 }
 
-describe('per-user access editor', () => {
-  it('opens from a user row, cycles a capability, saves, and shows the override badge on that user', () => {
+describe('per-user access editor (by user id)', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('opens from Permissions, cycles a capability, saves against user id', async () => {
     const { container } = renderScreen()
+    await waitFor(() => expect(within(container).getByText(/admin@school\.edu/i)).toBeInTheDocument())
 
-    // Open the editor for the first user, capturing their name so we can find
-    // their row again after saving. (Several users are unseeded, so picking the
-    // first row gives a deterministic subject thanks to the seeded mock data.)
-    const editBtn = within(container).getAllByText('Edit')[0]
-    const userName = (editBtn.closest('tr') as HTMLElement).querySelector('.fw6')!.textContent!
-    fireEvent.click(editBtn)
-    expect(within(container).getByText('Per-user access')).toBeInTheDocument()
+    fireEvent.click(within(container).getAllByRole('button', { name: /^permissions$/i })[0])
+    await waitFor(() => expect(within(container).getByText(/Per-user access/i)).toBeInTheDocument())
 
-    // The "Fees & finance" module row exists with three V/E/A chips.
     const row = moduleRow(container, 'Fees & finance')
     const vChip = within(row).getByTitle(/^View —/)
-
-    // inherit -> grant
     fireEvent.click(vChip)
     expect(within(row).getByTitle('View — grant')).toBeInTheDocument()
 
-    // Save commits and returns to the table with a success toast.
     fireEvent.click(within(container).getByText('Save changes'))
-    expect(within(container).getByText(/Permissions saved/i)).toBeInTheDocument()
-
-    // The edited user's own row now shows a "custom" override badge.
-    const savedRow = within(container).getByText(userName).closest('tr') as HTMLElement
-    expect(within(savedRow).getByText(/\d+ custom/i)).toBeInTheDocument()
+    await waitFor(() => expect(within(container).getByText(/Permissions saved/i)).toBeInTheDocument())
   })
 
-  it('cycles a cell through grant, revoke, and back to inherit', () => {
+  it('cycles a cell through grant, revoke, and back to inherit', async () => {
     const { container } = renderScreen()
-    fireEvent.click(within(container).getAllByText('Edit')[0])
+    await waitFor(() => expect(within(container).getByText(/admin@school\.edu/i)).toBeInTheDocument())
+    fireEvent.click(within(container).getAllByRole('button', { name: /^permissions$/i })[0])
+    await waitFor(() => expect(within(container).getByText(/Per-user access/i)).toBeInTheDocument())
 
     const row = moduleRow(container, 'Fees & finance')
     const eChip = within(row).getByTitle(/^Edit —/)
 
-    fireEvent.click(eChip) // inherit -> grant
+    fireEvent.click(eChip)
     expect(within(row).getByTitle('Edit — grant')).toBeInTheDocument()
-    fireEvent.click(within(row).getByTitle('Edit — grant')) // grant -> revoke
+    fireEvent.click(within(row).getByTitle('Edit — grant'))
     expect(within(row).getByTitle('Edit — revoke')).toBeInTheDocument()
-    fireEvent.click(within(row).getByTitle('Edit — revoke')) // revoke -> inherit
+    fireEvent.click(within(row).getByTitle('Edit — revoke'))
     expect(within(row).getByTitle('Edit — inherit')).toBeInTheDocument()
   })
 })

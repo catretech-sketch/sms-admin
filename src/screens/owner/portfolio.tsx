@@ -5,16 +5,32 @@
 import { useMemo, useState, useEffect, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import {
-  PageHead, Card, CardHead, Kpi, Btn, Badge, TierPill, Avatar, Search, Select, Segmented,
-  Field, Input, Modal, Icon, Empty, Donut, HBars, Legend, DataTable, Spinner,
+  PageHead, Card, CardHead, Kpi, Btn, Badge, TierPill, Search, Select, Segmented,
+  Field, Input, FileUpload, Modal, Icon, Empty, Donut, HBars, Legend, DataTable, Spinner,
   type Column, type BadgeTone,
 } from '@/components/ui'
+import { SchoolCover, SchoolMark } from '@/components/SchoolMark'
+import { EditSchoolProfileModal } from '@/components/EditSchoolProfileModal'
+import { compressImageFile } from '@/lib/compressImage'
+import type { Client } from '@/api/ownerTypes'
 import { TIERS, TIER_META } from '@/data/mockDb'
 import { fmtMoney, fmtNum } from '@/lib/format'
 import type { School, Tier } from '@/types'
-import { usePortfolioSchools, useOwnerPlans, useCreateSchool, useOwnerFeeSummary } from '@/api/hooks/useOwner'
+import { usePortfolioSchools, useOwnerPlans, useCreateSchool, useOwnerFeeSummary, useDeleteSchool } from '@/api/hooks/useOwner'
 import { clientToSchool, slugify } from '@/api/ownerMap'
 import { ApiError } from '@/api/client'
+import { UpgradePlanModal } from '@/screens/owner/UpgradePlanModal'
+import {
+  createUpgradeRequest,
+  createRazorpayOrder,
+  confirmUpgradePayment,
+  loadRazorpayScript,
+  getPaymentGatewayStatus,
+  type UpgradeMode,
+} from '@/api/upgradeRequests'
+import { deleteMySchool } from '@/api/mySchools'
+import { deleteClient } from '@/api/clients'
+import { useQueryClient } from '@tanstack/react-query'
 
 const FEE_COLORS = ['#4f46e5', '#0ea5e9', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#14b8a6']
 
@@ -43,7 +59,7 @@ const STATUS_TONE: Record<School['status'], BadgeTone> = {
 }
 const STATUS_LABEL: Record<School['status'], string> = {
   active: 'Active',
-  trial: 'Trial',
+  trial: 'Awaiting activation',
   past_due: 'Past due',
 }
 
@@ -231,13 +247,17 @@ function OwnerDashboard() {
                 const rate = collected + outstanding > 0 ? Math.round((collected / (collected + outstanding)) * 100) : 0
                 return (
                   <div key={s.id} className="row ai-center gap12">
-                    <Avatar name={s.logo} size={34} style={{ background: s.color, borderRadius: 9 }} />
+                    <SchoolMark school={s} size={34} />
                     <div style={{ flex: 1 }}>
                       <div className="t-md fw6">{s.name}</div>
                       <div className="t-xs muted3">{fmtMoney(outstanding)} outstanding</div>
                     </div>
                     <Badge tone="warning">Low fee collection — {rate}%</Badge>
-                    <Btn size="sm" onClick={() => void app.enterSchool(s.id, s)}>Open</Btn>
+                    <Btn size="sm" onClick={() => {
+                      void app.enterSchool(s.id, s).then((ok) => {
+                        if (!ok) toast.info('School not active', `${s.name} opens only after Catre approves payment and activates the school.`)
+                      })
+                    }}>Open</Btn>
                   </div>
                 )
               })}
@@ -255,13 +275,25 @@ function OwnerDashboard() {
 function OwnerSchools() {
   const app = useApp()
   const toast = useToast()
+  const qc = useQueryClient()
   const { data: clients = [], isLoading, isError } = usePortfolioSchools(app.isPlatform)
+  const deleteMut = useDeleteSchool(app.isPlatform)
   const schoolsList = useMemo(() => clients.map(clientToSchool), [clients])
   const [q, setQ] = useState('')
   const [plan, setPlan] = useState('all')
   const [status, setStatus] = useState('all')
   const [report, setReport] = useState<School | null>(null)
+  const [editSchool, setEditSchool] = useState<School | null>(null)
   const [upgrade, setUpgrade] = useState<School | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<School | null>(null)
+  const [deleteStep, setDeleteStep] = useState<1 | 2>(1)
+  const [deleteConfirmText, setDeleteConfirmText] = useState('')
+
+  const closeDelete = () => {
+    setPendingDelete(null)
+    setDeleteStep(1)
+    setDeleteConfirmText('')
+  }
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
@@ -278,7 +310,7 @@ function OwnerSchools() {
       key: 'name', label: 'School', sortValue: (s) => s.name,
       render: (s) => (
         <div className="row ai-center gap12">
-          <Avatar name={s.logo} size={36} style={{ background: s.color, borderRadius: 9 }} />
+          <SchoolMark school={s} size={36} />
           <div>
             <div className="t-md fw6">{s.name}</div>
             <div className="t-xs muted3">{s.city} · {s.tz}</div>
@@ -293,16 +325,44 @@ function OwnerSchools() {
     { key: 'mrr', label: 'MRR', align: 'right', sortValue: (s) => s.mrr, render: (s) => fmtMoney(s.mrr, s.currency) },
     { key: 'status', label: 'Status', sortValue: (s) => s.status, render: (s) => <Badge tone={STATUS_TONE[s.status]}>{STATUS_LABEL[s.status]}</Badge> },
     {
-      key: 'actions', label: '', align: 'right',
-      render: (s) => (
-        <div className="row gap6 jc-end">
-          {app.isPlatform && s.plan !== 'platinum' && (
-            <Btn size="sm" variant="secondary" icon="sparkle" onClick={() => setUpgrade(s)}>Upgrade</Btn>
-          )}
-          <Btn size="sm" variant="primary" icon="arrowRight" onClick={() => void app.enterSchool(s.id, s)}>Open</Btn>
-          <Btn size="sm" icon="doc" onClick={() => setReport(s)}>Account report</Btn>
-        </div>
-      ),
+      key: 'actions', label: 'Actions', align: 'right',
+      render: (s) => {
+        const empty = (s.students ?? 0) === 0 && (s.staff ?? 0) === 0
+        return (
+          <div className="row gap6 jc-end" style={{ flexWrap: 'nowrap' }}>
+            <Btn size="sm" variant="primary" icon="arrowRight" onClick={(e) => {
+              e.stopPropagation()
+              void app.enterSchool(s.id, s).then((ok) => {
+                if (!ok) toast.info('School not active', `${s.name} opens only after Catre approves payment and activates the school.`)
+              })
+            }}>Open</Btn>
+            <Btn size="sm" icon="edit" onClick={(e) => { e.stopPropagation(); setEditSchool(s) }}>Edit</Btn>
+            <Btn size="sm" icon="doc" onClick={(e) => { e.stopPropagation(); setReport(s) }}>Report</Btn>
+            {app.isPlatform && s.plan !== 'platinum' && (
+              <Btn size="sm" variant="secondary" icon="sparkle" onClick={(e) => { e.stopPropagation(); setUpgrade(s) }}>Upgrade</Btn>
+            )}
+            <Btn
+              size="sm"
+              variant="ghost"
+              icon="trash"
+              className="sm-btn-delete-icon"
+              disabled={deleteMut.isPending}
+              title={empty ? 'Delete empty school' : 'Only empty schools can be deleted'}
+              aria-label="Delete school"
+              onClick={(e) => {
+                e.stopPropagation()
+                if (!empty) {
+                  toast.info('School not empty', `${s.name} has ${fmtNum(s.students)} student(s) and ${fmtNum(s.staff)} staff.`)
+                  return
+                }
+                setDeleteStep(1)
+                setDeleteConfirmText('')
+                setPendingDelete(s)
+              }}
+            />
+          </div>
+        )
+      },
     },
   ]
 
@@ -317,7 +377,7 @@ function OwnerSchools() {
     <div className="col gap20">
       <PageHead
         title="Schools"
-        sub={`${schoolsList.length} ${schoolsList.length === 1 ? 'school' : 'schools'} in your portfolio`}
+        sub={`${schoolsList.length} ${schoolsList.length === 1 ? 'school' : 'schools'} in your portfolio · Delete is for empty schools only (0 students & 0 staff)`}
         actions={<Btn variant="primary" icon="plus" onClick={() => app.go('owner.create')}>Create school</Btn>}
       />
 
@@ -357,83 +417,87 @@ function OwnerSchools() {
       </Card>
 
       <AccountReportModal school={report} onClose={() => setReport(null)} />
-      <UpgradePlanModal key={upgrade?.id} school={upgrade} onClose={() => setUpgrade(null)} />
+      <EditSchoolProfileModal
+        open={!!editSchool}
+        school={editSchool}
+        client={(clients as Client[]).find((c) => c.id === editSchool?.id) ?? null}
+        isPlatform={app.isPlatform}
+        onClose={() => setEditSchool(null)}
+        onSaved={(s) => {
+          app.rememberSchool(s)
+          void qc.invalidateQueries({ queryKey: ['owner'] })
+        }}
+      />
+      <UpgradePlanModal key={upgrade?.id} school={upgrade} onClose={() => setUpgrade(null)} isPlatform={app.isPlatform} />
+
+      <Modal
+        open={!!pendingDelete}
+        onClose={closeDelete}
+        size="sm"
+        icon="trash"
+        title={deleteStep === 1 ? 'Delete this school?' : 'Confirm permanent delete'}
+        sub={pendingDelete ? `${pendingDelete.name} · step ${deleteStep} of 2` : undefined}
+        footer={
+          <div className="row jc-end gap8" style={{ width: '100%' }}>
+            <Btn onClick={closeDelete}>Cancel</Btn>
+            {deleteStep === 1 ? (
+              <Btn
+                variant="danger"
+                icon="trash"
+                disabled={!pendingDelete}
+                onClick={() => setDeleteStep(2)}
+              >
+                Continue
+              </Btn>
+            ) : (
+              <Btn
+                variant="danger"
+                icon="trash"
+                disabled={
+                  deleteMut.isPending
+                  || !pendingDelete
+                  || deleteConfirmText.trim().toUpperCase() !== 'DELETE'
+                }
+                onClick={() => {
+                  if (!pendingDelete) return
+                  deleteMut.mutate(pendingDelete.id, {
+                    onSuccess: () => {
+                      toast.success('School deleted', `${pendingDelete.name} was removed.`)
+                      closeDelete()
+                    },
+                    onError: (e) => toast.danger('Delete failed', e instanceof ApiError ? e.message : 'Try again.'),
+                  })
+                }}
+              >
+                {deleteMut.isPending ? 'Deleting…' : 'Yes, delete permanently'}
+              </Btn>
+            )}
+          </div>
+        }
+      >
+        {deleteStep === 1 ? (
+          <p className="t-sm muted">
+            This school has no students or staff. Deleting removes it permanently. Click Continue to confirm in the next step.
+          </p>
+        ) : (
+          <div className="col gap12">
+            <p className="t-sm muted">
+              Type <span className="fw7" style={{ color: 'var(--text)' }}>DELETE</span> to permanently remove{' '}
+              <span className="fw7" style={{ color: 'var(--text)' }}>{pendingDelete?.name}</span>. This cannot be undone.
+            </p>
+            <Field label="Type DELETE to confirm" required>
+              <Input
+                icon="trash"
+                value={deleteConfirmText}
+                placeholder="DELETE"
+                autoFocus
+                onChange={(e) => setDeleteConfirmText(e.target.value)}
+              />
+            </Field>
+          </div>
+        )}
+      </Modal>
     </div>
-  )
-}
-
-/* ---------- Upgrade plan modal (from Schools list) ---------- */
-function UpgradePlanModal({ school, onClose }: { school: School | null; onClose: () => void }) {
-  const toast = useToast()
-  const curIdx = school ? TIERS.indexOf(school.plan) : 0
-  const [tier, setTier] = useState<Tier>(TIERS[Math.min(curIdx + 1, TIERS.length - 1)])
-  if (!school) return null
-  const s = school
-  const seats = s.students
-  const curAnnual = seats * rateFor(seats, s.plan)
-  const newAnnual = seats * rateFor(seats, tier)
-  const diff = newAnnual - curAnnual
-
-  const apply = () => {
-    if (TIERS.indexOf(tier) <= curIdx) {
-      toast.info('No upgrade', `${s.name} is already on ${TIER_META[s.plan].label}.`)
-      return
-    }
-    toast.success('Plan upgraded', `${s.name} → ${TIER_META[tier].label} · ${fmtMoney(newAnnual, s.currency)}/yr (+${fmtMoney(diff, s.currency)}/yr).`)
-    onClose()
-  }
-
-  return (
-    <Modal
-      open onClose={onClose} icon="sparkle" size="md"
-      title={`Upgrade plan · ${s.name}`}
-      sub={`${fmtNum(seats)} students · currently ${TIER_META[s.plan].label}`}
-      footer={
-        <div className="row gap8 jc-end">
-          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn variant="primary" icon="check" disabled={TIERS.indexOf(tier) <= curIdx} onClick={apply}>Confirm upgrade</Btn>
-        </div>
-      }
-    >
-      <div className="col gap10">
-        {TIERS.map((t) => {
-          const idx = TIERS.indexOf(t)
-          const isCurrent = idx === curIdx
-          const isLower = idx < curIdx
-          const rate = rateFor(seats, t)
-          const annual = seats * rate
-          const selected = t === tier && !isCurrent && !isLower
-          return (
-            <div key={t}
-              className="sm-card pad row ai-center jc-between gap12"
-              style={{
-                cursor: isLower || isCurrent ? 'not-allowed' : 'pointer',
-                opacity: isLower ? 0.5 : 1,
-                borderColor: selected ? TIER_META[t].color : undefined,
-                borderWidth: selected ? 2 : undefined,
-              }}
-              onClick={() => { if (!isLower && !isCurrent) setTier(t) }}
-            >
-              <div className="row ai-center gap10">
-                <TierPill plan={t} size="md" />
-                {isCurrent && <Badge tone="neutral">Current</Badge>}
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div className="fw7">{fmtMoney(annual, s.currency)}/yr</div>
-                <div className="t-xs muted">{fmtNum(seats)} × {fmtMoney(rate, s.currency)}/student/yr</div>
-              </div>
-            </div>
-          )
-        })}
-        <div className="sm-card pad row ai-center jc-between" style={{ background: 'var(--brand-50)' }}>
-          <span className="t-sm muted">New annual value</span>
-          <span className="fw7">
-            {fmtMoney(newAnnual, s.currency)}/yr{' '}
-            <span className="t-xs" style={{ color: 'var(--success)' }}>(+{fmtMoney(diff, s.currency)})</span>
-          </span>
-        </div>
-      </div>
-    </Modal>
   )
 }
 
@@ -472,8 +536,9 @@ function AccountReportModal({ school, onClose }: { school: School | null; onClos
     >
       <div className="col gap20" id="sm-account-report">
         {/* branded header underlined in the school's brand colour */}
+        <SchoolCover school={s} height={140} />
         <div className="row ai-center gap16" style={{ paddingBottom: 16, borderBottom: `3px solid ${s.color}` }}>
-          <Avatar name={s.logo} size={56} style={{ background: s.color, borderRadius: 14 }} />
+          <SchoolMark school={s} size={56} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="t-lg fw7" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</div>
             <div className="t-sm muted">{s.city} · {s.currency} · {s.tz}</div>
@@ -538,6 +603,30 @@ const WIZARD_STEPS = ['Basics', 'Admin contact', 'Select plan', 'Modules', 'Revi
 
 const TIMEZONES = ['Asia/Kolkata', 'Asia/Dubai', 'Asia/Singapore', 'Europe/London', 'America/New_York']
 
+const INDIA_STATES = [
+  'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat',
+  'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh',
+  'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab',
+  'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand',
+  'West Bengal', 'Andaman and Nicobar Islands', 'Chandigarh', 'Dadra and Nagar Haveli and Daman and Diu',
+  'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry',
+]
+
+function formatSchoolAddress(d: Pick<WizardData, 'address' | 'district' | 'city' | 'state' | 'pincode'>): string {
+  const parts = [
+    d.address.trim(),
+    d.district.trim(),
+    d.city.trim(),
+    d.state.trim(),
+    d.pincode.trim() ? `PIN ${d.pincode.trim()}` : '',
+  ].filter(Boolean)
+  return parts.join(', ').slice(0, 300)
+}
+
+function isValidPincode(pin: string): boolean {
+  return /^\d{6}$/.test(pin.trim())
+}
+
 const MODULE_OPTIONS: { key: string; label: string; desc: string; tier: Tier }[] = [
   { key: 'sis', label: 'Student Information', desc: 'Admissions, profiles, records', tier: 'silver' },
   { key: 'attendance', label: 'Attendance', desc: 'Daily marking & reports', tier: 'silver' },
@@ -558,8 +647,19 @@ const CYCLE_META: Record<BillingCycle, { label: string; div: number; per: string
 
 interface WizardData {
   name: string
+  /** Street / building line */
+  address: string
+  district: string
   city: string
+  state: string
+  pincode: string
   tz: string
+  /** http(s) URL or data-URL from upload — shown across CRM modules */
+  logoUrl: string
+  logoFile: File | null
+  /** Campus / cover photo */
+  imageUrl: string
+  imageFile: File | null
   adminName: string
   adminEmail: string
   adminPhone: string
@@ -567,7 +667,26 @@ interface WizardData {
   tier: Tier
   planId: string
   cycle: BillingCycle
+  /** offline / online — pick a Catre published plan, then pay to activate */
+  payChoice: 'offline' | 'online'
   modules: Set<string>
+}
+
+async function readImageDataUrl(file: File, kind: 'logo' | 'cover'): Promise<string> {
+  try {
+    return await compressImageFile(file, {
+      maxEdge: kind === 'logo' ? 256 : 1280,
+      quality: kind === 'logo' ? 0.85 : 0.8,
+    })
+  } catch {
+    /* Fallback if canvas/createImageBitmap fails (e.g. unusual formats). */
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result ?? ''))
+      reader.onerror = () => reject(reader.error ?? new Error('Could not read image'))
+      reader.readAsDataURL(file)
+    })
+  }
 }
 
 function planTier(plan: { tier: string } | undefined): Tier {
@@ -588,14 +707,18 @@ function estimatePlanAmount(plan: import('@/api/ownerTypes').Plan, strength: num
 function CreateSchoolWizard() {
   const app = useApp()
   const toast = useToast()
+  const qc = useQueryClient()
   const plansQuery = useOwnerPlans(app.isPlatform)
   const createMut = useCreateSchool(app.isPlatform)
   const publishedPlans = plansQuery.data ?? []
   const [step, setStep] = useState(0)
+  const [paying, setPaying] = useState(false)
   const [data, setData] = useState<WizardData>({
-    name: '', city: '', tz: 'Asia/Kolkata',
+    name: '', address: '', district: '', city: '', state: '', pincode: '',
+    tz: 'Asia/Kolkata',
+    logoUrl: '', logoFile: null, imageUrl: '', imageFile: null,
     adminName: app.user?.name ?? '', adminEmail: app.user?.email ?? '', adminPhone: '',
-    strength: 800, tier: 'gold', planId: '', cycle: 'yearly',
+    strength: 800, tier: 'gold', planId: '', cycle: 'yearly', payChoice: 'offline',
     modules: new Set(['sis', 'attendance', 'exams', 'fees', 'communication']),
   })
 
@@ -628,11 +751,18 @@ function CreateSchoolWizard() {
     })
 
   const canNext = (() => {
-    if (step === 0) return data.name.trim() !== '' && data.city.trim() !== ''
+    if (step === 0) {
+      return data.name.trim() !== ''
+        && data.address.trim() !== ''
+        && data.district.trim() !== ''
+        && data.city.trim() !== ''
+        && data.state.trim() !== ''
+        && isValidPincode(data.pincode)
+    }
     if (step === 1) return app.isPlatform
       ? data.adminName.trim() !== '' && data.adminEmail.trim() !== ''
       : true
-    if (step === 2) return data.strength > 0 && !!data.planId && publishedPlans.length > 0
+    if (step === 2) return data.strength > 0 && !!data.planId && publishedPlans.length > 0 && !!data.payChoice
     return true
   })()
 
@@ -642,43 +772,190 @@ function CreateSchoolWizard() {
   const cycleMeta = CYCLE_META[data.cycle]
   const cyclePrice = Math.round(annual / cycleMeta.div)
 
+  const rollbackSchool = async (tenantId: string) => {
+    try {
+      if (app.isPlatform) await deleteClient(tenantId)
+      else await deleteMySchool(tenantId)
+      await qc.invalidateQueries({ queryKey: ['owner'] })
+    } catch {
+      /* best-effort cleanup if online pay cannot start */
+    }
+  }
+
+  const runPayment = async (tenantId: string, planId: string, planLabel: string) => {
+    const mode: UpgradeMode = data.payChoice === 'online' ? 'online' : 'offline'
+    const created = await createUpgradeRequest(tenantId, planId, mode)
+    if (mode === 'offline') {
+      toast.success(
+        'School created · awaiting Catre',
+        `${data.name} is on trial with ${planLabel}. Offline payment is pending — after Catre approves, you can open the school and add students.`,
+      )
+      await qc.invalidateQueries({ queryKey: ['owner'] })
+      app.go('owner.billing')
+      return
+    }
+
+    const order = await createRazorpayOrder(created.id)
+    await new Promise<void>((resolve, reject) => {
+      const rzp = new window.Razorpay!({
+        key: order.key_id,
+        amount: order.amount_paise,
+        currency: order.currency,
+        name: 'SchoolMate',
+        description: `Plan for ${data.name}`,
+        order_id: order.order_id,
+        handler: async (response: {
+          razorpay_order_id: string
+          razorpay_payment_id: string
+          razorpay_signature: string
+        }) => {
+          try {
+            await confirmUpgradePayment(created.id, {
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+            })
+            toast.success('Payment received', 'Waiting for Catre approval. School unlocks after activation.')
+            await qc.invalidateQueries({ queryKey: ['owner'] })
+            app.go('owner.billing')
+            resolve()
+          } catch (e) {
+            reject(e)
+          }
+        },
+        modal: {
+          ondismiss: () => {
+            void (async () => {
+              toast.info('Payment not completed', 'Checkout closed — school was not kept. Choose Offline pay or finish Razorpay later after keys are set.')
+              await rollbackSchool(tenantId)
+              app.go('owner.create')
+              resolve()
+            })()
+          },
+        },
+      })
+      rzp.open()
+    })
+  }
+
   const create = async () => {
     const planId = data.planId || selectedPlan?.id
     if (!planId) {
       toast.danger('No plan available', 'Catre admin must publish a plan before you can create a school.')
       return
     }
+
+    /* Online pay: stop before create if Razorpay is missing or checkout cannot load. */
+    if (data.payChoice === 'online') {
+      try {
+        const gw = await getPaymentGatewayStatus()
+        if (!gw.razorpay_configured) {
+          toast.danger(
+            'Razorpay not configured',
+            'School was not created. Choose Offline pay, or ask Catre to add Razorpay keys first.',
+          )
+          return
+        }
+      } catch (e) {
+        toast.danger(
+          'Could not verify payment',
+          e instanceof ApiError ? e.message : 'School was not created. Try Offline pay or check API.',
+        )
+        return
+      }
+      const scriptOk = await loadRazorpayScript()
+      if (!scriptOk || !window.Razorpay) {
+        toast.danger(
+          'Razorpay checkout unavailable',
+          'School was not created. Choose Offline pay, or retry when checkout can load.',
+        )
+        return
+      }
+    }
+
+    setPaying(true)
+    let createdTenantId: string | null = null
     try {
       const slug = slugify(data.name)
-      if (app.isPlatform) {
-        await createMut.mutateAsync({
+      let logoUrl = data.logoUrl.trim() || undefined
+      if (data.logoFile) {
+        try {
+          logoUrl = await readImageDataUrl(data.logoFile, 'logo')
+        } catch {
+          toast.danger('Logo upload failed', 'Could not read the image. Try a smaller PNG/JPG or paste a URL.')
+          return
+        }
+      }
+      let imageUrl = data.imageUrl.trim() || undefined
+      if (data.imageFile) {
+        try {
+          imageUrl = await readImageDataUrl(data.imageFile, 'cover')
+        } catch {
+          toast.danger('School image upload failed', 'Could not read the photo. Try a smaller PNG/JPG or paste a URL.')
+          return
+        }
+      }
+      const fullAddress = formatSchoolAddress(data)
+      const locationLabel = [data.city.trim(), data.state.trim()].filter(Boolean).join(', ')
+      const client = app.isPlatform
+        ? await createMut.mutateAsync({
           name: data.name.trim(),
           slug,
-          country: data.city.trim(),
+          country: locationLabel || data.city.trim(),
+          address: fullAddress,
+          logo_url: logoUrl,
+          image_url: imageUrl,
           admin_name: data.adminName.trim(),
           admin_email: data.adminEmail.trim(),
           admin_phone: data.adminPhone.trim() || undefined,
           plan_id: planId,
-          trial_days: 14,
+          trial_days: 0,
         })
-      } else {
-        await createMut.mutateAsync({
+        : await createMut.mutateAsync({
           name: data.name.trim(),
           slug,
-          country: data.city.trim(),
+          country: locationLabel || data.city.trim(),
+          address: fullAddress,
+          logo_url: logoUrl,
+          image_url: imageUrl,
           plan_id: planId,
           admin_name: data.adminName.trim() || app.user?.name,
           admin_phone: data.adminPhone.trim() || undefined,
-          trial_days: 14,
+          trial_days: 0,
         })
-      }
+
       const planLabel = selectedPlan?.name ?? TIER_META[data.tier].label
-      toast.success('School created', `${data.name} is on trial with ${planLabel}. Catre admin can activate the client to make the plan active.`)
-      app.go('owner.schools')
+      const tenantId = client.id
+      createdTenantId = tenantId
+
+      if (!tenantId) {
+        toast.danger('Could not create school', 'No school id returned.')
+        return
+      }
+
+      try {
+        await runPayment(tenantId, planId, planLabel)
+      } catch (e) {
+        const msg = e instanceof ApiError ? e.message : 'Payment could not start.'
+        if (data.payChoice === 'online' && createdTenantId) {
+          await rollbackSchool(createdTenantId)
+          toast.danger(
+            'School not created',
+            `${msg} Razorpay did not complete — nothing was kept. Use Offline pay or fix Razorpay keys.`,
+          )
+          return
+        }
+        toast.danger('Payment step failed', msg)
+        app.go('owner.billing')
+      }
     } catch (e) {
       toast.danger('Could not create school', e instanceof ApiError ? e.message : 'Try again.')
+    } finally {
+      setPaying(false)
     }
   }
+
+  const busy = createMut.isPending || paying
 
   return (
     <div className="col gap20">
@@ -717,16 +994,124 @@ function CreateSchoolWizard() {
       <Card>
         {step === 0 && (
           <div className="col gap16">
-            <CardHead title="Basics" sub="Name, location and time zone" icon="building" />
+            <CardHead title="Basics" sub="Name, address, logo and school photo used across CRM modules" icon="building" />
             <Field label="School name" required>
               <Input icon="building" value={data.name} placeholder="e.g. Riverdale International School" onChange={(e) => set('name', e.target.value)} />
             </Field>
+            <Field label="Street address" required hint="Building, street, area — used on invoices & reports.">
+              <Input icon="pin" value={data.address} placeholder="e.g. 4th Floor, Prestige Tech Park" onChange={(e) => set('address', e.target.value)} />
+            </Field>
             <div className="sm-grid-2">
+              <Field label="District" required>
+                <Input icon="pin" value={data.district} placeholder="e.g. Bengaluru Urban" onChange={(e) => set('district', e.target.value)} />
+              </Field>
               <Field label="City" required>
                 <Input icon="pin" value={data.city} placeholder="e.g. Bengaluru" onChange={(e) => set('city', e.target.value)} />
               </Field>
+              <Field label="State" required>
+                <Select
+                  options={[
+                    { value: '', label: 'Select state' },
+                    ...INDIA_STATES.map((s) => ({ value: s, label: s })),
+                  ]}
+                  value={data.state}
+                  onChange={(e) => set('state', e.target.value)}
+                />
+              </Field>
+              <Field
+                label="PIN code"
+                required
+                error={data.pincode.length > 0 && !isValidPincode(data.pincode) ? 'Enter a 6-digit PIN code' : undefined}
+              >
+                <Input
+                  icon="pin"
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={data.pincode}
+                  placeholder="560103"
+                  onChange={(e) => set('pincode', e.target.value.replace(/\D/g, '').slice(0, 6))}
+                />
+              </Field>
               <Field label="Time zone">
                 <Select options={TIMEZONES} value={data.tz} onChange={(e) => set('tz', e.target.value)} />
+              </Field>
+            </div>
+            <div className="sm-grid-2" style={{ alignItems: 'start' }}>
+              <Field
+                label="School logo"
+                hint="Small mark in sidebar & school switcher. PNG/JPG, under 4 MB."
+              >
+                <FileUpload
+                  accept=".png,.jpg,.jpeg,.webp,image/*"
+                  value={data.logoFile}
+                  ariaLabel="Upload school logo"
+                  onChange={(file) => {
+                    setData((d) => ({
+                      ...d,
+                      logoFile: file,
+                      logoUrl: file ? '' : d.logoUrl,
+                    }))
+                  }}
+                />
+              </Field>
+              <Field label="Or logo URL" hint="Optional if you upload a file.">
+                <Input
+                  icon="globe"
+                  value={data.logoUrl}
+                  placeholder="https://…/logo.png"
+                  onChange={(e) => setData((d) => ({ ...d, logoUrl: e.target.value, logoFile: null }))}
+                />
+                {!!data.logoUrl.trim() && (
+                  <div className="row ai-center gap10" style={{ marginTop: 12 }}>
+                    <span className="t-xs muted">URL preview</span>
+                    <SchoolMark
+                      school={{
+                        name: data.name || 'School',
+                        logo: (data.name || 'SC').slice(0, 2).toUpperCase(),
+                        logoUrl: data.logoUrl.trim(),
+                        color: '#4f46e5',
+                      }}
+                      size={48}
+                    />
+                  </div>
+                )}
+              </Field>
+            </div>
+            <div className="sm-grid-2" style={{ alignItems: 'start' }}>
+              <Field
+                label="School image"
+                hint="Campus / cover photo on dashboard and school profile. PNG/JPG, under 4 MB."
+              >
+                <FileUpload
+                  accept=".png,.jpg,.jpeg,.webp,image/*"
+                  value={data.imageFile}
+                  ariaLabel="Upload school image"
+                  onChange={(file) => {
+                    setData((d) => ({
+                      ...d,
+                      imageFile: file,
+                      imageUrl: file ? '' : d.imageUrl,
+                    }))
+                  }}
+                />
+              </Field>
+              <Field label="Or school image URL" hint="Optional if you upload a file.">
+                <Input
+                  icon="globe"
+                  value={data.imageUrl}
+                  placeholder="https://…/campus.jpg"
+                  onChange={(e) => setData((d) => ({ ...d, imageUrl: e.target.value, imageFile: null }))}
+                />
+                {!!data.imageUrl.trim() && (
+                  <img
+                    src={data.imageUrl.trim()}
+                    alt="School"
+                    style={{
+                      marginTop: 12, width: '100%', maxHeight: 120, objectFit: 'cover',
+                      borderRadius: 12, border: '1px solid var(--border)',
+                    }}
+                  />
+                )}
               </Field>
             </div>
           </div>
@@ -759,6 +1144,7 @@ function CreateSchoolWizard() {
             onStrength={(v) => set('strength', v)}
             onSelectPlan={selectPlan}
             onCycle={(c) => set('cycle', c)}
+            onPayChoice={(c) => set('payChoice', c)}
           />
         )}
 
@@ -800,7 +1186,7 @@ function CreateSchoolWizard() {
         {/* nav buttons + running price summary */}
         <div className="sm-divider" style={{ margin: '20px 0 16px' }} />
         <div className="row ai-center jc-between gap12 wrap">
-          <Btn icon="arrowLeft" disabled={step === 0} onClick={() => setStep((s) => Math.max(0, s - 1))}>Back</Btn>
+          <Btn icon="arrowLeft" disabled={step === 0 || busy} onClick={() => setStep((s) => Math.max(0, s - 1))}>Back</Btn>
           <div className="row ai-center gap8 t-sm muted" style={{ marginLeft: 'auto' }}>
             <TierPill plan={data.tier} />
             <span className="t-xs">{selectedPlan?.name ?? 'No plan'}</span>
@@ -810,8 +1196,12 @@ function CreateSchoolWizard() {
           {step < WIZARD_STEPS.length - 1 ? (
             <Btn variant="primary" iconRight="arrowRight" disabled={!canNext} onClick={() => setStep((s) => s + 1)}>Next</Btn>
           ) : (
-            <Btn variant="primary" icon="check" disabled={createMut.isPending || !data.planId} onClick={() => void create()}>
-              {createMut.isPending ? 'Creating…' : <>Create school · {fmtMoney(cyclePrice)}{cycleMeta.per}</>}
+            <Btn variant="primary" icon="check" disabled={busy || !data.planId} onClick={() => { void create() }}>
+              {busy
+                ? 'Working…'
+                : data.payChoice === 'online'
+                  ? `Create & pay · ${fmtMoney(cyclePrice)}${cycleMeta.per}`
+                  : 'Create & request offline payment'}
             </Btn>
           )}
         </div>
@@ -820,9 +1210,9 @@ function CreateSchoolWizard() {
   )
 }
 
-/* ---------- Wizard step 3: pick a published Catre plan ---------- */
+/* ---------- Wizard step 3: pick a published Catre plan + payment ---------- */
 function PlanStep({
-  data, plans, loading, error, selectedPlan, onStrength, onSelectPlan, onCycle,
+  data, plans, loading, error, selectedPlan, onStrength, onSelectPlan, onCycle, onPayChoice,
 }: {
   data: WizardData
   plans: import('@/api/ownerTypes').Plan[]
@@ -832,7 +1222,21 @@ function PlanStep({
   onStrength: (v: number) => void
   onSelectPlan: (planId: string) => void
   onCycle: (c: BillingCycle) => void
+  onPayChoice: (c: WizardData['payChoice']) => void
 }) {
+  const [razorpayOk, setRazorpayOk] = useState<boolean | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void getPaymentGatewayStatus()
+      .then((g) => { if (!cancelled) setRazorpayOk(!!g.razorpay_configured) })
+      .catch(() => { if (!cancelled) setRazorpayOk(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    if (razorpayOk === false && data.payChoice === 'online') onPayChoice('offline')
+  }, [razorpayOk, data.payChoice, onPayChoice])
+
   const strength = data.strength
   const cm = CYCLE_META[data.cycle]
   const amount = selectedPlan ? estimatePlanAmount(selectedPlan, strength) : 0
@@ -870,8 +1274,8 @@ function PlanStep({
   return (
     <div className="col gap16">
       <CardHead
-        title="Select published plan"
-        sub="Plans published by Catre admin. School starts on trial; plan becomes active when Catre activates the client."
+        title="Select plan & payment"
+        sub="Choose a Catre published plan, then Offline or Razorpay. Trial plans from Catre appear in the list above."
         icon="rupee"
       />
 
@@ -880,7 +1284,7 @@ function PlanStep({
           <Input icon="users" type="number" min={1} value={strength}
             onChange={(e) => onStrength(Math.max(0, parseInt(e.target.value || '0', 10)))} />
         </Field>
-        <Field label="Billing cycle" hint="Display only — billing starts when Catre activates the client.">
+        <Field label="Billing cycle" hint="Display estimate only.">
           <Segmented
             value={data.cycle}
             onChange={(v) => onCycle(v as BillingCycle)}
@@ -920,11 +1324,53 @@ function PlanStep({
                   {rateLabel} · {p.period || 'monthly'} · published
                 </div>
               </div>
-              <div className="row ai-center gap6 t-sm" style={{ color: selected ? accent : 'var(--text-3)' }}>
+              <div className="row ai-center gap6 t-xs fw6" style={{ color: selected ? accent : 'var(--text-3)' }}>
                 <Icon name={selected ? 'checkCircle' : 'plus'} size={15} />
                 {selected ? 'Selected' : 'Choose plan'}
               </div>
             </div>
+          )
+        })}
+      </div>
+
+      <div className="col gap8">
+        <div className="t-sm fw6">Payment method</div>
+        {razorpayOk === false && (
+          <div className="t-xs muted" style={{ color: 'var(--danger, #b91c1c)' }}>
+            Razorpay is not configured — online pay is unavailable. Use Offline pay, or ask Catre to add keys.
+          </div>
+        )}
+        {([
+          { value: 'offline' as const, title: 'Pay offline', desc: 'Bank / NEFT. Catre confirms payment then activates the plan.', disabled: false },
+          {
+            value: 'online' as const,
+            title: 'Pay online (Razorpay)',
+            desc: razorpayOk === false
+              ? 'Unavailable — Razorpay keys missing. Choose Offline pay.'
+              : 'Pay now. School is created only after checkout can start. Catre approves after payment.',
+            disabled: razorpayOk === false,
+          },
+        ]).map((opt) => {
+          const on = data.payChoice === opt.value
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              className="sm-card pad"
+              disabled={opt.disabled}
+              style={{
+                textAlign: 'left',
+                cursor: opt.disabled ? 'not-allowed' : 'pointer',
+                opacity: opt.disabled ? 0.55 : 1,
+                borderColor: on ? 'var(--brand-600)' : undefined,
+                borderWidth: on ? 2 : undefined,
+                background: 'var(--surface)',
+              }}
+              onClick={() => { if (!opt.disabled) onPayChoice(opt.value) }}
+            >
+              <div className="fw7">{opt.title}</div>
+              <div className="t-xs muted" style={{ marginTop: 4 }}>{opt.desc}</div>
+            </button>
           )
         })}
       </div>
@@ -934,7 +1380,9 @@ function PlanStep({
         <span className="t-md fw6">
           {selectedPlan?.name ?? 'Plan'} · {cm.label} · {fmtMoney(cycleSel)}{cm.per}
         </span>
-        <Badge tone="info" style={{ marginLeft: 'auto' }}>Active after Catre activates client</Badge>
+        <Badge tone="info" style={{ marginLeft: 'auto' }}>
+          {data.payChoice === 'offline' ? 'Offline payment' : 'Razorpay'}
+        </Badge>
       </div>
     </div>
   )
@@ -945,10 +1393,44 @@ function ReviewStep({ data, plan }: { data: WizardData; plan: import('@/api/owne
   const amount = plan ? estimatePlanAmount(plan, data.strength) : data.strength * rateFor(data.strength, data.tier)
   const cm = CYCLE_META[data.cycle]
   const cyclePrice = Math.round(amount / cm.div)
+  const payLabel =
+    data.payChoice === 'offline'
+      ? 'Pay offline — Catre activates after confirming payment'
+      : 'Pay online (Razorpay) — Catre activates after payment'
   const rows: { label: string; value: React.ReactNode }[] = [
     { label: 'School name', value: data.name || '—' },
+    { label: 'Street address', value: data.address || '—' },
+    { label: 'District', value: data.district || '—' },
     { label: 'City', value: data.city || '—' },
+    { label: 'State', value: data.state || '—' },
+    { label: 'PIN code', value: data.pincode || '—' },
     { label: 'Time zone', value: data.tz },
+    {
+      label: 'Logo',
+      value: data.logoFile
+        ? `Uploaded · ${data.logoFile.name}`
+        : data.logoUrl.trim()
+          ? (
+            <SchoolMark
+              school={{
+                name: data.name || 'School',
+                logo: (data.name || 'SC').slice(0, 2).toUpperCase(),
+                logoUrl: data.logoUrl.trim(),
+                color: '#4f46e5',
+              }}
+              size={36}
+            />
+          )
+          : 'Initials (no logo)',
+    },
+    {
+      label: 'School image',
+      value: data.imageFile
+        ? `Uploaded · ${data.imageFile.name}`
+        : data.imageUrl.trim()
+          ? 'Image URL set'
+          : '—',
+    },
     { label: 'Administrator', value: data.adminName || '—' },
     { label: 'Admin email', value: data.adminEmail || '—' },
     { label: 'Admin phone', value: data.adminPhone || '—' },
@@ -957,7 +1439,7 @@ function ReviewStep({ data, plan }: { data: WizardData; plan: import('@/api/owne
     { label: 'Tier', value: <TierPill plan={data.tier} /> },
     { label: 'Billing cycle', value: cm.label },
     { label: `Estimate (${cm.label.toLowerCase()})`, value: <span className="fw7">{fmtMoney(cyclePrice)}{cm.per}</span> },
-    { label: 'Status after create', value: 'Trial — plan activates when Catre admin activates the client' },
+    { label: 'Payment', value: payLabel },
     { label: 'Modules enabled', value: `${data.modules.size} modules` },
   ]
   return (

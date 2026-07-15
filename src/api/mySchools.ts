@@ -11,6 +11,11 @@ export function createMySchool(body: CreateMySchoolBody): Promise<Client> {
   return request<Client>('/me/schools', { method: 'POST', body })
 }
 
+/** Hard-delete an empty school you own (no students / teachers / staff). */
+export function deleteMySchool(tenantId: string): Promise<void> {
+  return request<void>(`/me/schools/${tenantId}`, { method: 'DELETE', body: { confirm: 'DELETE' } })
+}
+
 /** Cross-school student fee collection for the signed-in owner's portfolio. */
 export function getMySchoolsFeeSummary(params: { from?: string; to?: string } = {}): Promise<FeeSummaryResponse> {
   return request<FeeSummaryResponse>('/me/schools/fee-summary', { query: params })

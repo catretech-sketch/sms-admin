@@ -84,8 +84,16 @@ export function DataTable<T>({
               </th>
             )}
             {columns.map((c) => (
-              <th key={c.key} className={[c.sortValue && 'sortable', c.align === 'right' && 'ta-right', c.align === 'center' && 'ta-center'].filter(Boolean).join(' ')}
-                onClick={c.sortValue ? () => toggleSort(c.key) : undefined}>
+              <th
+                key={c.key}
+                className={[
+                  c.sortValue && 'sortable',
+                  c.align === 'right' && 'ta-right',
+                  c.align === 'center' && 'ta-center',
+                  c.key === 'actions' && 'sm-col-actions',
+                ].filter(Boolean).join(' ')}
+                onClick={c.sortValue ? () => toggleSort(c.key) : undefined}
+              >
                 <span className="row ai-center gap4" style={{ justifyContent: c.align === 'right' ? 'flex-end' : undefined }}>
                   {c.label}
                   {sort?.key === c.key && <Icon name={sort.dir === 'asc' ? 'chevDown' : 'chevRight'} size={12} />}
@@ -107,7 +115,14 @@ export function DataTable<T>({
                   </td>
                 )}
                 {columns.map((c) => (
-                  <td key={c.key} className={[c.align === 'right' && 'ta-right', c.align === 'center' && 'ta-center'].filter(Boolean).join(' ')}>
+                  <td
+                    key={c.key}
+                    className={[
+                      c.align === 'right' && 'ta-right',
+                      c.align === 'center' && 'ta-center',
+                      c.key === 'actions' && 'sm-col-actions',
+                    ].filter(Boolean).join(' ')}
+                  >
                     {c.render ? c.render(row) : (row as Record<string, ReactNode>)[c.key]}
                   </td>
                 ))}

@@ -12,8 +12,23 @@
   content: ''; position: absolute; right: -120px; top: -80px; width: 420px; height: 420px;
   border-radius: 50%; background: rgba(255,255,255,.08);
 }
-.sm-login-brand-logo { display: flex; align-items: center; gap: 12px; font-family: var(--font-display); font-weight: 800; font-size: 20px; }
-.sm-login-brand-logo span { width: 42px; height: 42px; border-radius: 11px; background: rgba(255,255,255,.16); display: flex; align-items: center; justify-content: center; }
+.sm-login-brand-logo { display: flex; align-items: center; gap: 12px; font-family: var(--font-display); font-weight: 800; font-size: 20px; position: relative; z-index: 1; }
+.sm-login-brand-initial {
+  width: 48px; height: 48px; border-radius: 14px; background: rgba(255,255,255,.16);
+  display: flex; align-items: center; justify-content: center; flex: 0 0 auto;
+}
+.sm-login-brand.is-school .sm-login-brand-mark,
+.sm-login-brand.is-school .sm-login-brand-initial {
+  width: 64px; height: 64px; border-radius: 18px;
+}
+.sm-login-brand-mark {
+  width: 48px; height: 48px; border-radius: 14px; object-fit: cover; display: block;
+  flex: 0 0 auto; background: rgba(255,255,255,.12); box-shadow: 0 0 0 2px rgba(255,255,255,.22);
+}
+.sm-login-brand-text { display: flex; flex-direction: column; gap: 2px; line-height: 1.15; }
+.sm-login-brand-text strong { font-weight: 800; font-size: 18px; }
+.sm-login-brand.is-school .sm-login-brand-text strong { font-size: 22px; }
+.sm-login-brand-text small { font-size: 11px; font-weight: 600; opacity: .72; letter-spacing: .04em; text-transform: uppercase; }
 .sm-login-headline { font-family: var(--font-display); font-size: 38px; font-weight: 800; letter-spacing: -.025em; line-height: 1.12; max-width: 460px; }
 .sm-login-sub { font-size: 15px; opacity: .82; margin-top: 16px; max-width: 420px; line-height: 1.6; }
 .sm-login-points { display: flex; flex-direction: column; gap: 12px; margin-top: 28px; }

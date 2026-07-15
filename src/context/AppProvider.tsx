@@ -4,7 +4,7 @@
    ============================================================ */
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ApiError, setOnAuthFailure } from '@/api/client'
-import { login as passwordLogin, me as fetchMe, logout as apiLogout } from '@/api/auth'
+import { login as passwordLogin, me as fetchMe, logout as apiLogout, refresh as refreshSession } from '@/api/auth'
 import { listMySchools, switchSchool } from '@/api/mySchools'
 import { clientToSchool } from '@/api/ownerMap'
 import { tokenStore } from '@/api/auth/tokenStore'
@@ -82,6 +82,8 @@ interface AppState {
   saveFeeStructure: (heads: string[], structure: Record<string, Record<string, number>>) => void
   /* actions */
   authBusy: boolean
+  /** True while bootstrap tries refresh token after page reload. */
+  sessionRestoring: boolean
   authError: string | null
   clearAuthError: () => void
   loginWithPassword: (email: string, password: string) => Promise<void>
@@ -89,8 +91,11 @@ interface AppState {
   go: (view: string, opts?: { focus?: string; intent?: string }) => void
   clearIntent: () => void
   setSchoolId: (id: string) => void
-  /** Open school console. Pass `profile` (from portfolio) so plan/features match the subscription tier. */
-  enterSchool: (id: string, profile?: School) => void | Promise<void>
+  /** Open school console. Pass `profile` (from portfolio) so plan/features match the subscription tier.
+   *  Returns false when the school is still on trial (waiting for Catre activation). */
+  enterSchool: (id: string, profile?: School) => Promise<boolean>
+  /** Merge updated school branding into the live portfolio (after Edit school). */
+  rememberSchool: (school: School) => void
   /** Live portfolio schools when known; otherwise mock demo tenants. */
   schoolChoices: School[]
   exitToOwner: () => void
@@ -148,8 +153,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setFeeStructureState(structure)
   }
   const [authBusy, setAuthBusy] = useState(false)
+  const [sessionRestoring, setSessionRestoring] = useState(() => tokenStore.hasSession())
   const [authError, setAuthError] = useState<string | null>(null)
   const clearAuthError = () => setAuthError(null)
+
+  const persistUi = (
+    next?: Partial<{ view: string; consoleKind: ConsoleKind; schoolId: string; ownerViewingSchool: boolean }>,
+  ) => {
+    tokenStore.setUi({
+      view: next?.view ?? view,
+      consoleKind: next?.consoleKind ?? consoleKind,
+      schoolId: next?.schoolId ?? schoolId,
+      ownerViewingSchool: next?.ownerViewingSchool ?? ownerViewingSchool,
+    })
+  }
 
   const rememberSchools = (list: School[]) => {
     if (list.length === 0) return
@@ -163,36 +180,86 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const hydrateLiveSchools = async () => {
     try {
       const res = await listMySchools()
-      rememberSchools((res.data ?? []).map(clientToSchool))
+      const mapped = (res.data ?? []).map(clientToSchool)
+      setLiveSchools((prev) => {
+        const next: Record<string, School> = {}
+        for (const s of mapped) next[s.id] = s
+        /* Merge remembered branding if the latest API row omitted heavy image fields. */
+        for (const [id, s] of Object.entries(prev)) {
+          if (!next[id]) continue
+          const api = next[id]
+          next[id] = {
+            ...s,
+            ...api,
+            logoUrl: api.logoUrl || s.logoUrl || null,
+            imageUrl: api.imageUrl || s.imageUrl || null,
+          }
+        }
+        return next
+      })
     } catch {
-      /* school session without portfolio access — keep mock / remembered profile */
+      /* Do not fall back to mock tenants — SaaS isolation. */
+      setLiveSchools({})
     }
   }
 
-  const schoolChoices = useMemo(() => {
-    const live = Object.values(liveSchools)
-    return live.length > 0 ? live : mockSchools
-  }, [liveSchools])
+  /** SaaS: only schools mapped to this login (JWT membership). Never demo schools. */
+  const schoolChoices = useMemo(() => Object.values(liveSchools), [liveSchools])
 
-  const school = useMemo(
-    () => liveSchools[schoolId] ?? mockSchools.find((s) => s.id === schoolId) ?? schoolChoices[0] ?? mockSchools[0],
-    [schoolId, liveSchools, schoolChoices],
-  )
+  const school = useMemo(() => {
+    if (liveSchools[schoolId]) return liveSchools[schoolId]
+    if (schoolChoices[0]) return schoolChoices[0]
+    /* Placeholder until /me/schools loads — not another client's school. */
+    return {
+      id: schoolId || 'none',
+      name: 'No school',
+      city: '—',
+      plan: 'gold' as Tier,
+      students: 0,
+      staff: 0,
+      status: 'trial' as const,
+      mrr: 0,
+      attendance: 0,
+      fees: 0,
+      payroll: 0,
+      currency: 'INR',
+      tz: 'Asia/Kolkata',
+      logo: '—',
+      logoUrl: null,
+      imageUrl: null,
+      color: '#64748b',
+    }
+  }, [schoolId, liveSchools, schoolChoices])
   /** Subscription tier for TierGate: live API plan unless a session upgrade override is set. */
   const plan: Tier = planOverride[schoolId] ?? school.plan
   const dir: 'ltr' | 'rtl' = RTL_LANGS.includes(lang) ? 'rtl' : 'ltr'
 
   /** Apply the identity from /auth/me to console/role/view state.
    *  Platform operators and school founders (role owner) land on Owner Console. */
-  const applySession = (email: string, role: Role, isPlatformUser: boolean) => {
+  const applySession = (
+    email: string,
+    role: Role,
+    isPlatformUser: boolean,
+    opts?: { restoreUi?: boolean },
+  ) => {
     const ownerConsole = isPlatformUser || role === 'owner'
+    const saved = opts?.restoreUi ? tokenStore.getUi() : null
     setUser({ name: email.split('@')[0], email, role, hue: isPlatformUser ? 250 : 210 })
     setIsPlatform(isPlatformUser)
-    setConsoleKind(ownerConsole ? 'owner' : 'school')
     setRole(role)
-    setOwnerViewing(false)
-    setView(ownerConsole ? 'owner.dashboard' : 'school.dashboard')
     setLoggedIn(true)
+
+    if (saved?.view) {
+      setConsoleKind(saved.consoleKind ?? (ownerConsole ? 'owner' : 'school'))
+      setOwnerViewing(!!saved.ownerViewingSchool)
+      setView(saved.view)
+      if (saved.schoolId) setSchoolId(saved.schoolId)
+    } else {
+      setConsoleKind(ownerConsole ? 'owner' : 'school')
+      setOwnerViewing(false)
+      setView(ownerConsole ? 'owner.dashboard' : 'school.dashboard')
+    }
+    tokenStore.setEmail(email)
   }
 
   /* Map the backend role string (e.g. "school.owner") to a frontend Role. Unknown
@@ -200,19 +267,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const ROLE_MAP: Record<string, Role> = {
     'school.owner': 'owner', 'school.admin': 'admin',
     'school.principal': 'principal', 'school.teacher': 'teacher',
+    staff: 'staff',
     owner: 'owner', admin: 'admin', principal: 'principal',
     vice_principal: 'vice_principal', teacher: 'teacher',
   }
 
-  const finishLogin = async (email: string) => {
+  const finishLogin = async (email: string, opts?: { restoreUi?: boolean }) => {
     const profile = await fetchMe()
     const role = ROLE_MAP[profile.roles[0]] ?? 'admin'
     const platform = profile.is_platform === true
-    applySession(email, role, platform)
+    applySession(email, role, platform, opts)
     // Load real tenant plan so school console gates match silver/gold/platinum.
     if (!platform) {
       await hydrateLiveSchools()
-      if (profile.tenant_id && isTenantGuid(profile.tenant_id)) {
+      const savedSchool = opts?.restoreUi ? tokenStore.getUi()?.schoolId : undefined
+      if (savedSchool && isTenantGuid(savedSchool)) {
+        setSchoolId(savedSchool)
+      } else if (profile.tenant_id && isTenantGuid(profile.tenant_id)) {
         setSchoolId(profile.tenant_id)
       }
     }
@@ -232,20 +303,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const loginWithPassword = (email: string, password: string) =>
     runAuth(async () => {
+      tokenStore.setUi(null)
       await passwordLogin(email, password)
-      await finishLogin(email)
+      tokenStore.setEmail(email.trim())
+      await finishLogin(email.trim())
     }, 'Sign-in failed. Please try again.')
 
   const logout = async () => {
+    tokenStore.setSchoolBrand(null)
     try { await apiLogout() } finally {
       setLoggedIn(false)
       setUser(null)
       setOwnerViewing(false)
       setLiveSchools({})
       setPlanOverride({})
-      setSchoolId('grv')
+      setSchoolId('')
       setView('school.dashboard')
       setMobileNav(false)
+      tokenStore.setUi(null)
     }
   }
 
@@ -254,43 +329,108 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setFocus(opts?.focus ?? null)
     setIntent(opts?.intent ?? null)
     setMobileNav(false)
+    persistUi({ view: v })
   }
   const clearIntent = () => setIntent(null)
 
-  const enterSchool = async (id: string, profile?: School) => {
-    if (profile) rememberSchools([profile])
-    else if (isTenantGuid(id) && !liveSchools[id]) await hydrateLiveSchools()
+  const enterSchool = async (id: string, profile?: School): Promise<boolean> => {
+    let mapped: Record<string, School> = { ...liveSchools }
 
-    // Real tenant UUIDs need a token switch for school owners; mock ids stay local-only.
+    if (profile && isTenantGuid(id) && profile.id === id) {
+      rememberSchools([profile])
+      mapped[id] = profile
+    }
+
+    /* Always refresh portfolio so logo/cover photos land on the school dashboard. */
+    if (isTenantGuid(id) && !isPlatform) {
+      try {
+        const res = await listMySchools()
+        const list = (res.data ?? []).map(clientToSchool)
+        rememberSchools(list)
+        mapped = { ...mapped, ...Object.fromEntries(list.map((s) => [s.id, s])) }
+        if (profile?.id === id) {
+          mapped[id] = {
+            ...mapped[id],
+            ...profile,
+            logoUrl: mapped[id]?.logoUrl || profile.logoUrl || null,
+            imageUrl: mapped[id]?.imageUrl || profile.imageUrl || null,
+          }
+          rememberSchools([mapped[id]])
+        }
+      } catch {
+        if (!mapped[id]) return false
+      }
+    }
+
+    /* Reject schools not mapped to this login — never another client's tenant. */
+    if (!isPlatform && isTenantGuid(id) && !mapped[id]) return false
+
+    const status = profile?.status ?? mapped[id]?.status
+    if (!isPlatform && status !== 'active') return false
+
+    /* Real tenant UUIDs need a token switch — fail closed so JWT matches UI school. */
     if (isTenantGuid(id) && !isPlatform) {
       try {
         await switchSchool(id)
       } catch {
-        /* same-tenant open still works without switch */
+        return false
       }
     }
     setSchoolId(id)
     setConsoleKind('school')
     setOwnerViewing(true)
     setView('school.dashboard')
+    persistUi({ schoolId: id, consoleKind: 'school', ownerViewingSchool: true, view: 'school.dashboard' })
+    return true
   }
+  const rememberSchool = (next: School) => {
+    rememberSchools([next])
+  }
+
   const exitToOwner = () => {
     setConsoleKind('owner')
     setOwnerViewing(false)
     setView('owner.schools')
+    persistUi({ consoleKind: 'owner', ownerViewingSchool: false, view: 'owner.schools' })
   }
-  const upgrade = (tier: Tier) => setPlanOverride((p) => ({ ...p, [schoolId]: tier }))
+  const upgrade = (_tier: Tier) => {
+    /* Real upgrades go through Owner Billing → Razorpay/offline → Catre approve. */
+    go('owner.billing')
+  }
   const setLang = (l: string) => {
     setLangState(l)
     document.documentElement.setAttribute('dir', RTL_LANGS.includes(l) ? 'rtl' : 'ltr')
     document.documentElement.setAttribute('lang', l)
   }
 
-  useEffect(() => { setOnAuthFailure(() => { tokenStore.clear(); logout() }) }, [])
+  useEffect(() => { setOnAuthFailure(() => { tokenStore.clear(); void logout() }) }, [])
+
+  /* Reload / refresh: keep session via refresh token (do not bounce to login). */
+  useEffect(() => {
+    let cancelled = false
+    const restore = async () => {
+      if (!tokenStore.hasSession()) {
+        setSessionRestoring(false)
+        return
+      }
+      try {
+        await refreshSession()
+        const email = tokenStore.getEmail() || 'user'
+        if (!cancelled) await finishLogin(email, { restoreUi: true })
+      } catch {
+        tokenStore.clear()
+        if (!cancelled) setLoggedIn(false)
+      } finally {
+        if (!cancelled) setSessionRestoring(false)
+      }
+    }
+    void restore()
+    return () => { cancelled = true }
+  }, [])
 
   const value: AppState = {
     loggedIn, user, consoleKind, role, isPlatform, schoolId, ownerViewingSchool, lang, dir, view, mobileNav,
-    focus, intent,
+    focus, intent, sessionRestoring,
     school, plan,
     students, addStudent,
     teachers, addTeacher,
@@ -300,7 +440,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     feePayments, addFeePayment,
     feeHeads, feeStructure, saveFeeStructure,
     authBusy, authError, clearAuthError, loginWithPassword,
-    logout, go, clearIntent, setSchoolId, enterSchool, schoolChoices, exitToOwner, upgrade, setLang, setMobileNav,
+    logout, go, clearIntent, setSchoolId, enterSchool, rememberSchool, schoolChoices, exitToOwner, upgrade, setLang, setMobileNav,
   }
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>

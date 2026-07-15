@@ -6,19 +6,21 @@
 import { useMemo, useState, type ComponentType } from 'react'
 import { useApp } from '@/lib/hooks'
 import {
-  PageHead, Tabs, Card, CardHead, Kpi, Badge, TierPill, Segmented,
+  PageHead, Tabs, Card, CardHead, Kpi, Badge, TierPill, Segmented, Btn,
   HBars, Legend, Donut, DataTable, Empty, Spinner,
   type Column, type BadgeTone,
 } from '@/components/ui'
 import { TIERS, TIER_META } from '@/data/mockDb'
 import { fmtMoney, fmtNum } from '@/lib/format'
 import type { School, Tier } from '@/types'
-import { usePortfolioSchools, useOwnerPlans } from '@/api/hooks/useOwner'
+import { usePortfolioSchools, useOwnerPlans, useMyUpgradeRequests } from '@/api/hooks/useOwner'
 import { clientToSchool } from '@/api/ownerMap'
 import { listInvoices, type ApiInvoice } from '@/api/billing'
 import { useQuery } from '@tanstack/react-query'
 import { queryKeys } from '@/api/queryKeys'
 import type { Plan } from '@/api/ownerTypes'
+import { UpgradePlanModal } from '@/screens/owner/UpgradePlanModal'
+import type { PlanUpgradeRequest, UpgradeStatus } from '@/api/upgradeRequests'
 
 /* compact ₹ for charts/KPIs */
 function compactMoney(n: number): string {
@@ -150,7 +152,15 @@ function OwnerReports() {
 /* ============================================================
    Subscriptions tab — live schools from portfolio API
    ============================================================ */
-function SubscriptionsTab({ schools }: { schools: School[] }) {
+function SubscriptionsTab({
+  schools,
+  isPlatform,
+  onUpgrade,
+}: {
+  schools: School[]
+  isPlatform: boolean
+  onUpgrade: (s: School) => void
+}) {
   const columns: Column<School>[] = [
     {
       key: 'name', label: 'School', sortValue: (s) => s.name,
@@ -171,6 +181,12 @@ function SubscriptionsTab({ schools }: { schools: School[] }) {
       key: 'status', label: 'Status', align: 'center', sortValue: (s) => s.status,
       render: (s) => <Badge tone={statusTone[s.status]} dot>{statusLabel[s.status]}</Badge>,
     },
+    {
+      key: 'actions', label: '', align: 'right',
+      render: (s) => (!isPlatform && s.plan !== 'platinum'
+        ? <Btn size="sm" variant="secondary" icon="sparkle" onClick={(e) => { e.stopPropagation(); onUpgrade(s) }}>Upgrade</Btn>
+        : null),
+    },
   ]
 
   if (schools.length === 0) {
@@ -190,6 +206,59 @@ function SubscriptionsTab({ schools }: { schools: School[] }) {
         rowKey={(s) => s.id}
         initialSort={{ key: 'mrr', dir: 'desc' }}
         empty={<Empty icon="building" title="No subscriptions" body="No schools in your portfolio." />}
+      />
+    </Card>
+  )
+}
+
+const upgradeTone: Record<UpgradeStatus, BadgeTone> = {
+  pending_payment: 'warning',
+  pending_offline: 'info',
+  paid_pending_approval: 'brand',
+  approved: 'success',
+  rejected: 'danger',
+  cancelled: 'neutral',
+}
+const upgradeLabel: Record<UpgradeStatus, string> = {
+  pending_payment: 'Awaiting payment',
+  pending_offline: 'Pending offline',
+  paid_pending_approval: 'Paid — awaiting approval',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  cancelled: 'Cancelled',
+}
+
+function UpgradeRequestsTab() {
+  const q = useMyUpgradeRequests(true)
+  if (q.isLoading) {
+    return <div className="col ai-center jc-center gap12" style={{ minHeight: 200 }}><Spinner size={28} /><div className="t-sm muted">Loading upgrade requests…</div></div>
+  }
+  if (q.isError) {
+    return <Card><Empty icon="alert" title="Could not load upgrade requests" body="Check your connection and try again." /></Card>
+  }
+  const rows = q.data ?? []
+  const columns: Column<PlanUpgradeRequest>[] = [
+    { key: 'tenant_name', label: 'School', sortValue: (r) => r.tenant_name ?? '', render: (r) => <span className="fw6">{r.tenant_name ?? '—'}</span> },
+    {
+      key: 'plan', label: 'Upgrade',
+      render: (r) => <span className="t-sm">{r.from_plan_name ?? r.from_tier ?? '—'} → <strong>{r.to_plan_name ?? r.to_tier}</strong></span>,
+    },
+    { key: 'amount', label: 'Amount', align: 'right', sortValue: (r) => r.amount, render: (r) => <span className="fw6">{fmtMoney(Number(r.amount))}</span> },
+    { key: 'mode', label: 'Mode', render: (r) => <Badge tone="neutral">{r.mode === 'online' ? 'Razorpay' : 'Offline'}</Badge> },
+    {
+      key: 'status', label: 'Status', align: 'center', sortValue: (r) => r.status,
+      render: (r) => <Badge tone={upgradeTone[r.status] ?? 'neutral'} soft>{upgradeLabel[r.status] ?? r.status}</Badge>,
+    },
+  ]
+  return (
+    <Card pad={false}>
+      <DataTable<PlanUpgradeRequest>
+        columns={columns}
+        rows={rows}
+        pageSize={10}
+        rowKey={(r) => r.id}
+        initialSort={{ key: 'status', dir: 'asc' }}
+        empty={<Empty icon="sparkle" title="No upgrade requests" body="Use Upgrade on a school subscription to request Gold or Platinum." />}
       />
     </Card>
   )
@@ -370,6 +439,7 @@ function LivePlansTab({ plans, loading, error }: { plans: Plan[]; loading: boole
 function OwnerBilling() {
   const app = useApp()
   const [tab, setTab] = useState('subs')
+  const [upgrade, setUpgrade] = useState<School | null>(null)
   const schoolsQ = usePortfolioSchools(app.isPlatform)
   const plansQ = useOwnerPlans(app.isPlatform)
   const schools = useMemo(() => (schoolsQ.data ?? []).map(clientToSchool), [schoolsQ.data])
@@ -406,6 +476,7 @@ function OwnerBilling() {
         value={tab} onChange={setTab}
         tabs={[
           { value: 'subs', label: 'Subscriptions', icon: 'list' },
+          { value: 'upgrades', label: 'Upgrade requests', icon: 'sparkle' },
           { value: 'invoices', label: 'Invoices', icon: 'doc' },
           { value: 'revenue', label: 'Revenue', icon: 'trend' },
           { value: 'plans', label: 'Plans & pricing', icon: 'layers' },
@@ -413,11 +484,14 @@ function OwnerBilling() {
       />
 
       <div style={{ marginTop: 16 }}>
-        {tab === 'subs' && <SubscriptionsTab schools={schools} />}
+        {tab === 'subs' && <SubscriptionsTab schools={schools} isPlatform={app.isPlatform} onUpgrade={setUpgrade} />}
+        {tab === 'upgrades' && <UpgradeRequestsTab />}
         {tab === 'invoices' && <InvoicesTab isPlatform={app.isPlatform} />}
         {tab === 'revenue' && <RevenueTab schools={schools} />}
         {tab === 'plans' && <LivePlansTab plans={plansQ.data ?? []} loading={plansQ.isLoading} error={plansQ.isError} />}
       </div>
+
+      <UpgradePlanModal key={upgrade?.id} school={upgrade} onClose={() => setUpgrade(null)} isPlatform={app.isPlatform} />
     </div>
   )
 }

@@ -53,5 +53,6 @@ export const queryKeys = {
     mySchools: ['owner', 'mySchools'] as const,
     feeSummary: (params: { from?: string; to?: string } = {}) => ['owner', 'feeSummary', params] as const,
     plans: (isPlatform: boolean) => ['owner', 'plans', isPlatform] as const,
+    upgradeRequests: ['owner', 'upgradeRequests'] as const,
   },
 }

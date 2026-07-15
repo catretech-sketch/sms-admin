@@ -4,7 +4,7 @@
    ============================================================ */
 
 export type Tier = 'silver' | 'gold' | 'platinum'
-export type Role = 'owner' | 'admin' | 'principal' | 'vice_principal' | 'teacher'
+export type Role = 'owner' | 'admin' | 'principal' | 'vice_principal' | 'teacher' | 'staff'
 /* Roles that appear in the permission matrix (everything except the owner alias).
    `owner` is intentionally excluded — it inherits the admin row via gating normalization. */
 export type GateRole = Exclude<Role, 'owner'>
@@ -51,7 +51,12 @@ export interface School {
   payroll: number
   currency: string
   tz: string
+  /** Initials fallback when logoUrl is missing. */
   logo: string
+  /** Uploaded / URL logo shown across CRM modules when set. */
+  logoUrl?: string | null
+  /** Campus / cover photo for dashboard & school profile. */
+  imageUrl?: string | null
   color: string
 }
 

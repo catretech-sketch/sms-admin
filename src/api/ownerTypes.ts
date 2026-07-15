@@ -21,6 +21,8 @@ export interface Client {
   contact_email: string | null
   contact_phone: string | null
   address: string | null
+  logo_url?: string | null
+  image_url?: string | null
   health_score: number
 }
 
@@ -34,6 +36,8 @@ export interface CreateClientBody {
   plan_id: string
   trial_days: number
   address?: string
+  logo_url?: string
+  image_url?: string
   csm?: string | null
 }
 
@@ -45,6 +49,8 @@ export interface CreateMySchoolBody {
   admin_name?: string
   admin_phone?: string
   address?: string
+  logo_url?: string
+  image_url?: string
   trial_days?: number
 }
 

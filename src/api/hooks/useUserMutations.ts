@@ -2,7 +2,7 @@ import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/r
 import { inviteUser } from '../users'
 import { queryKeys } from '../queryKeys'
 
-export function useInviteUser(): UseMutationResult<void, Error, { email: string; role: string }> {
+export function useInviteUser(): UseMutationResult<{ id: string }, Error, { email: string; role: string }> {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ email, role }: { email: string; role: string }) => inviteUser(email, role),

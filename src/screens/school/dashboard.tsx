@@ -8,6 +8,7 @@ import {
   Donut, Bars, LineChart, Legend, Empty,
 } from '@/components/ui'
 import type { BadgeTone } from '@/components/ui'
+import { SchoolPhoto } from '@/components/SchoolMark'
 import { grades } from '@/data/mockDb'
 import { useApprovals } from '@/api/hooks/useApprovals'
 import { useActOnApproval } from '@/api/hooks/useApprovalMutations'
@@ -71,7 +72,16 @@ function SchoolDashboard() {
 
   return (
     <div className="col gap20">
-      <PageHead title="Dashboard" sub={s.name} />
+      <div className="row ai-center gap16 wrap" style={{ marginBottom: 4 }}>
+        <SchoolPhoto school={s} size={88} />
+        <div style={{ flex: 1, minWidth: 180 }}>
+          <div className="t-xs muted3" style={{ letterSpacing: '0.04em', textTransform: 'uppercase', fontWeight: 600 }}>
+            Dashboard
+          </div>
+          <h1 className="sm-pagehead-title" style={{ margin: '2px 0 4px' }}>{s.name}</h1>
+          <div className="t-sm muted">{s.city}{s.tz ? ` · ${s.tz}` : ''}</div>
+        </div>
+      </div>
 
       {/* ---- KPI row ---- */}
       <div className="sm-kpi-grid">

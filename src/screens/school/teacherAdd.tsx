@@ -186,7 +186,10 @@ function AddTeacherScreen() {
         <Btn variant="ghost" icon="arrowLeft" onClick={() => app.go('school.teachers')}>Teachers</Btn>
       </div>
 
-      <PageHead title="Add teacher" sub={`New teaching staff record · ${app.school.name}`} />
+      <PageHead
+        title="Onboard teacher"
+        sub={`Name, address & documents · ${app.school.name}`}
+      />
 
       <div className="col gap16">
         {/* ---- Personal ---- */}
@@ -365,7 +368,9 @@ function AddTeacherScreen() {
         }}
       >
         <Btn variant="ghost" onClick={() => app.go('school.teachers')}>Cancel</Btn>
-        <Btn variant="primary" icon="check" onClick={save}>Save teacher</Btn>
+        <Btn variant="primary" icon="check" onClick={save} disabled={createTeacher.isPending}>
+          {createTeacher.isPending ? 'Saving…' : 'Save teacher'}
+        </Btn>
       </div>
     </div>
   )

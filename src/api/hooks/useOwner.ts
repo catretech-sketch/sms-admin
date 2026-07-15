@@ -1,8 +1,9 @@
 import { useQuery, useMutation, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
-import { listClients, createClient } from '../clients'
+import { listClients, createClient, deleteClient } from '../clients'
 import { getOverview } from '../dashboard'
 import { listMyPlans, listLivePlans, isLivePlan } from '../plans'
-import { listMySchools, createMySchool, switchSchool, getMySchoolsFeeSummary } from '../mySchools'
+import { listMySchools, createMySchool, deleteMySchool, switchSchool, getMySchoolsFeeSummary } from '../mySchools'
+import { listMyUpgradeRequests } from '../upgradeRequests'
 import { queryKeys } from '../queryKeys'
 import type { CreateClientBody, CreateMySchoolBody } from '../ownerTypes'
 import { passwordForgot } from '../auth'
@@ -71,11 +72,31 @@ export function useSwitchSchool() {
   return useMutation({ mutationFn: (tenantId: string) => switchSchool(tenantId) })
 }
 
+/** Platform → DELETE /clients/{id}; school owner → DELETE /me/schools/{id}. Empty schools only. */
+export function useDeleteSchool(isPlatform: boolean) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (tenantId: string) =>
+      isPlatform ? deleteClient(tenantId) : deleteMySchool(tenantId),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['owner'] })
+    },
+  })
+}
+
 /** School-wise fee cash summary for owner (and platform) portfolio. */
 export function useOwnerFeeSummary(enabled = true, params: { from?: string; to?: string } = {}) {
   return useQuery({
     queryKey: queryKeys.owner.feeSummary(params),
     queryFn: () => getMySchoolsFeeSummary(params),
+    enabled,
+  })
+}
+
+export function useMyUpgradeRequests(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.owner.upgradeRequests,
+    queryFn: listMyUpgradeRequests,
     enabled,
   })
 }

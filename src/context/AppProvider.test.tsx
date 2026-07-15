@@ -6,7 +6,12 @@ import { tokenStore } from '@/api/auth/tokenStore'
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
-beforeEach(() => { localStorage.clear(); tokenStore.clear(); vi.restoreAllMocks() })
+beforeEach(() => {
+  localStorage.clear()
+  sessionStorage.clear()
+  tokenStore.clear()
+  vi.restoreAllMocks()
+})
 
 const wrapper = ({ children }: { children: React.ReactNode }) => <AppProvider>{children}</AppProvider>
 
@@ -90,7 +95,7 @@ describe('AppProvider auth', () => {
           id: tenantId, name: 'Silver High', slug: 'silver-high', country: 'IN', status: 'active',
           plan_id: null, plan_name: 'Silver', tier: 'silver', mrr: 1000, students_count: 100, staff_count: 10,
           storage_gb: 1, created: '2026-01-01', contact_name: null, contact_email: null, contact_phone: null,
-          address: null, health_score: 70,
+          address: null, logo_url: null, image_url: null, health_score: 70,
         }],
       })))
     const { result } = renderHook(() => useApp(), { wrapper })
@@ -111,6 +116,20 @@ describe('AppProvider auth', () => {
     await waitFor(() => expect(result.current.loggedIn).toBe(true))
     await act(async () => { await result.current.logout() })
     expect(result.current.loggedIn).toBe(false)
+  })
+
+  it('restores session from refresh token after reload (no logout)', async () => {
+    tokenStore.set({ access_token: 'old', refresh_token: 'r-keep' })
+    tokenStore.setEmail('admin@greenwood.edu')
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { access_token: 'a-new', refresh_token: 'r-new' } })) // /auth/refresh
+      .mockResolvedValueOnce(jsonResponse({ data: { id: 'u1', tenant_id: 't1', roles: ['admin'], is_platform: false } }))
+      .mockResolvedValueOnce(jsonResponse({ data: [] })))
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.sessionRestoring).toBe(false))
+    await waitFor(() => expect(result.current.loggedIn).toBe(true))
+    expect(result.current.user?.email).toBe('admin@greenwood.edu')
+    expect(tokenStore.getAccess()).toBe('a-new')
   })
 
   it('enterSchool uses the portfolio school plan for feature gating', async () => {

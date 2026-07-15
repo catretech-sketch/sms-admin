@@ -33,14 +33,19 @@ export function clientToSchool(c: Client, i = 0): School {
     currency: 'INR',
     tz: 'Asia/Kolkata',
     logo: c.name.slice(0, 2).toUpperCase(),
+    logoUrl: c.logo_url ?? null,
+    imageUrl: c.image_url ?? null,
     color: COLORS[i % COLORS.length],
   }
 }
 
 export function slugify(name: string): string {
-  return name
+  const base = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
-    .slice(0, 48) || `school-${Date.now().toString(36)}`
+    .slice(0, 40)
+  /* Suffix avoids IX_Tenants_Slug collisions when recreating similarly named schools. */
+  const suffix = Date.now().toString(36).slice(-4)
+  return base ? `${base}-${suffix}` : `school-${Date.now().toString(36)}`
 }

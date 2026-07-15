@@ -3,8 +3,9 @@
    theme toggle, notifications, user menu)
    ============================================================ */
 import { useState } from 'react'
-import { useApp, useTheme } from '@/lib/hooks'
+import { useApp, useTheme, useToast } from '@/lib/hooks'
 import { Icon, IconBtn, Avatar, Badge, Popover, MenuItem, MenuSep, MenuLabel, TierPill } from '@/components/ui'
+import { SchoolMark } from '@/components/SchoolMark'
 import { ROLE_META } from '@/data/mockDb'
 import { useNotifications } from '@/api/hooks/useNotifications'
 
@@ -13,6 +14,7 @@ const LANGS = [{ v: 'en', l: 'English' }, { v: 'hi', l: 'हिन्दी Hind
 export function Topbar() {
   const app = useApp()
   const theme = useTheme()
+  const toast = useToast()
   const [q, setQ] = useState('')
   const isOwner = app.consoleKind === 'owner'
   const { data: notifData } = useNotifications()
@@ -30,15 +32,19 @@ export function Topbar() {
       {!isOwner && (
         <Popover align="left" trigger={(_open, toggle) => (
           <button className="sm-school-switch" onClick={toggle}>
-            <span className="sm-school-logo" style={{ background: app.school.color }}>{app.school.logo}</span>
+            <SchoolMark school={app.school} size={28} />
             <span className="fw6 t-sm" style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{app.school.name}</span>
             <Icon name="chevDown" size={15} />
           </button>
         )}>
           <MenuLabel>Switch school</MenuLabel>
           {app.schoolChoices.map((s) => (
-            <MenuItem key={s.id} onClick={() => { void (app.ownerViewingSchool ? app.enterSchool(s.id, s) : app.setSchoolId(s.id)) }}>
-              <span className="sm-school-logo" style={{ background: s.color, width: 24, height: 24, fontSize: 10 }}>{s.logo}</span>
+            <MenuItem key={s.id} onClick={() => {
+              void app.enterSchool(s.id, s).then((ok) => {
+                if (!ok) toast.info('School not active', `${s.name} cannot be opened until Catre activates it (after payment approval).`)
+              })
+            }}>
+              <SchoolMark school={s} size={24} />
               <span className="flex1">{s.name}</span>
               <TierPill plan={s.plan} />
             </MenuItem>

@@ -11,6 +11,7 @@ import { Topbar } from '@/components/shell/Topbar'
 import { Tweaks } from '@/components/shell/Tweaks'
 import { LoginScreen } from '@/screens/LoginScreen'
 import { Router } from '@/router'
+import { PendingActivationScreen } from '@/components/shell/gates'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -18,7 +19,15 @@ const queryClient = new QueryClient({
 
 function Shell() {
   const app = useApp()
+  if (app.sessionRestoring) {
+    return (
+      <div className="col ai-center jc-center" style={{ minHeight: '100vh', gap: 12 }}>
+        <div className="t-sm muted">Restoring session…</div>
+      </div>
+    )
+  }
   if (!app.loggedIn) return <LoginScreen />
+  const pendingActivation = app.consoleKind === 'school' && app.school.status !== 'active' && !app.isPlatform
   return (
     <div className={['sm-app', app.mobileNav && 'nav-open'].filter(Boolean).join(' ')}>
       {app.mobileNav && <div className="sm-scrim only-mobile" onClick={() => app.setMobileNav(false)} />}
@@ -27,7 +36,7 @@ function Shell() {
         <Topbar />
         <main className="sm-content">
           <div className="sm-content-narrow">
-            <Router />
+            {pendingActivation ? <PendingActivationScreen /> : <Router />}
           </div>
         </main>
       </div>

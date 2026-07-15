@@ -185,7 +185,10 @@ function AddStaffScreen() {
         <Btn variant="ghost" icon="arrowLeft" onClick={() => app.go('school.staff')}>Staff</Btn>
       </div>
 
-      <PageHead title="Add staff" sub={`New non-teaching staff record · ${app.school.name}`} />
+      <PageHead
+        title="Onboard staff"
+        sub={`Name, address & documents · ${app.school.name} — not a CRM login invite`}
+      />
 
       <div className="col gap16">
         {/* ---- Personal ---- */}

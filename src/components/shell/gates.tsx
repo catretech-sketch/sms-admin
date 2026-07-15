@@ -52,3 +52,27 @@ export function RestrictedScreen({ title = 'Access restricted', note }: { title?
     </div>
   )
 }
+
+/** School not active yet — wait for Catre payment approval / activate before SIS use. */
+export function PendingActivationScreen() {
+  const app = useApp()
+  const owner = app.consoleKind === 'owner' || app.role === 'owner' || app.ownerViewingSchool
+  return (
+    <div>
+      <PageHead title={app.school.name} sub="School not active" />
+      <Empty
+        icon="lock"
+        title="School is not active"
+        body="Pay for the plan (offline or Razorpay), then Catre must Approve the payment. Only after the school status is Active can anyone open it and add students or staff."
+        action={owner
+          ? (
+            <div className="row gap8">
+              <Btn variant="secondary" icon="arrowLeft" onClick={() => app.exitToOwner()}>Back to schools</Btn>
+              <Btn variant="primary" icon="rupee" onClick={() => { app.exitToOwner(); app.go('owner.billing') }}>Go to billing</Btn>
+            </div>
+          )
+          : undefined}
+      />
+    </div>
+  )
+}

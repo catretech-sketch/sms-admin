@@ -26,27 +26,28 @@ export const FEATURE_TIER: Record<string, Tier> = {
 }
 
 /* ---------- Roles & permission matrix ---------- */
-export const ROLES: GateRole[] = ['admin', 'principal', 'vice_principal', 'teacher']
+export const ROLES: GateRole[] = ['admin', 'principal', 'vice_principal', 'teacher', 'staff']
 export const ROLE_META: Record<Role, RoleMeta> = {
-  owner: { label: 'Owner', short: 'OW', desc: 'School owner — full control of this school' },
-  admin: { label: 'Admin', short: 'AD', desc: 'Day-to-day setup & data entry' },
-  principal: { label: 'Principal', short: 'PR', desc: 'Final approver + all reports' },
-  vice_principal: { label: 'Vice-Principal', short: 'VP', desc: 'Academic owner, no financial authority' },
-  teacher: { label: 'Teacher', short: 'TE', desc: 'Marks, attendance & homework for own classes' },
+  owner: { label: 'Owner', short: 'OW', desc: 'School owner — full control; only an owner can assign this role' },
+  admin: { label: 'Admin', short: 'AD', desc: 'School admin — setup, users & day-to-day operations' },
+  principal: { label: 'Principal', short: 'PR', desc: 'Principal — academics, approvals & reports' },
+  vice_principal: { label: 'Vice-Principal', short: 'VP', desc: 'Academic lead (maps to Principal on invite)' },
+  teacher: { label: 'Teacher', short: 'TE', desc: 'Teacher — marks, attendance & homework for own classes' },
+  staff: { label: 'Staff', short: 'ST', desc: 'Non-teaching staff — office, transport, library, etc.' },
 }
 export const PERMS: Record<string, Record<GateRole, Cap[]>> = {
-  setup: { admin: ['E'], principal: ['V', 'E'], vice_principal: ['V'], teacher: [] },
-  dashboard: { admin: ['V'], principal: ['V'], vice_principal: ['V'], teacher: ['V'] },
-  identity: { admin: ['E'], principal: ['V', 'E'], vice_principal: ['V'], teacher: [] },
-  sis: { admin: ['E'], principal: ['V', 'E'], vice_principal: ['V', 'E'], teacher: ['V'] },
-  academics: { admin: ['E'], principal: ['V', 'A'], vice_principal: ['E', 'A'], teacher: ['V', 'E'] },
-  attendance: { admin: ['E'], principal: ['V', 'A'], vice_principal: ['V', 'E', 'A'], teacher: ['V', 'E'] },
-  exams: { admin: ['E'], principal: ['A'], vice_principal: ['A'], teacher: ['V', 'E'] },
-  fees: { admin: ['E'], principal: ['A'], vice_principal: ['V'], teacher: [] },
-  hr: { admin: ['E'], principal: ['A'], vice_principal: ['A'], teacher: [] },
-  communication: { admin: ['E'], principal: ['E', 'A'], vice_principal: ['E'], teacher: ['E'] },
-  operations: { admin: ['E'], principal: ['V'], vice_principal: ['V'], teacher: [] },
-  settings: { admin: ['E'], principal: ['V'], vice_principal: ['V'], teacher: [] },
+  setup: { admin: ['E'], principal: ['V', 'E'], vice_principal: ['V'], teacher: [], staff: [] },
+  dashboard: { admin: ['V'], principal: ['V'], vice_principal: ['V'], teacher: ['V'], staff: ['V'] },
+  identity: { admin: ['E'], principal: ['V', 'E'], vice_principal: ['V'], teacher: [], staff: [] },
+  sis: { admin: ['E'], principal: ['V', 'E'], vice_principal: ['V', 'E'], teacher: ['V'], staff: ['V'] },
+  academics: { admin: ['E'], principal: ['V', 'A'], vice_principal: ['E', 'A'], teacher: ['V', 'E'], staff: [] },
+  attendance: { admin: ['E'], principal: ['V', 'A'], vice_principal: ['V', 'E', 'A'], teacher: ['V', 'E'], staff: ['V'] },
+  exams: { admin: ['E'], principal: ['A'], vice_principal: ['A'], teacher: ['V', 'E'], staff: [] },
+  fees: { admin: ['E'], principal: ['A'], vice_principal: ['V'], teacher: [], staff: ['V'] },
+  hr: { admin: ['E'], principal: ['A'], vice_principal: ['A'], teacher: [], staff: ['V'] },
+  communication: { admin: ['E'], principal: ['E', 'A'], vice_principal: ['E'], teacher: ['E'], staff: ['V', 'E'] },
+  operations: { admin: ['E'], principal: ['V'], vice_principal: ['V'], teacher: [], staff: ['V', 'E'] },
+  settings: { admin: ['E'], principal: ['V'], vice_principal: ['V'], teacher: [], staff: [] },
 }
 
 /* ---------- Schools (tenants) ---------- */

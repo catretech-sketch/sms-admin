@@ -1,12 +1,13 @@
 /* ============================================================
    SchoolMate — Login screen
    ============================================================ */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import { DEMO_ACCOUNTS, type DemoAccount } from '@/context/AppProvider'
 import { Icon, Field, Input, Btn, Checkbox, Spinner } from '@/components/ui'
 import { validateEmail, validatePassword, passwordsMatch, required } from '@/lib/validation'
 import { passwordForgot, passwordReset } from '@/api/auth'
+import { tokenStore } from '@/api/auth/tokenStore'
 import { ApiError } from '@/api/client'
 
 /* ---------- Sign-in identifier helpers (which account an email/mobile maps to) ---------- */
@@ -56,9 +57,9 @@ function apiErrorMessage(e: unknown, fallback: string): string {
 }
 
 const POINTS = [
-  { icon: 'users', t: 'Two-console SaaS — Owner + School' },
-  { icon: 'shield', t: 'Tier & role-based access control' },
-  { icon: 'sparkle', t: 'Real-time attendance, fees & transport' },
+  { icon: 'users', t: 'Owner SaaS — manage every school in your group' },
+  { icon: 'shield', t: 'Plans & billing — Catre activates after payment' },
+  { icon: 'sparkle', t: 'Open a school console for day-to-day ops' },
 ]
 
 export function LoginScreen() {
@@ -70,7 +71,10 @@ export function LoginScreen() {
   const [remember, setRemember] = useState(true)
   const busy = app.authBusy
 
-  const signIn = (e: string) => { void app.loginWithPassword(e, pw) }
+  /* Login is product-branded only — never show a sticky school logo (e.g. ssc). */
+  useEffect(() => { tokenStore.setSchoolBrand(null) }, [])
+
+  const signIn = (e: string) => { void app.loginWithPassword(e.trim(), pw.trim()) }
 
   /* Password reset/create: prove the identifier via a one-time code, then set a new
      password in a single /auth/password/reset call. On success, return to sign in. */
@@ -159,18 +163,30 @@ export function LoginScreen() {
 
   return (
     <div className="sm-login">
-      <div className="sm-login-brand">
-        <div className="sm-login-brand-logo"><span>S</span> SchoolMate</div>
+      <div className="sm-login-brand is-saas">
+        <div className="sm-login-brand-logo">
+          <span className="sm-login-brand-initial">S</span>
+          <div className="sm-login-brand-text">
+            <strong>SchoolMate</strong>
+            <small>Owner SaaS</small>
+          </div>
+        </div>
         <div>
-          <h1 className="sm-login-headline">Run every school in your group from one console.</h1>
-          <p className="sm-login-sub">Admissions to attendance, fees to payroll, timetables to transport — SchoolMate brings it together with tier-based plans and role-based access.</p>
+          <h1 className="sm-login-headline">
+            Run every school in your group from one console.
+          </h1>
+          <p className="sm-login-sub">
+            Owner console — portfolios, plans, and schools. Catre is the platform that activates after payment.
+          </p>
           <div className="sm-login-points">
             {POINTS.map((p, i) => (
               <div className="sm-login-point" key={i}><span><Icon name={p.icon} size={15} /></span>{p.t}</div>
             ))}
           </div>
         </div>
-        <div className="sm-login-foot">© 2026 SchoolMate · A multi-tenant school management SaaS</div>
+        <div className="sm-login-foot">
+          © 2026 SchoolMate · Multi-tenant school SaaS for owners
+        </div>
       </div>
 
       <div className="sm-login-panel">

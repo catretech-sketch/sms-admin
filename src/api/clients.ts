@@ -16,3 +16,8 @@ export function createClient(body: CreateClientBody): Promise<Client> {
 export function setClientStatus(id: string, status: string, reason?: string): Promise<Client> {
   return request<Client>(`/clients/${id}/status`, { method: 'POST', body: { status, reason } })
 }
+
+/** Platform: hard-delete empty school (no students / teachers / staff). */
+export function deleteClient(id: string): Promise<void> {
+  return request<void>(`/clients/${id}`, { method: 'DELETE', body: { confirm: 'DELETE' } })
+}
