@@ -9,7 +9,8 @@ import { useApp, useToast } from '@/lib/hooks'
 import { useFeePayments, usePayInvoice } from '@/api/hooks/useFeePayments'
 import { useFeeHeads, useCreateFeeHead, useDeleteFeeHead } from '@/api/hooks/useFeeHeads'
 import { useFeeStructure, useSaveFeeStructure } from '@/api/hooks/useFeeStructure'
-import { useGenerateFeeInvoices } from '@/api/hooks/useFeeInvoices'
+import { useFeeInvoices, useGenerateFeeInvoices } from '@/api/hooks/useFeeInvoices'
+import { useFeeReportSummary } from '@/api/hooks/useFeeReports'
 import { useClasses } from '@/api/hooks/useClasses'
 import { can } from '@/lib/gating'
 import {
@@ -18,17 +19,18 @@ import {
   DemoBadge,
 } from '@/components/ui'
 import { TierGate } from '@/components/shell/gates'
-import { students, teachers, staff, grades } from '@/data/mockDb'
+import { teachers, staff, grades } from '@/data/mockDb'
 import { gradeRank } from '@/lib/defaultClasses'
 import { fmtMoney, fmtNum } from '@/lib/format'
-import type { Student, Teacher, Staff, FeeStatus, FeeType, FeePayment, FeeHead } from '@/types'
+import type { Teacher, Staff, FeeStatus, FeeType, FeePayment, FeeHead, FeeInvoice } from '@/types'
 
 /* ============================================================
    Fees collection
    ============================================================ */
 const feeTone: Record<FeeStatus, BadgeTone> = { paid: 'success', partial: 'warning', due: 'danger' }
 const feeLabel: Record<FeeStatus, string> = { paid: 'Paid', partial: 'Partial', due: 'Due' }
-const PAY_MODES = ['Cash', 'UPI', 'Card', 'Bank transfer', 'Cheque']
+const PAY_MODES = ['Cash', 'UPI (manual)', 'Cheque', 'Card / POS', 'Bank transfer', 'DD']
+const ALL_MODES = [...PAY_MODES, 'Razorpay']
 const feeTypeMeta: Record<FeeType, { label: string; tone: BadgeTone }> = {
   academic: { label: 'Academic', tone: 'brand' },
   transport: { label: 'Transport (Bus)', tone: 'info' },
@@ -36,43 +38,39 @@ const feeTypeMeta: Record<FeeType, { label: string; tone: BadgeTone }> = {
 }
 const FEE_TYPE_OPTS = (Object.keys(feeTypeMeta) as FeeType[]).map((v) => ({ value: v, label: feeTypeMeta[v].label }))
 
-interface FeeRow { stu: Student; term: number; paid: number; due: number; status: FeeStatus }
-
-/* term fee scales gently with grade level (deterministic) */
-function termFeeFor(grade: string): number {
-  const level = Math.max(0, grades.indexOf(grade))
-  return 36000 + level * 1200
-}
-
-function buildFeeRow(s: Student): FeeRow {
-  const term = termFeeFor(s.grade)
-  const due = s.feeStatus === 'paid'
-    ? 0
-    : s.feeStatus === 'partial'
-      ? Math.min(s.feeDue || Math.round(term * 0.4), term)
-      : term
-  return { stu: s, term, paid: term - due, due, status: s.feeStatus }
-}
-
 /* ---------- Record-payment modal ---------- */
-function PaymentModal({ row, cur, onClose }: { row: FeeRow; cur: string; onClose: () => void }) {
+function PaymentModal({ invoice, cur, onClose }: { invoice: FeeInvoice; cur: string; onClose: () => void }) {
   const toast = useToast()
   const payInvoice = usePayInvoice()
-  const [amount, setAmount] = useState(String(row.due || row.term))
-  const [mode, setMode] = useState(PAY_MODES[1])
+  const headsQ = useFeeHeads()
+  const heads = useMemo<FeeHead[]>(() => (headsQ.data ?? []).filter((h) => h.active !== false), [headsQ.data])
+
+  const [amount, setAmount] = useState(String(invoice.due || invoice.total))
+  const [mode, setMode] = useState(PAY_MODES[0])
+  const [headId, setHeadId] = useState('')
   const [ref, setRef] = useState('')
-  const [feeType, setFeeType] = useState<FeeType>('academic')
+  const [chequeNumber, setChequeNumber] = useState('')
+  const [chequeBank, setChequeBank] = useState('')
+  const [chequeDate, setChequeDate] = useState('')
+
+  useEffect(() => {
+    if (!headId && heads.length) setHeadId(heads[0].id)
+  }, [heads, headId])
 
   const submit = () => {
     const n = Number(amount)
     if (!n || n <= 0) { toast.danger('Amount required', 'Enter a valid payment amount.'); return }
+    if (mode === 'Cheque' && !chequeNumber.trim()) { toast.danger('Cheque number required', 'Enter the cheque number.'); return }
+    const head = heads.find((h) => h.id === headId)
     const payment: FeePayment = {
-      id: Date.now(), studentId: row.stu.id, studentName: row.stu.name, cls: row.stu.cls,
-      feeType, amount: n, mode, ref: ref.trim(),
+      id: Date.now(), invoiceId: invoice.id, studentId: invoice.studentId, studentName: invoice.studentName, cls: invoice.cls,
+      headId: headId || undefined, headName: head?.name,
+      amount: n, mode, ref: ref.trim(),
       date: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+      ...(mode === 'Cheque' ? { cheque: { number: chequeNumber.trim(), bank: chequeBank.trim() || undefined, date: chequeDate || undefined } } : {}),
     }
-    payInvoice.mutate({ invoiceId: row.stu.id, payment }, {
-      onSuccess: () => { toast.success('Payment recorded', `${fmtMoney(n, cur)} · ${feeTypeMeta[feeType].label} · ${mode} · ${row.stu.name} (${row.stu.cls})`); onClose() },
+    payInvoice.mutate({ invoiceId: invoice.id, payment }, {
+      onSuccess: () => { toast.success('Payment recorded', `${fmtMoney(n, cur)} · ${mode} · ${invoice.studentName} (${invoice.cls})`); onClose() },
       onError: (err) => { toast.danger('Payment failed', err instanceof Error ? err.message : 'Please try again.') },
     })
   }
@@ -80,7 +78,7 @@ function PaymentModal({ row, cur, onClose }: { row: FeeRow; cur: string; onClose
   return (
     <Modal
       open onClose={onClose} icon="rupee" size="sm"
-      title="Record payment" sub={`${row.stu.name} · ${row.stu.cls} · Outstanding ${fmtMoney(row.due, cur)}`}
+      title="Record payment" sub={`${invoice.studentName} · ${invoice.cls} · Outstanding ${fmtMoney(invoice.due, cur)}`}
       footer={
         <div className="row gap8 jc-end">
           <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
@@ -89,16 +87,35 @@ function PaymentModal({ row, cur, onClose }: { row: FeeRow; cur: string; onClose
       }
     >
       <div className="col gap16">
-        <Field label="Fee type" required>
-          <Select options={FEE_TYPE_OPTS} value={feeType} onChange={(e) => setFeeType(e.target.value as FeeType)} />
+        <Field label="Fee head" required>
+          <Select options={heads.map((h) => ({ value: h.id, label: h.name }))} value={headId} onChange={(e) => setHeadId(e.target.value)} />
         </Field>
-        <Field label="Amount" required hint={`Term fee ${fmtMoney(row.term, cur)} · paid so far ${fmtMoney(row.paid, cur)}.`}>
+        <Field label="Amount" required hint={`Term fee ${fmtMoney(invoice.total, cur)} · paid so far ${fmtMoney(invoice.paid, cur)}.`}>
           <Input icon="rupee" type="number" inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} />
         </Field>
         <Field label="Payment mode" required>
           <Select options={PAY_MODES} value={mode} onChange={(e) => setMode(e.target.value)} />
         </Field>
-        <Field label="Reference / receipt no." hint="UPI ref, cheque no. or transaction id.">
+        {mode === 'Cheque' && (
+          <div className="row gap12 wrap">
+            <div style={{ flex: '1 1 140px' }}>
+              <Field label="Cheque number" required>
+                <Input icon="clipboard" value={chequeNumber} placeholder="e.g. 004821" onChange={(e) => setChequeNumber(e.target.value)} />
+              </Field>
+            </div>
+            <div style={{ flex: '1 1 140px' }}>
+              <Field label="Bank">
+                <Input value={chequeBank} placeholder="e.g. HDFC Bank" onChange={(e) => setChequeBank(e.target.value)} />
+              </Field>
+            </div>
+            <div style={{ flex: '1 1 140px' }}>
+              <Field label="Cheque date">
+                <Input type="date" value={chequeDate} onChange={(e) => setChequeDate(e.target.value)} />
+              </Field>
+            </div>
+          </div>
+        )}
+        <Field label="Reference / receipt no." hint="UPI ref, transaction id, or leave blank for cash.">
           <Input icon="clipboard" value={ref} placeholder="e.g. UPI-8842019" onChange={(e) => setRef(e.target.value)} />
         </Field>
       </div>
@@ -107,22 +124,30 @@ function PaymentModal({ row, cur, onClose }: { row: FeeRow; cur: string; onClose
 }
 
 /* ---------- Waiver modal (Principal approves) ---------- */
-function WaiverModal({ row, cur, onClose }: { row: FeeRow; cur: string; onClose: () => void }) {
+function WaiverModal({ invoice, cur, onClose }: { invoice: FeeInvoice; cur: string; onClose: () => void }) {
   const toast = useToast()
-  const [amount, setAmount] = useState(String(row.due))
+  const payInvoice = usePayInvoice()
+  const [amount, setAmount] = useState(String(invoice.due))
   const [reason, setReason] = useState('Financial hardship')
 
   const submit = () => {
     const n = Number(amount)
     if (!n || n <= 0) { toast.danger('Amount required', 'Enter the waiver amount to approve.'); return }
-    toast.success('Waiver approved', `${fmtMoney(n, cur)} waived for ${row.stu.name} · ${reason}.`)
-    onClose()
+    const payment: FeePayment = {
+      id: Date.now(), invoiceId: invoice.id, studentId: invoice.studentId, studentName: invoice.studentName, cls: invoice.cls,
+      amount: n, mode: 'Adjustment / waiver', ref: '', note: reason,
+      date: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+    }
+    payInvoice.mutate({ invoiceId: invoice.id, payment }, {
+      onSuccess: () => { toast.success('Waiver approved', `${fmtMoney(n, cur)} waived for ${invoice.studentName} · ${reason}.`); onClose() },
+      onError: (err) => { toast.danger('Waiver failed', err instanceof Error ? err.message : 'Please try again.') },
+    })
   }
 
   return (
     <Modal
       open onClose={onClose} icon="shield" size="sm"
-      title="Approve fee waiver" sub={`${row.stu.name} · ${row.stu.cls}`}
+      title="Approve fee waiver" sub={`${invoice.studentName} · ${invoice.cls}`}
       footer={
         <div className="row gap8 jc-end">
           <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
@@ -135,7 +160,7 @@ function WaiverModal({ row, cur, onClose }: { row: FeeRow; cur: string; onClose:
           <Icon name="shield" size={14} />
           Waivers require Principal approval and are written to the audit trail.
         </div>
-        <Field label="Waiver amount" required hint={`Outstanding due ${fmtMoney(row.due, cur)}.`}>
+        <Field label="Waiver amount" required hint={`Outstanding due ${fmtMoney(invoice.due, cur)}.`}>
           <Input icon="rupee" type="number" inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} />
         </Field>
         <Field label="Reason" required>
@@ -152,15 +177,17 @@ function FeeHistoryTab({ cur }: { cur: string }) {
   const feePayments = paymentsData ?? []
   const [q, setQ] = useState('')
   const [type, setType] = useState('all')
+  const [mode, setMode] = useState('all')
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
     return feePayments.filter((p) => {
       if (needle && !(p.studentName.toLowerCase().includes(needle) || p.cls.toLowerCase().includes(needle) || p.ref.toLowerCase().includes(needle))) return false
       if (type !== 'all' && p.feeType !== type) return false
+      if (mode !== 'all' && p.mode !== mode) return false
       return true
     })
-  }, [feePayments, q, type])
+  }, [feePayments, q, type, mode])
 
   const columns: Column<FeePayment>[] = [
     { key: 'date', label: 'Date', sortValue: (p) => p.id, render: (p) => <span className="muted">{p.date}</span> },
@@ -182,6 +209,7 @@ function FeeHistoryTab({ cur }: { cur: string }) {
       <div className="row ai-center gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
         <Search value={q} onChange={setQ} placeholder="Search student, class, reference…" style={{ flex: 1, minWidth: 220 }} />
         <Select options={[{ value: 'all', label: 'All fee types' }, ...FEE_TYPE_OPTS]} value={type} onChange={(e) => setType(e.target.value)} />
+        <Select options={[{ value: 'all', label: 'All modes' }, ...ALL_MODES.map((m) => ({ value: m, label: m }))]} value={mode} onChange={(e) => setMode(e.target.value)} />
       </div>
       <DataTable<FeePayment>
         columns={columns}
@@ -377,60 +405,41 @@ function FeesScreen() {
 
   const [q, setQ] = useState('')
   const [status, setStatus] = useState('all')
-  const [payRow, setPayRow] = useState<FeeRow | null>(null)
-  const [waiveRow, setWaiveRow] = useState<FeeRow | null>(null)
+  const [payRow, setPayRow] = useState<FeeInvoice | null>(null)
+  const [waiveRow, setWaiveRow] = useState<FeeInvoice | null>(null)
   const [tab, setTab] = useState('collection')
 
-  const all = useMemo(() => students.map(buildFeeRow), [])
+  const invoicesQ = useFeeInvoices()
+  const invoices = useMemo<FeeInvoice[]>(() => invoicesQ.data ?? [], [invoicesQ.data])
+  const summaryQ = useFeeReportSummary()
+  const summary = summaryQ.data
+  const latest = summary?.latestPayment
 
-  /* deterministic finance totals */
-  const totals = useMemo(() => {
-    const billed = all.reduce((a, r) => a + r.term, 0)
-    const paid = all.reduce((a, r) => a + r.paid, 0)
-    const due = all.reduce((a, r) => a + r.due, 0)
-    const defaulters = all.filter((r) => r.status === 'due').length
-    return { billed, paid, due, defaulters, pct: Math.round((paid / (billed || 1)) * 100) }
-  }, [all])
-
-  /* sample "received today" stream (deterministic, drives KPI + live cue) */
-  const todays = useMemo(() => all.filter((r) => r.paid > 0).slice(0, 6), [all])
-  const collectedToday = useMemo(() => todays.reduce((a, r) => a + r.stu.roll * 900 + 4000, 0), [todays])
-  const latest = todays[0]
-
-  /* collection % by class */
-  const byClass = useMemo(() =>
-    grades.slice(4)
-      .map((g) => {
-        const rs = all.filter((r) => r.stu.grade === g)
-        const billed = rs.reduce((a, r) => a + r.term, 0)
-        const paid = rs.reduce((a, r) => a + r.paid, 0)
-        return { label: g, value: billed ? Math.round((paid / billed) * 100) : 0, n: rs.length }
-      })
-      .filter((d) => d.n > 0), [all])
+  const byClass = summary?.byClass ?? []
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
-    return all.filter((r) => {
-      if (needle && !(r.stu.name.toLowerCase().includes(needle) || r.stu.cls.toLowerCase().includes(needle) || r.stu.adm.toLowerCase().includes(needle))) return false
-      if (status !== 'all' && r.status !== status) return false
+    return invoices.filter((inv) => {
+      if (needle && !(inv.studentName.toLowerCase().includes(needle) || inv.cls.toLowerCase().includes(needle))) return false
+      if (status !== 'all' && inv.status !== status) return false
       return true
     })
-  }, [all, q, status])
+  }, [invoices, q, status])
 
-  const columns: Column<FeeRow>[] = [
+  const columns: Column<FeeInvoice>[] = [
     {
-      key: 'name', label: 'Student', sortValue: (r) => r.stu.name,
+      key: 'name', label: 'Student', sortValue: (r) => r.studentName,
       render: (r) => (
         <div className="row ai-center gap10">
-          <Avatar name={r.stu.name} hue={r.stu.avatarHue} size={34} />
+          <Avatar name={r.studentName} size={34} />
           <div>
-            <div className="fw6">{r.stu.name}</div>
-            <div className="t-xs muted">{r.stu.cls} · Roll {r.stu.roll}</div>
+            <div className="fw6">{r.studentName}</div>
+            <div className="t-xs muted">{r.cls}</div>
           </div>
         </div>
       ),
     },
-    { key: 'term', label: 'Term fee', align: 'right', sortValue: (r) => r.term, render: (r) => fmtMoney(r.term, cur) },
+    { key: 'term', label: 'Term fee', align: 'right', sortValue: (r) => r.total, render: (r) => fmtMoney(r.total, cur) },
     { key: 'paid', label: 'Paid', align: 'right', sortValue: (r) => r.paid, render: (r) => fmtMoney(r.paid, cur) },
     {
       key: 'due', label: 'Due', align: 'right', sortValue: (r) => r.due,
@@ -456,7 +465,7 @@ function FeesScreen() {
     <div>
       <PageHead
         title="Fees collection"
-        sub={`${app.school.name} · ${totals.pct}% of term billed collected`}
+        sub={`${app.school.name} · ${summary?.pct ?? 0}% of term billed collected`}
         actions={
           <>
             <Btn variant="secondary" icon="bell" onClick={() => app.go('school.communication', { intent: 'fee-reminder' })}>Send reminders</Btn>
@@ -480,8 +489,8 @@ function FeesScreen() {
             <span className="sm-dot-live" />
             <span className="sm-kpi-ic" style={{ background: 'var(--success-bg)', color: 'var(--success)' }}><Icon name="rupee" size={18} /></span>
             <div>
-              <div className="fw6">Payment received · {fmtMoney(latest.stu.roll * 900 + 4000, cur)}</div>
-              <div className="t-xs muted">{latest.stu.name} ({latest.stu.cls}) · just now via UPI</div>
+              <div className="fw6">Payment received · {fmtMoney(latest.amount, cur)}</div>
+              <div className="t-xs muted">{latest.studentName} ({latest.cls}) · just now via {latest.mode}</div>
             </div>
           </div>
           <Badge tone="success" soft>Live</Badge>
@@ -490,10 +499,10 @@ function FeesScreen() {
 
       {/* KPIs */}
       <div className="sm-kpi-grid" style={{ marginBottom: 16 }}>
-        <Kpi icon="rupee" iconBg="var(--success-bg)" iconColor="var(--success)" label="Collected today" value={fmtMoney(collectedToday, cur)} foot={`${todays.length} payments`} />
-        <Kpi icon="wallet" iconBg="var(--brand-50)" iconColor="var(--brand-600)" label="Collected this term" value={fmtMoney(totals.paid, cur)} delta={`${totals.pct}%`} deltaDir="up" foot={`of ${fmtMoney(totals.billed, cur)} billed`} />
-        <Kpi icon="alert" iconBg="var(--warning-bg)" iconColor="var(--warning)" label="Outstanding dues" value={fmtMoney(totals.due, cur)} foot="across all classes" />
-        <Kpi icon="users" iconBg="var(--danger-bg)" iconColor="var(--danger)" label="Defaulters" value={fmtNum(totals.defaulters)} foot="students with full dues" />
+        <Kpi icon="rupee" iconBg="var(--success-bg)" iconColor="var(--success)" label="Collected today" value={fmtMoney(summary?.collectedToday ?? 0, cur)} foot="so far today" />
+        <Kpi icon="wallet" iconBg="var(--brand-50)" iconColor="var(--brand-600)" label="Collected this term" value={fmtMoney(summary?.collectedTerm ?? 0, cur)} delta={`${summary?.pct ?? 0}%`} deltaDir="up" foot={`of ${fmtMoney(summary?.billedTerm ?? 0, cur)} billed`} />
+        <Kpi icon="alert" iconBg="var(--warning-bg)" iconColor="var(--warning)" label="Outstanding dues" value={fmtMoney(summary?.outstanding ?? 0, cur)} foot="across all classes" />
+        <Kpi icon="users" iconBg="var(--danger-bg)" iconColor="var(--danger)" label="Defaulters" value={fmtNum(summary?.defaulters ?? 0)} foot="students with full dues" />
       </div>
 
       {/* Collection by class */}
@@ -507,17 +516,17 @@ function FeesScreen() {
       {/* Table */}
       <Card pad={false}>
         <div className="row ai-center gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
-          <Search value={q} onChange={setQ} placeholder="Search student, class, admission no…" style={{ flex: 1, minWidth: 220 }} />
+          <Search value={q} onChange={setQ} placeholder="Search student, class…" style={{ flex: 1, minWidth: 220 }} />
           <Select
             options={[{ value: 'all', label: 'All status' }, { value: 'paid', label: 'Paid' }, { value: 'partial', label: 'Partial' }, { value: 'due', label: 'Due' }]}
             value={status} onChange={(e) => setStatus(e.target.value)}
           />
         </div>
-        <DataTable<FeeRow>
+        <DataTable<FeeInvoice>
           columns={columns}
           rows={rows}
           pageSize={10}
-          rowKey={(r) => r.stu.id}
+          rowKey={(r) => r.id}
           initialSort={{ key: 'due', dir: 'desc' }}
           empty={<Empty icon="wallet" title="No matching records" body="Try adjusting the search or status filter." />}
         />
@@ -525,8 +534,8 @@ function FeesScreen() {
 
       </>)}
 
-      {payRow && <PaymentModal key={payRow.stu.id} row={payRow} cur={cur} onClose={() => setPayRow(null)} />}
-      {waiveRow && <WaiverModal key={waiveRow.stu.id} row={waiveRow} cur={cur} onClose={() => setWaiveRow(null)} />}
+      {payRow && <PaymentModal key={payRow.id} invoice={payRow} cur={cur} onClose={() => setPayRow(null)} />}
+      {waiveRow && <WaiverModal key={waiveRow.id} invoice={waiveRow} cur={cur} onClose={() => setWaiveRow(null)} />}
     </div>
   )
 }
