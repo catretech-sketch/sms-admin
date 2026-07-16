@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { listFeePayments, payInvoice } from './feePayments'
+import { listFeePayments, payInvoice, createFeeRazorpayOrder, verifyFeeRazorpayPayment } from './feePayments'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -51,5 +51,45 @@ describe('payInvoice', () => {
     expect(body.invoice_id).toBe('INV-9')
     expect(body.cheque).toMatchObject({ number: 'CHQ-42', bank: 'SBI', date: '2026-06-01' })
     expect(body.fee_type).toBeUndefined()
+  })
+})
+
+describe('createFeeRazorpayOrder', () => {
+  it('POSTs /fees/invoices/{id}/razorpay/order and maps the snake_case order', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      data: { order_id: 'order_x', amount: 4800, currency: 'INR', key_id: 'rzp_test_school1' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const order = await createFeeRazorpayOrder('INV-1')
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toContain('/fees/invoices/INV-1/razorpay/order')
+    expect((init as RequestInit).method).toBe('POST')
+    expect(order).toMatchObject({ orderId: 'order_x', amount: 4800, currency: 'INR', keyId: 'rzp_test_school1' })
+  })
+
+  it('maps an optional pay_link through to payLink', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: { order_id: 'order_y', amount: 1200, currency: 'INR', key_id: 'rzp_test_school1', pay_link: 'https://rzp.io/l/abc' },
+    })))
+    const order = await createFeeRazorpayOrder('INV-2')
+    expect(order.payLink).toBe('https://rzp.io/l/abc')
+  })
+})
+
+describe('verifyFeeRazorpayPayment', () => {
+  it('POSTs /fees/invoices/{id}/razorpay/verify with a snake_case body and returns the mapped payment', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: wirePayment }))
+    vi.stubGlobal('fetch', fetchMock)
+    const payment = await verifyFeeRazorpayPayment('INV-1', {
+      razorpayOrderId: 'order_x',
+      razorpayPaymentId: 'pay_x',
+      razorpaySignature: 'sig',
+    })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toContain('/fees/invoices/INV-1/razorpay/verify')
+    expect((init as RequestInit).method).toBe('POST')
+    const body = JSON.parse((init as RequestInit).body as string)
+    expect(body).toMatchObject({ razorpay_order_id: 'order_x', razorpay_payment_id: 'pay_x', razorpay_signature: 'sig' })
+    expect(payment).toMatchObject({ id: 1, studentId: 's1', studentName: 'Asha' })
   })
 })

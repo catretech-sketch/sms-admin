@@ -1,5 +1,8 @@
 import { useQuery, useMutation, useQueryClient, type UseQueryResult, type UseMutationResult } from '@tanstack/react-query'
-import { listFeePayments, payInvoice } from '../feePayments'
+import {
+  listFeePayments, payInvoice, createFeeRazorpayOrder, verifyFeeRazorpayPayment,
+  type FeeRazorpayOrder, type FeeRazorpayVerifyBody,
+} from '../feePayments'
 import { queryKeys } from '../queryKeys'
 import type { FeePayment } from '@/types'
 
@@ -11,6 +14,22 @@ export function usePayInvoice(): UseMutationResult<FeePayment, Error, { invoiceI
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ invoiceId, payment }: { invoiceId: string; payment: FeePayment }) => payInvoice(invoiceId, payment),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.feePayments.all })
+      qc.invalidateQueries({ queryKey: queryKeys.feeInvoices.all })
+      qc.invalidateQueries({ queryKey: queryKeys.feeReports.summary })
+    },
+  })
+}
+
+export function useCreateFeeRazorpayOrder(): UseMutationResult<FeeRazorpayOrder, Error, string> {
+  return useMutation({ mutationFn: (invoiceId: string) => createFeeRazorpayOrder(invoiceId) })
+}
+
+export function useVerifyFeeRazorpayPayment(): UseMutationResult<FeePayment, Error, { invoiceId: string; body: FeeRazorpayVerifyBody }> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ invoiceId, body }: { invoiceId: string; body: FeeRazorpayVerifyBody }) => verifyFeeRazorpayPayment(invoiceId, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.feePayments.all })
       qc.invalidateQueries({ queryKey: queryKeys.feeInvoices.all })

@@ -22,6 +22,8 @@ afterEach(cleanup)
 let feeHeads: Record<string, unknown>[] = []
 let feeInvoices: Record<string, unknown>[] = []
 let feePayments: Record<string, unknown>[] = []
+let schoolIntegrations: Record<string, unknown> = {}
+let razorpayOrderWire: Record<string, unknown> = { order_id: 'order_abc', amount: 36000, currency: 'INR', key_id: 'rzp_test_1' }
 
 const wireSummary = {
   collected_today: 12000,
@@ -73,6 +75,12 @@ beforeEach(() => {
     { id: 1, student_id: 's2', student_name: 'Rohan Iyer', cls: 'X-B', fee_type: 'academic', amount: 36000, mode: 'Cheque', ref: 'CHQ-1', date: '01 Jun 2026' },
     { id: 2, student_id: 's3', student_name: 'Meera Nair', cls: 'IX-A', fee_type: 'academic', amount: 36000, mode: 'Razorpay', ref: 'pay_xyz', date: '02 Jun 2026' },
   ]
+  schoolIntegrations = {
+    email: { enabled: false },
+    sms: { enabled: false },
+    razorpay: { enabled: false, key_id: '', mode: 'test', status: 'not_configured' },
+  }
+  razorpayOrderWire = { order_id: 'order_abc', amount: 36000, currency: 'INR', key_id: 'rzp_test_1' }
 
   vi.stubGlobal('fetch', vi.fn((url: string, opts?: RequestInit) => {
     const u = String(url)
@@ -103,9 +111,22 @@ beforeEach(() => {
       return jsonOk({ data: { created: 4 } })
     }
 
+    if (u.includes('/razorpay/order') && method === 'POST') {
+      return jsonOk({ data: razorpayOrderWire })
+    }
+
+    if (u.includes('/razorpay/verify') && method === 'POST') {
+      const body = JSON.parse((opts?.body as string) ?? '{}')
+      return jsonOk({ data: { id: Date.now(), student_id: 's1', student_name: 'Asha Verma', cls: 'X-A', fee_type: 'academic', amount: 36000, mode: 'Razorpay', ref: body.razorpay_payment_id ?? '', date: '01 Jan 2026' } })
+    }
+
     if (u.includes('/pay') && method === 'POST') {
       const body = JSON.parse((opts?.body as string) ?? '{}')
       return jsonOk({ data: { id: Date.now(), student_id: body.student_id, student_name: body.student_name, cls: body.cls, head_id: body.head_id, amount: body.amount, mode: body.mode, ref: body.ref ?? '', date: '01 Jan 2026' } })
+    }
+
+    if (u.includes('/school/integrations')) {
+      return jsonOk({ data: schoolIntegrations })
     }
 
     if (u.includes('/fees/invoices')) {
@@ -212,6 +233,85 @@ describe('Fee collection tab', () => {
       expect(postCall).toBeDefined()
       const body = JSON.parse((postCall?.[1] as RequestInit).body as string)
       expect(body).toMatchObject({ mode: 'Adjustment / waiver' })
+    })
+  })
+})
+
+describe('Fee collection tab — school Razorpay collect', () => {
+  it('hides Collect online / Send pay link when school Razorpay is not configured', async () => {
+    const { container } = renderScreen()
+    await waitFor(() => {
+      expect(within(container).getByText('Asha Verma')).toBeInTheDocument()
+    })
+    expect(within(container).queryByText('Collect online')).not.toBeInTheDocument()
+    expect(within(container).queryByText('Send pay link')).not.toBeInTheDocument()
+  })
+
+  it('shows Collect online / Send pay link on due rows once school Razorpay is enabled + configured', async () => {
+    schoolIntegrations = { ...schoolIntegrations, razorpay: { enabled: true, key_id: 'rzp_test_1', mode: 'test', status: 'configured' } }
+    const { container } = renderScreen()
+    await waitFor(() => {
+      expect(within(container).getByText('Collect online')).toBeInTheDocument()
+    })
+    expect(within(container).getByText('Send pay link')).toBeInTheDocument()
+    // Rohan Iyer's invoice is fully paid (due: 0) — no online-collect actions for it.
+    const rohanRow = within(container).getByText('Rohan Iyer').closest('tr') as HTMLElement
+    expect(within(rohanRow).queryByText('Collect online')).not.toBeInTheDocument()
+  })
+
+  it('creates a Razorpay order, opens checkout, and verifies payment via POST /razorpay/verify on success', async () => {
+    schoolIntegrations = { ...schoolIntegrations, razorpay: { enabled: true, key_id: 'rzp_test_1', mode: 'test', status: 'configured' } }
+    type CheckoutResponse = { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }
+    let capturedHandler: ((r: CheckoutResponse) => void) | null = null
+    const openMock = vi.fn()
+    const RazorpayCtor = vi.fn((opts: Record<string, unknown>) => {
+      capturedHandler = opts.handler as (r: CheckoutResponse) => void
+      return { open: openMock }
+    })
+    vi.stubGlobal('Razorpay', RazorpayCtor)
+
+    const { container } = renderScreen()
+    await waitFor(() => {
+      expect(within(container).getByText('Collect online')).toBeInTheDocument()
+    })
+    fireEvent.click(within(container).getByText('Collect online'))
+
+    const fetchMock = vi.mocked(fetch)
+    await waitFor(() => {
+      const orderCall = fetchMock.mock.calls.find(([url, o]) => o?.method === 'POST' && String(url).includes('/fees/invoices/inv-1/razorpay/order'))
+      expect(orderCall).toBeDefined()
+    })
+    await waitFor(() => { expect(openMock).toHaveBeenCalled() })
+    expect(RazorpayCtor).toHaveBeenCalledWith(expect.objectContaining({ key: 'rzp_test_1', order_id: 'order_abc' }))
+
+    capturedHandler!({ razorpay_order_id: 'order_abc', razorpay_payment_id: 'pay_123', razorpay_signature: 'sig_1' })
+
+    await waitFor(() => {
+      const verifyCall = fetchMock.mock.calls.find(([url, o]) => o?.method === 'POST' && String(url).includes('/fees/invoices/inv-1/razorpay/verify'))
+      expect(verifyCall).toBeDefined()
+      const body = JSON.parse((verifyCall?.[1] as RequestInit).body as string)
+      expect(body).toMatchObject({ razorpay_order_id: 'order_abc', razorpay_payment_id: 'pay_123', razorpay_signature: 'sig_1' })
+    })
+    await waitFor(() => {
+      expect(within(container).getByText(/paid online via Razorpay/i)).toBeInTheDocument()
+    })
+  })
+
+  it('copies the pay link to the clipboard when the order includes one', async () => {
+    schoolIntegrations = { ...schoolIntegrations, razorpay: { enabled: true, key_id: 'rzp_test_1', mode: 'test', status: 'configured' } }
+    razorpayOrderWire = { ...razorpayOrderWire, pay_link: 'https://rzp.io/l/abc123' }
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+
+    const { container } = renderScreen()
+    await waitFor(() => {
+      expect(within(container).getByText('Send pay link')).toBeInTheDocument()
+    })
+    fireEvent.click(within(container).getByText('Send pay link'))
+
+    await waitFor(() => { expect(writeText).toHaveBeenCalledWith('https://rzp.io/l/abc123') })
+    await waitFor(() => {
+      expect(within(container).getByText(/Pay link copied/i)).toBeInTheDocument()
     })
   })
 })

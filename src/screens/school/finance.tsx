@@ -6,7 +6,9 @@
    ============================================================ */
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
-import { useFeePayments, usePayInvoice } from '@/api/hooks/useFeePayments'
+import { useFeePayments, usePayInvoice, useCreateFeeRazorpayOrder, useVerifyFeeRazorpayPayment } from '@/api/hooks/useFeePayments'
+import { useSchoolIntegrations } from '@/api/hooks/useSchoolIntegrations'
+import { loadRazorpayScript } from '@/api/upgradeRequests'
 import { useFeeHeads, useCreateFeeHead, useDeleteFeeHead } from '@/api/hooks/useFeeHeads'
 import { useFeeStructure, useSaveFeeStructure } from '@/api/hooks/useFeeStructure'
 import { useFeeInvoices, useGenerateFeeInvoices } from '@/api/hooks/useFeeInvoices'
@@ -511,6 +513,67 @@ function FeesScreen() {
 
   const byClass = summary?.byClass ?? []
 
+  const toast = useToast()
+  const integrationsQ = useSchoolIntegrations()
+  const razorpayReady = integrationsQ.data?.razorpay?.enabled && integrationsQ.data?.razorpay?.status === 'configured'
+  const createOrder = useCreateFeeRazorpayOrder()
+  const verifyPayment = useVerifyFeeRazorpayPayment()
+
+  const collectOnline = async (invoice: FeeInvoice) => {
+    try {
+      const order = await createOrder.mutateAsync(invoice.id)
+      const ok = await loadRazorpayScript()
+      if (!ok || !window.Razorpay) {
+        toast.info('Payment not started', 'Razorpay checkout did not load. Try again or collect offline.')
+        return
+      }
+      const rzp = new window.Razorpay({
+        key: order.keyId,
+        amount: order.amount,
+        currency: order.currency,
+        order_id: order.orderId,
+        name: app.school.name,
+        description: `Fee payment · ${invoice.studentName} (${invoice.cls})`,
+        handler: (response: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }) => {
+          verifyPayment.mutate({
+            invoiceId: invoice.id,
+            body: {
+              razorpayOrderId: response.razorpay_order_id,
+              razorpayPaymentId: response.razorpay_payment_id,
+              razorpaySignature: response.razorpay_signature,
+            },
+          }, {
+            onSuccess: () => {
+              toast.success('Payment received', `${invoice.studentName} (${invoice.cls}) paid online via Razorpay.`)
+              void notifyReceiptBestEffort(invoice, order.amount, 'Razorpay', app.school.name, cur)
+            },
+            onError: (err) => { toast.danger('Verification failed', err instanceof Error ? err.message : 'Please try again.') },
+          })
+        },
+        modal: {
+          ondismiss: () => { toast.info('Payment not completed', 'Checkout closed — payment is still pending.') },
+        },
+      })
+      rzp.open()
+    } catch (err) {
+      toast.danger('Could not start payment', err instanceof Error ? err.message : 'Please try again.')
+    }
+  }
+
+  const sendPayLink = async (invoice: FeeInvoice) => {
+    try {
+      const order = await createOrder.mutateAsync(invoice.id)
+      if (order.payLink) {
+        if (typeof navigator !== 'undefined' && navigator.clipboard) await navigator.clipboard.writeText(order.payLink).catch(() => {})
+        toast.success('Pay link copied', `Share it with ${invoice.studentName}'s parent to collect online.`)
+      } else {
+        toast.info('Pay link unavailable', 'The server did not return a shareable pay link for this order.')
+      }
+    } catch (err) {
+      toast.danger('Could not create pay link', err instanceof Error ? err.message : 'Please try again.')
+    }
+  }
+
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
     return invoices.filter((inv) => {
@@ -547,6 +610,12 @@ function FeesScreen() {
       key: 'actions', label: '', align: 'right',
       render: (r) => (
         <div className="row gap6 jc-end">
+          {canRecord && razorpayReady && r.due > 0 && (
+            <Btn size="sm" variant="secondary" icon="zap" disabled={createOrder.isPending} onClick={() => { void collectOnline(r) }}>Collect online</Btn>
+          )}
+          {canRecord && razorpayReady && r.due > 0 && (
+            <Btn size="sm" variant="ghost" icon="clipboard" disabled={createOrder.isPending} onClick={() => { void sendPayLink(r) }}>Send pay link</Btn>
+          )}
           {canRecord && <Btn size="sm" variant="secondary" icon="rupee" onClick={() => setPayRow(r)}>Record</Btn>}
           {canWaive && r.due > 0 && <Btn size="sm" variant="ghost" icon="shield" onClick={() => setWaiveRow(r)}>Waiver</Btn>}
           {!canRecord && !canWaive && <span className="t-xs muted">—</span>}
