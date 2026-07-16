@@ -12,10 +12,13 @@ import { useFeeStructure, useSaveFeeStructure } from '@/api/hooks/useFeeStructur
 import { useFeeInvoices, useGenerateFeeInvoices } from '@/api/hooks/useFeeInvoices'
 import { useFeeReportSummary } from '@/api/hooks/useFeeReports'
 import { useClasses } from '@/api/hooks/useClasses'
+import { useSendFeeReminders } from '@/api/hooks/useFeeReminders'
+import { notifyFeeAudience } from '@/lib/feeNotify'
+import { getStudent } from '@/api/students'
 import { can } from '@/lib/gating'
 import {
   PageHead, Card, CardHead, Kpi, Btn, Badge, Avatar, Search, Select, Field, Input,
-  Modal, Tabs, Icon, Empty, Bars, DataTable, type Column, type BadgeTone,
+  Modal, Tabs, Icon, Empty, Bars, DataTable, Checkbox, type Column, type BadgeTone,
   DemoBadge,
 } from '@/components/ui'
 import { TierGate } from '@/components/shell/gates'
@@ -27,6 +30,29 @@ import type { Teacher, Staff, FeeStatus, FeeType, FeePayment, FeeHead, FeeInvoic
 /* ============================================================
    Fees collection
    ============================================================ */
+/** Best-effort parent receipt after an offline payment — never surfaces errors to the pay flow. */
+async function notifyReceiptBestEffort(invoice: FeeInvoice, amount: number, mode: string, schoolName: string, cur: string) {
+  try {
+    const student = await getStudent(invoice.studentId)
+    const emails = [student.email, student.father?.email, student.mother?.email].filter((v): v is string => !!v)
+    const phones = [student.phone, student.father?.phone, student.mother?.phone].filter((v): v is string => !!v)
+    if (!emails.length && !phones.length) return
+    await notifyFeeAudience({
+      kind: 'receipt',
+      schoolName,
+      studentName: invoice.studentName,
+      amount,
+      mode,
+      currency: cur,
+      channels: { email: emails.length > 0, sms: phones.length > 0, app: true },
+      emails,
+      phones,
+    })
+  } catch {
+    /* best-effort — payment already succeeded */
+  }
+}
+
 const feeTone: Record<FeeStatus, BadgeTone> = { paid: 'success', partial: 'warning', due: 'danger' }
 const feeLabel: Record<FeeStatus, string> = { paid: 'Paid', partial: 'Partial', due: 'Due' }
 const PAY_MODES = ['Cash', 'UPI (manual)', 'Cheque', 'Card / POS', 'Bank transfer', 'DD']
@@ -39,7 +65,7 @@ const feeTypeMeta: Record<FeeType, { label: string; tone: BadgeTone }> = {
 const FEE_TYPE_OPTS = (Object.keys(feeTypeMeta) as FeeType[]).map((v) => ({ value: v, label: feeTypeMeta[v].label }))
 
 /* ---------- Record-payment modal ---------- */
-function PaymentModal({ invoice, cur, onClose }: { invoice: FeeInvoice; cur: string; onClose: () => void }) {
+function PaymentModal({ invoice, cur, schoolName, onClose }: { invoice: FeeInvoice; cur: string; schoolName: string; onClose: () => void }) {
   const toast = useToast()
   const payInvoice = usePayInvoice()
   const headsQ = useFeeHeads()
@@ -70,7 +96,11 @@ function PaymentModal({ invoice, cur, onClose }: { invoice: FeeInvoice; cur: str
       ...(mode === 'Cheque' ? { cheque: { number: chequeNumber.trim(), bank: chequeBank.trim() || undefined, date: chequeDate || undefined } } : {}),
     }
     payInvoice.mutate({ invoiceId: invoice.id, payment }, {
-      onSuccess: () => { toast.success('Payment recorded', `${fmtMoney(n, cur)} · ${mode} · ${invoice.studentName} (${invoice.cls})`); onClose() },
+      onSuccess: () => {
+        toast.success('Payment recorded', `${fmtMoney(n, cur)} · ${mode} · ${invoice.studentName} (${invoice.cls})`)
+        onClose()
+        void notifyReceiptBestEffort(invoice, n, mode, schoolName, cur)
+      },
       onError: (err) => { toast.danger('Payment failed', err instanceof Error ? err.message : 'Please try again.') },
     })
   }
@@ -397,6 +427,69 @@ function FeeStructureTab({ cur, editable }: { cur: string; editable: boolean }) 
   )
 }
 
+/* ---------- Send reminders modal ---------- */
+function RemindersModal({ dueInvoices, defaultersCount, onClose }: {
+  dueInvoices: FeeInvoice[]; defaultersCount: number; onClose: () => void
+}) {
+  const toast = useToast()
+  const sendReminders = useSendFeeReminders()
+  const [email, setEmail] = useState(true)
+  const [sms, setSms] = useState(true)
+  const [appCh, setAppCh] = useState(true)
+  const [audience, setAudience] = useState<'defaulters' | 'selected'>('defaulters')
+  const [payLink, setPayLink] = useState(true)
+
+  const selectedIds = useMemo(() => dueInvoices.map((i) => i.id), [dueInvoices])
+
+  const submit = () => {
+    const channels = [email ? 'email' : '', sms ? 'sms' : '', appCh ? 'app' : ''].filter(Boolean)
+    if (!channels.length) { toast.danger('Pick a channel', 'Enable Email, SMS, and/or App.'); return }
+    if (audience === 'selected' && !selectedIds.length) { toast.danger('No invoices selected', 'No due/partial invoices match the current view.'); return }
+    sendReminders.mutate({
+      audience,
+      channels,
+      includePayLink: payLink,
+      ...(audience === 'selected' ? { invoiceIds: selectedIds } : {}),
+    }, {
+      onSuccess: (res) => { toast.success('Reminders sent', `Reached ${fmtNum(res.reach)} parent(s) via ${channels.join(' · ')}.`); onClose() },
+      onError: (err) => { toast.danger('Could not send reminders', err instanceof Error ? err.message : 'Please try again.') },
+    })
+  }
+
+  return (
+    <Modal
+      open onClose={onClose} icon="bell" size="sm"
+      title="Send fee reminders"
+      sub={audience === 'defaulters' ? `${fmtNum(defaultersCount)} defaulter(s) · full outstanding dues` : `${fmtNum(selectedIds.length)} invoice(s) in the current view`}
+      footer={
+        <div className="row gap8 jc-end">
+          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn variant="primary" icon="bell" disabled={sendReminders.isPending} onClick={submit}>
+            {sendReminders.isPending ? 'Sending…' : 'Send reminders'}
+          </Btn>
+        </div>
+      }
+    >
+      <div className="col gap16">
+        <Field label="Audience" hint="Defaulters are resolved by the server; Selected uses invoices matching the current search/status filters.">
+          <div className="row gap8 wrap">
+            <Btn type="button" size="sm" variant={audience === 'defaulters' ? 'primary' : 'secondary'} onClick={() => setAudience('defaulters')}>Defaulters (all)</Btn>
+            <Btn type="button" size="sm" variant={audience === 'selected' ? 'primary' : 'secondary'} onClick={() => setAudience('selected')}>Selected (current view)</Btn>
+          </div>
+        </Field>
+        <Field label="Send via">
+          <div className="col gap8">
+            <Checkbox checked={appCh} onChange={setAppCh} label="App notification" />
+            <Checkbox checked={email} onChange={setEmail} label="Email" />
+            <Checkbox checked={sms} onChange={setSms} label="SMS" />
+          </div>
+        </Field>
+        <Checkbox checked={payLink} onChange={setPayLink} label="Include pay link" />
+      </div>
+    </Modal>
+  )
+}
+
 function FeesScreen() {
   const app = useApp()
   const cur = app.school.currency
@@ -407,6 +500,7 @@ function FeesScreen() {
   const [status, setStatus] = useState('all')
   const [payRow, setPayRow] = useState<FeeInvoice | null>(null)
   const [waiveRow, setWaiveRow] = useState<FeeInvoice | null>(null)
+  const [remindOpen, setRemindOpen] = useState(false)
   const [tab, setTab] = useState('collection')
 
   const invoicesQ = useFeeInvoices()
@@ -468,7 +562,7 @@ function FeesScreen() {
         sub={`${app.school.name} · ${summary?.pct ?? 0}% of term billed collected`}
         actions={
           <>
-            <Btn variant="secondary" icon="bell" onClick={() => app.go('school.communication', { intent: 'fee-reminder' })}>Send reminders</Btn>
+            <Btn variant="secondary" icon="bell" onClick={() => setRemindOpen(true)}>Send reminders</Btn>
             <Btn variant="secondary" icon="download" onClick={() => { /* export stub */ }}>Export</Btn>
           </>
         }
@@ -534,8 +628,15 @@ function FeesScreen() {
 
       </>)}
 
-      {payRow && <PaymentModal key={payRow.id} invoice={payRow} cur={cur} onClose={() => setPayRow(null)} />}
+      {payRow && <PaymentModal key={payRow.id} invoice={payRow} cur={cur} schoolName={app.school.name} onClose={() => setPayRow(null)} />}
       {waiveRow && <WaiverModal key={waiveRow.id} invoice={waiveRow} cur={cur} onClose={() => setWaiveRow(null)} />}
+      {remindOpen && (
+        <RemindersModal
+          dueInvoices={rows.filter((r) => r.due > 0)}
+          defaultersCount={summary?.defaulters ?? 0}
+          onClose={() => setRemindOpen(false)}
+        />
+      )}
     </div>
   )
 }
