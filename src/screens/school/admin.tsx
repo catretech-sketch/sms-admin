@@ -16,6 +16,9 @@ import { useInviteUser } from '@/api/hooks/useUserMutations'
 import { SchoolPhoto } from '@/components/SchoolMark'
 import { EditSchoolProfileModal } from '@/components/EditSchoolProfileModal'
 import { usePortfolioSchools } from '@/api/hooks/useOwner'
+import {
+  useSchoolIntegrations, useSaveSchoolIntegrations, useVerifySchoolRazorpay,
+} from '@/api/hooks/useSchoolIntegrations'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   assignableSchoolRoles,
@@ -31,11 +34,11 @@ import { ApiError } from '@/api/client'
 import { tierIncludes, caps, effectiveCaps, cellState, overrideCount, NEXT_CELL_STATE } from '@/lib/gating'
 import {
   PageHead, Tabs, Card, CardHead, Btn, Badge, TierPill, Avatar, Search, Select,
-  Field, Input, Toggle, Icon, Empty, DataTable,
+  Field, Input, Textarea, Toggle, Icon, Empty, DataTable, Spinner,
   type Column, type BadgeTone,
 } from '@/components/ui'
 import { ROLES, ROLE_META, PERMS, TIER_META, teachers, staff } from '@/data/mockDb'
-import type { Role, GateRole, Cap, Tier, CellState, UserOverrides } from '@/types'
+import type { Role, GateRole, Cap, Tier, CellState, UserOverrides, RazorpayStatus } from '@/types'
 
 /* ============================================================
    Reports
@@ -159,7 +162,6 @@ const FEATURE_GROUPS: { tier: Tier; key: string; features: string[] }[] = [
 
 function SettingsScreen() {
   const app = useApp()
-  const toast = useToast()
   const qc = useQueryClient()
   const { theme, toggleTheme } = useTheme()
   const { data: clients = [] } = usePortfolioSchools(app.isPlatform)
@@ -199,7 +201,10 @@ function SettingsScreen() {
               <SchoolPhoto school={app.school} size={72} />
               <div className="flex1" style={{ flex: 1 }}>
                 <div className="t-md fw7">{app.school.name}</div>
-                <div className="t-sm muted">{app.school.city}{app.school.tz ? ` · ${app.school.tz}` : ''}</div>
+                <div className="t-sm muted">
+                  {app.school.slug ? `${app.school.slug} · ` : ''}
+                  {app.school.city}{app.school.tz ? ` · ${app.school.tz}` : ''}
+                </div>
                 {!canEditProfile && (
                   <div className="t-xs muted3" style={{ marginTop: 6 }}>Ask a school owner or admin to update branding.</div>
                 )}
@@ -278,7 +283,251 @@ function SettingsScreen() {
           </div>
         </Card>
       </div>
+      <div style={{ marginTop: 16 }}>
+        <IntegrationsCard canEdit={canEditProfile} />
+      </div>
     </div>
+  )
+}
+
+/* ============================================================
+   Integrations — Email · SMS · Razorpay (school-level setup)
+   ============================================================ */
+const RZP_STATUS_TONE: Record<RazorpayStatus, BadgeTone> = {
+  configured: 'success',
+  invalid: 'danger',
+  not_configured: 'neutral',
+}
+const RZP_STATUS_LABEL: Record<RazorpayStatus, string> = {
+  configured: 'Connected',
+  invalid: 'Invalid credentials',
+  not_configured: 'Not configured',
+}
+const RZP_MODE_OPTIONS = [
+  { value: 'test', label: 'Test mode' },
+  { value: 'live', label: 'Live mode' },
+]
+
+function IntegrationsCard({ canEdit }: { canEdit: boolean }) {
+  const toast = useToast()
+  const { data, isLoading } = useSchoolIntegrations()
+  const saveMut = useSaveSchoolIntegrations()
+  const verifyMut = useVerifySchoolRazorpay()
+
+  const [emailEnabled, setEmailEnabled] = useState(false)
+  const [fromName, setFromName] = useState('')
+  const [fromAddress, setFromAddress] = useState('')
+  const [replyTo, setReplyTo] = useState('')
+  const [emailReceiptTpl, setEmailReceiptTpl] = useState('')
+  const [emailReminderTpl, setEmailReminderTpl] = useState('')
+
+  const [smsEnabled, setSmsEnabled] = useState(false)
+  const [senderId, setSenderId] = useState('')
+  const [smsReceiptTpl, setSmsReceiptTpl] = useState('')
+  const [smsReminderTpl, setSmsReminderTpl] = useState('')
+
+  const [rzpEnabled, setRzpEnabled] = useState(false)
+  const [keyId, setKeyId] = useState('')
+  const [keySecret, setKeySecret] = useState('')
+  const [webhookSecret, setWebhookSecret] = useState('')
+  const [mode, setMode] = useState<'test' | 'live'>('test')
+  const [keySecretSet, setKeySecretSet] = useState(false)
+  const [webhookSecretSet, setWebhookSecretSet] = useState(false)
+  const [status, setStatus] = useState<RazorpayStatus>('not_configured')
+
+  useEffect(() => {
+    if (!data) return
+    setEmailEnabled(data.email.enabled)
+    setFromName(data.email.fromName ?? '')
+    setFromAddress(data.email.fromAddress ?? '')
+    setReplyTo(data.email.replyTo ?? '')
+    setEmailReceiptTpl(data.email.receiptTemplate ?? '')
+    setEmailReminderTpl(data.email.reminderTemplate ?? '')
+
+    setSmsEnabled(data.sms.enabled)
+    setSenderId(data.sms.senderId ?? '')
+    setSmsReceiptTpl(data.sms.receiptTemplate ?? '')
+    setSmsReminderTpl(data.sms.reminderTemplate ?? '')
+
+    setRzpEnabled(data.razorpay.enabled)
+    setKeyId(data.razorpay.keyId ?? '')
+    setKeySecret('')
+    setWebhookSecret('')
+    setMode(data.razorpay.mode ?? 'test')
+    setKeySecretSet(!!data.razorpay.keySecretSet)
+    setWebhookSecretSet(!!data.razorpay.webhookSecretSet)
+    setStatus(data.razorpay.status ?? 'not_configured')
+  }, [data])
+
+  const disabled = !canEdit || saveMut.isPending
+
+  const save = async () => {
+    try {
+      const updated = await saveMut.mutateAsync({
+        email: {
+          enabled: emailEnabled,
+          fromName: fromName.trim(),
+          fromAddress: fromAddress.trim(),
+          replyTo: replyTo.trim() || undefined,
+          receiptTemplate: emailReceiptTpl.trim() || undefined,
+          reminderTemplate: emailReminderTpl.trim() || undefined,
+        },
+        sms: {
+          enabled: smsEnabled,
+          senderId: senderId.trim(),
+          receiptTemplate: smsReceiptTpl.trim() || undefined,
+          reminderTemplate: smsReminderTpl.trim() || undefined,
+        },
+        razorpay: {
+          enabled: rzpEnabled,
+          keyId: keyId.trim(),
+          mode,
+          /* Write-only secrets: only send when the admin actually typed a new value. */
+          ...(keySecret.trim() ? { keySecret: keySecret.trim() } : {}),
+          ...(webhookSecret.trim() ? { webhookSecret: webhookSecret.trim() } : {}),
+        },
+      })
+      setKeySecret('')
+      setWebhookSecret('')
+      setKeySecretSet(!!updated.razorpay.keySecretSet)
+      setWebhookSecretSet(!!updated.razorpay.webhookSecretSet)
+      setStatus(updated.razorpay.status)
+      toast.success('Integrations saved', 'Email, SMS and Razorpay settings updated.')
+    } catch (e) {
+      toast.danger('Could not save', e instanceof ApiError ? e.message : 'Try again.')
+    }
+  }
+
+  const verify = async () => {
+    try {
+      const res = await verifyMut.mutateAsync()
+      setStatus(res.status)
+      if (res.status === 'configured') toast.success('Razorpay connected', 'Credentials verified successfully.')
+      else toast.danger('Verification failed', 'Check the key ID and secret, then try again.')
+    } catch (e) {
+      toast.danger('Could not verify', e instanceof ApiError ? e.message : 'Try again.')
+    }
+  }
+
+  return (
+    <Card pad={false}>
+      <CardHead
+        title="Integrations"
+        sub="Email, SMS and Razorpay — used for receipts, reminders and online fee collection"
+        icon="zap"
+        action={isLoading ? <Spinner size={16} /> : undefined}
+      />
+      <div style={{ padding: '4px 16px 16px' }}>
+        {!canEdit && (
+          <div className="t-xs muted3" style={{ marginBottom: 12 }}>Ask a school owner or admin to update integrations.</div>
+        )}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 20 }}>
+          {/* Email */}
+          <div className="col gap10">
+            <div className="row ai-center jc-between">
+              <div className="row ai-center gap8">
+                <Icon name="message" size={16} />
+                <span className="fw7 t-md">Email</span>
+              </div>
+              <Toggle checked={emailEnabled} onChange={() => setEmailEnabled((v) => !v)} />
+            </div>
+            <fieldset disabled={disabled} className="col gap10" style={{ border: 'none', padding: 0, margin: 0 }}>
+              <Field label="From name">
+                <Input value={fromName} onChange={(e) => setFromName(e.target.value)} placeholder="e.g. Riverdale School" />
+              </Field>
+              <Field label="From address">
+                <Input icon="message" type="email" value={fromAddress} onChange={(e) => setFromAddress(e.target.value)} placeholder="fees@school.edu" />
+              </Field>
+              <Field label="Reply-to">
+                <Input icon="message" type="email" value={replyTo} onChange={(e) => setReplyTo(e.target.value)} placeholder="Optional" />
+              </Field>
+              <Field label="Receipt template" hint="Sent when a fee payment is recorded.">
+                <Textarea value={emailReceiptTpl} onChange={(e) => setEmailReceiptTpl(e.target.value)} placeholder="Optional custom template" />
+              </Field>
+              <Field label="Reminder template" hint="Sent for due/overdue fee reminders.">
+                <Textarea value={emailReminderTpl} onChange={(e) => setEmailReminderTpl(e.target.value)} placeholder="Optional custom template" />
+              </Field>
+            </fieldset>
+          </div>
+
+          {/* SMS */}
+          <div className="col gap10">
+            <div className="row ai-center jc-between">
+              <div className="row ai-center gap8">
+                <Icon name="phone" size={16} />
+                <span className="fw7 t-md">SMS</span>
+              </div>
+              <Toggle checked={smsEnabled} onChange={() => setSmsEnabled((v) => !v)} />
+            </div>
+            <fieldset disabled={disabled} className="col gap10" style={{ border: 'none', padding: 0, margin: 0 }}>
+              <Field label="Sender ID" hint="6-character DLT-approved sender ID.">
+                <Input icon="phone" value={senderId} onChange={(e) => setSenderId(e.target.value.toUpperCase())} placeholder="SCHMAT" maxLength={6} />
+              </Field>
+              <Field label="Receipt template">
+                <Textarea value={smsReceiptTpl} onChange={(e) => setSmsReceiptTpl(e.target.value)} placeholder="Optional custom template" />
+              </Field>
+              <Field label="Reminder template">
+                <Textarea value={smsReminderTpl} onChange={(e) => setSmsReminderTpl(e.target.value)} placeholder="Optional custom template" />
+              </Field>
+            </fieldset>
+          </div>
+
+          {/* Razorpay */}
+          <div className="col gap10">
+            <div className="row ai-center jc-between">
+              <div className="row ai-center gap8">
+                <Icon name="rupee" size={16} />
+                <span className="fw7 t-md">Razorpay</span>
+              </div>
+              <Toggle checked={rzpEnabled} onChange={() => setRzpEnabled((v) => !v)} />
+            </div>
+            <div className="row ai-center gap8">
+              <Badge tone={RZP_STATUS_TONE[status]} icon={status === 'configured' ? 'checkCircle' : status === 'invalid' ? 'alert' : 'lock'}>
+                {RZP_STATUS_LABEL[status]}
+              </Badge>
+            </div>
+            <fieldset disabled={disabled} className="col gap10" style={{ border: 'none', padding: 0, margin: 0 }}>
+              <Field label="Key ID">
+                <Input icon="key" value={keyId} onChange={(e) => setKeyId(e.target.value)} placeholder="rzp_test_xxxxxxxx" />
+              </Field>
+              <Field label="Key secret" hint={keySecretSet ? 'A secret is already saved — leave blank to keep it.' : 'Not set yet.'}>
+                <Input
+                  icon="lock" type="password" value={keySecret}
+                  onChange={(e) => setKeySecret(e.target.value)}
+                  placeholder={keySecretSet ? '•••• (set)' : 'Enter key secret'}
+                />
+              </Field>
+              <Field label="Webhook secret" hint={webhookSecretSet ? 'A secret is already saved — leave blank to keep it.' : 'Optional.'}>
+                <Input
+                  icon="lock" type="password" value={webhookSecret}
+                  onChange={(e) => setWebhookSecret(e.target.value)}
+                  placeholder={webhookSecretSet ? '•••• (set)' : 'Enter webhook secret'}
+                />
+              </Field>
+              <Field label="Mode">
+                <Select options={RZP_MODE_OPTIONS} value={mode} onChange={(e) => setMode(e.target.value as 'test' | 'live')} />
+              </Field>
+            </fieldset>
+            {canEdit && (
+              <Btn
+                variant="secondary" size="sm" icon="refresh"
+                disabled={verifyMut.isPending || !keyId.trim()}
+                onClick={() => { void verify() }}
+              >
+                {verifyMut.isPending ? <><Spinner size={14} /> Testing…</> : 'Test connection'}
+              </Btn>
+            )}
+          </div>
+        </div>
+        {canEdit && (
+          <div className="row gap8 jc-end" style={{ marginTop: 18 }}>
+            <Btn variant="primary" icon="check" disabled={saveMut.isPending} onClick={() => { void save() }}>
+              {saveMut.isPending ? <><Spinner size={14} /> Saving…</> : 'Save integrations'}
+            </Btn>
+          </div>
+        )}
+      </div>
+    </Card>
   )
 }
 
