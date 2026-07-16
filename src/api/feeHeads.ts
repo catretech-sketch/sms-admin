@@ -26,5 +26,5 @@ export async function updateFeeHead(id: string, patch: Partial<Pick<FeeHead, 'na
 }
 
 export async function deleteFeeHead(id: string): Promise<void> {
-  await request<unknown>(`/fees/heads/${id}`, { method: 'DELETE' })
+  await request<void>(`/fees/heads/${id}`, { method: 'DELETE' })
 }

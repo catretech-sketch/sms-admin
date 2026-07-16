@@ -3,6 +3,7 @@ import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useComplaints } from './useComplaints'
 import { useFeePayments, usePayInvoice } from './useFeePayments'
+import { useFeeHeads, useCreateFeeHead } from './useFeeHeads'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -37,5 +38,28 @@ describe('useFeePayments', () => {
     const { result } = renderHook(() => useFeePayments(), { wrapper: wrap(client()) })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(result.current.data?.[0]).toMatchObject({ studentId: 's1', feeType: 'academic' })
+  })
+})
+
+describe('useFeeHeads', () => {
+  it('resolves mapped heads', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: [{ id: 'h1', name: 'Academic', code: 'ACAD', active: true, is_system: true }],
+      next_cursor: null,
+    })))
+    const { result } = renderHook(() => useFeeHeads(), { wrapper: wrap(client()) })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data?.[0]).toMatchObject({ id: 'h1', name: 'Academic', isSystem: true, active: true })
+  })
+})
+
+describe('useCreateFeeHead', () => {
+  it('POSTs and invalidates fee heads', async () => {
+    const qc = client(); const invalidate = vi.spyOn(qc, 'invalidateQueries')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: { id: 'h2', name: 'Lab', active: true } })))
+    const { result } = renderHook(() => useCreateFeeHead(), { wrapper: wrap(qc) })
+    result.current.mutate({ name: 'Lab' })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['feeHeads'] })
   })
 })
