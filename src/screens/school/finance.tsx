@@ -4,9 +4,13 @@
    HR is owned by the Admin office (payroll prepared by Admin,
    Principal only approves). No separate HR persona.
    ============================================================ */
-import { useMemo, useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import { useFeePayments, usePayInvoice } from '@/api/hooks/useFeePayments'
+import { useFeeHeads, useCreateFeeHead, useDeleteFeeHead } from '@/api/hooks/useFeeHeads'
+import { useFeeStructure, useSaveFeeStructure } from '@/api/hooks/useFeeStructure'
+import { useGenerateFeeInvoices } from '@/api/hooks/useFeeInvoices'
+import { useClasses } from '@/api/hooks/useClasses'
 import { can } from '@/lib/gating'
 import {
   PageHead, Card, CardHead, Kpi, Btn, Badge, Avatar, Search, Select, Field, Input,
@@ -15,8 +19,9 @@ import {
 } from '@/components/ui'
 import { TierGate } from '@/components/shell/gates'
 import { students, teachers, staff, grades } from '@/data/mockDb'
+import { gradeRank } from '@/lib/defaultClasses'
 import { fmtMoney, fmtNum } from '@/lib/format'
-import type { Student, Teacher, Staff, FeeStatus, FeeType, FeePayment } from '@/types'
+import type { Student, Teacher, Staff, FeeStatus, FeeType, FeePayment, FeeHead } from '@/types'
 
 /* ============================================================
    Fees collection
@@ -192,114 +197,175 @@ function FeeHistoryTab({ cur }: { cur: string }) {
 
 /* ---------- Fee structure (configurable heads × per-grade amounts) ---------- */
 const STRUCTURE_GRADES = grades.slice(4)
-const DEFAULT_HEADS = ['Academic', 'Transport', 'Other']
-const seedAmount = (g: string, head: string): number =>
-  head === 'Academic' ? termFeeFor(g) : head === 'Transport' ? 18000 : 0
+const TERM_OPTIONS = ['Term 1', 'Term 2', 'Annual']
 
 function FeeStructureTab({ cur, editable }: { cur: string; editable: boolean }) {
-  const app = useApp()
   const toast = useToast()
-  const [heads, setHeads] = useState<string[]>(() => (app.feeHeads.length ? app.feeHeads : DEFAULT_HEADS))
-  const [draft, setDraft] = useState<Record<string, Record<string, number>>>(() => {
-    const hs = app.feeHeads.length ? app.feeHeads : DEFAULT_HEADS
-    const out: Record<string, Record<string, number>> = {}
-    STRUCTURE_GRADES.forEach((g) => {
-      out[g] = {}
-      hs.forEach((h) => { out[g][h] = app.feeStructure[g]?.[h] ?? seedAmount(g, h) })
-    })
-    return out
-  })
-  const [newHead, setNewHead] = useState('')
+  const headsQ = useFeeHeads()
+  const structureQ = useFeeStructure()
+  const classesQ = useClasses()
+  const createHead = useCreateFeeHead()
+  const deleteHead = useDeleteFeeHead()
+  const saveStructure = useSaveFeeStructure()
+  const generateInvoices = useGenerateFeeInvoices()
 
-  const setCell = (g: string, head: string, raw: string) => {
+  const heads = useMemo<FeeHead[]>(() => (headsQ.data ?? []).filter((h) => h.active !== false), [headsQ.data])
+
+  /* Grades: live class grades when available, else the existing grades list. */
+  const structureGrades = useMemo(() => {
+    const live = [...new Set((classesQ.data ?? []).map((c) => c.grade).filter(Boolean))]
+    return live.length ? live.sort((a, b) => gradeRank(a) - gradeRank(b)) : STRUCTURE_GRADES
+  }, [classesQ.data])
+
+  const [newHead, setNewHead] = useState('')
+  const [draft, setDraft] = useState<Record<string, Record<string, number>>>({})
+  useEffect(() => {
+    if (structureQ.data) setDraft(structureQ.data)
+  }, [structureQ.data])
+
+  const cellValue = (g: string, headId: string) => draft[g]?.[headId] ?? 0
+  const setCell = (g: string, headId: string, raw: string) => {
     const n = Math.max(0, Math.round(Number(raw) || 0))
-    setDraft((d) => ({ ...d, [g]: { ...d[g], [head]: n } }))
+    setDraft((d) => ({ ...d, [g]: { ...d[g], [headId]: n } }))
   }
+
   const addHead = () => {
     const name = newHead.trim()
     if (!name) { toast.danger('Name required', 'Enter a fee head name.'); return }
-    if (heads.some((h) => h.toLowerCase() === name.toLowerCase())) { toast.danger('Already exists', `${name} is already a fee head.`); return }
-    setHeads((hs) => [...hs, name])
-    setDraft((d) => {
-      const out: Record<string, Record<string, number>> = {}
-      STRUCTURE_GRADES.forEach((g) => { out[g] = { ...d[g], [name]: 0 } })
-      return out
-    })
-    setNewHead('')
-  }
-  const removeHead = (head: string) => {
-    setHeads((hs) => hs.filter((h) => h !== head))
-    setDraft((d) => {
-      const out: Record<string, Record<string, number>> = {}
-      STRUCTURE_GRADES.forEach((g) => { const { [head]: _omit, ...rest } = d[g]; out[g] = rest })
-      return out
+    if (heads.some((h) => h.name.toLowerCase() === name.toLowerCase())) { toast.danger('Already exists', `${name} is already a fee head.`); return }
+    createHead.mutate({ name }, {
+      onSuccess: () => { setNewHead('') },
+      onError: (err) => { toast.danger('Could not add fee head', err instanceof Error ? err.message : 'Please try again.') },
     })
   }
-  const rowTotal = (g: string) => heads.reduce((a, h) => a + (draft[g][h] ?? 0), 0)
-  const grandTotal = STRUCTURE_GRADES.reduce((a, g) => a + rowTotal(g), 0)
+  const removeHead = (head: FeeHead) => {
+    deleteHead.mutate(head.id, {
+      onError: (err) => { toast.danger('Could not remove fee head', err instanceof Error ? err.message : 'Please try again.') },
+    })
+  }
+  const rowTotal = (g: string) => heads.reduce((a, h) => a + cellValue(g, h.id), 0)
+  const grandTotal = structureGrades.reduce((a, g) => a + rowTotal(g), 0)
 
   const save = () => {
-    app.saveFeeStructure(heads, draft)
-    toast.success('Fee structure saved', `${STRUCTURE_GRADES.length} grades · ${heads.length} fee heads.`)
+    const matrix: Record<string, Record<string, number>> = {}
+    structureGrades.forEach((g) => {
+      matrix[g] = {}
+      heads.forEach((h) => { matrix[g][h.id] = cellValue(g, h.id) })
+    })
+    saveStructure.mutate(matrix, {
+      onSuccess: () => { toast.success('Fee structure saved', `${structureGrades.length} grades · ${heads.length} fee heads.`) },
+      onError: (err) => { toast.danger('Save failed', err instanceof Error ? err.message : 'Please try again.') },
+    })
+  }
+
+  /* ---- Generate invoices ---- */
+  const [genYear, setGenYear] = useState('')
+  const [genTerm, setGenTerm] = useState(TERM_OPTIONS[0])
+  const [genGrades, setGenGrades] = useState<Set<string>>(new Set())
+  const toggleGenGrade = (g: string) => setGenGrades((prev) => {
+    const next = new Set(prev)
+    if (next.has(g)) next.delete(g); else next.add(g)
+    return next
+  })
+  const generate = () => {
+    const year = genYear.trim()
+    if (!year) { toast.danger('Academic year required', 'Enter the academic year (e.g. 2026-27).'); return }
+    if (!genGrades.size) { toast.danger('Pick grades', 'Select at least one grade to generate invoices for.'); return }
+    generateInvoices.mutate({ grades: [...genGrades], academicYear: year, term: genTerm }, {
+      onSuccess: (res) => { toast.success('Invoices generated', `${res.created} invoice(s) created for ${genGrades.size} grade(s) · ${genTerm}.`) },
+      onError: (err) => { toast.danger('Generate failed', err instanceof Error ? err.message : 'Please try again.') },
+    })
   }
 
   return (
-    <Card pad={false}>
-      <div className="row ai-center jc-between gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
-        <div className="row ai-center gap8"><div><div className="fw6">Fee structure</div><div className="t-sm muted">Per-grade amounts by fee head · {cur}</div></div><DemoBadge /></div>
-        <div className="row ai-center gap8 wrap">
-          {editable && (
-            <div className="row ai-center gap6">
-              <Input value={newHead} placeholder="New fee head (e.g. Lab fee)" onChange={(e) => setNewHead(e.target.value)} style={{ width: 200 }} />
-              <Btn variant="secondary" size="sm" icon="plus" onClick={addHead}>Add fee head</Btn>
-            </div>
-          )}
-          {editable
-            ? <Btn variant="primary" icon="check" disabled={heads.length === 0} onClick={save}>Save structure</Btn>
-            : <Badge tone="neutral" icon="eye">View only</Badge>}
-        </div>
-      </div>
-      {heads.length === 0 ? (
-        <Empty icon="wallet" title="No fee heads" body="Add a fee head (e.g. Academic, Transport, Lab) to define the structure." />
-      ) : (
-        <>
-          <table className="sm-table">
-            <thead>
-              <tr>
-                <th>Grade</th>
-                {heads.map((h) => (
-                  <th key={h} className="ta-right">
-                    <span className="row ai-center jc-end gap6">
-                      {h}
-                      {editable && <button onClick={() => removeHead(h)} aria-label={`Remove ${h}`} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text-3)', display: 'inline-flex', padding: 0 }}><Icon name="x" size={12} /></button>}
-                    </span>
-                  </th>
-                ))}
-                <th className="ta-right">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {STRUCTURE_GRADES.map((g) => (
-                <tr key={g}>
-                  <td className="fw6">Grade {g}</td>
-                  {heads.map((h) => (
-                    <td key={h} className="ta-right" style={{ width: 130 }}>
-                      <Input type="number" min={0} value={String(draft[g][h] ?? 0)} disabled={!editable}
-                        style={{ width: 110, textAlign: 'right' }}
-                        onChange={(e) => setCell(g, h, e.target.value)} />
-                    </td>
-                  ))}
-                  <td className="ta-right fw7">{fmtMoney(rowTotal(g), cur)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="row jc-end" style={{ padding: 16, borderTop: '1px solid var(--border)' }}>
-            <span className="t-sm">Grand total (all grades) <span className="fw7">{fmtMoney(grandTotal, cur)}</span></span>
+    <div className="col gap16">
+      <Card pad={false}>
+        <div className="row ai-center jc-between gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
+          <div><div className="fw6">Fee structure</div><div className="t-sm muted">Per-grade amounts by fee head · {cur}</div></div>
+          <div className="row ai-center gap8 wrap">
+            {editable && (
+              <div className="row ai-center gap6">
+                <Input value={newHead} placeholder="New fee head (e.g. Lab fee)" onChange={(e) => setNewHead(e.target.value)} style={{ width: 200 }} />
+                <Btn variant="secondary" size="sm" icon="plus" disabled={createHead.isPending} onClick={addHead}>Add fee head</Btn>
+              </div>
+            )}
+            {editable
+              ? <Btn variant="primary" icon="check" disabled={heads.length === 0 || saveStructure.isPending} onClick={save}>Save structure</Btn>
+              : <Badge tone="neutral" icon="eye">View only</Badge>}
           </div>
-        </>
+        </div>
+        {heads.length === 0 ? (
+          <Empty icon="wallet" title="No fee heads" body="Add a fee head (e.g. Academic, Transport, Lab) to define the structure." />
+        ) : (
+          <>
+            <table className="sm-table">
+              <thead>
+                <tr>
+                  <th>Grade</th>
+                  {heads.map((h) => (
+                    <th key={h.id} className="ta-right">
+                      <span className="row ai-center jc-end gap6">
+                        {h.name}
+                        {editable && <button onClick={() => removeHead(h)} aria-label={`Remove ${h.name}`} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text-3)', display: 'inline-flex', padding: 0 }}><Icon name="x" size={12} /></button>}
+                      </span>
+                    </th>
+                  ))}
+                  <th className="ta-right">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {structureGrades.map((g) => (
+                  <tr key={g}>
+                    <td className="fw6">Grade {g}</td>
+                    {heads.map((h) => (
+                      <td key={h.id} className="ta-right" style={{ width: 130 }}>
+                        <Input type="number" min={0} value={String(cellValue(g, h.id))} disabled={!editable}
+                          style={{ width: 110, textAlign: 'right' }}
+                          onChange={(e) => setCell(g, h.id, e.target.value)} />
+                      </td>
+                    ))}
+                    <td className="ta-right fw7">{fmtMoney(rowTotal(g), cur)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="row jc-end" style={{ padding: 16, borderTop: '1px solid var(--border)' }}>
+              <span className="t-sm">Grand total (all grades) <span className="fw7">{fmtMoney(grandTotal, cur)}</span></span>
+            </div>
+          </>
+        )}
+      </Card>
+
+      {editable && (
+        <Card>
+          <CardHead title="Generate invoices" sub="Bill selected grades from the current fee structure" icon="rupee" />
+          <div className="col gap16" style={{ marginTop: 12 }}>
+            <div className="row gap16 wrap">
+              <div style={{ flex: 1, minWidth: 160 }}>
+                <Field label="Academic year" required>
+                  <Input value={genYear} placeholder="e.g. 2026-27" onChange={(e) => setGenYear(e.target.value)} />
+                </Field>
+              </div>
+              <div style={{ flex: 1, minWidth: 160 }}>
+                <Field label="Term" required>
+                  <Select options={TERM_OPTIONS} value={genTerm} onChange={(e) => setGenTerm(e.target.value)} />
+                </Field>
+              </div>
+            </div>
+            <Field label="Grades" required hint={genGrades.size ? `${genGrades.size} selected` : 'Select at least one grade'}>
+              <div className="row gap6 wrap" role="group" aria-label="Select grades">
+                {structureGrades.map((g) => (
+                  <Btn key={g} type="button" size="sm" variant={genGrades.has(g) ? 'primary' : 'secondary'} onClick={() => toggleGenGrade(g)}>{g}</Btn>
+                ))}
+              </div>
+            </Field>
+            <div className="row jc-end">
+              <Btn variant="primary" icon="arrowRight" disabled={generateInvoices.isPending} onClick={generate}>Generate invoices</Btn>
+            </div>
+          </div>
+        </Card>
       )}
-    </Card>
+    </div>
   )
 }
 
