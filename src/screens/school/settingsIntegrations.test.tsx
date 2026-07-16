@@ -5,6 +5,7 @@ import { AppProvider } from '@/context/AppProvider'
 import { ToastProvider } from '@/context/ToastProvider'
 import { ThemeProvider } from '@/context/ThemeProvider'
 import { adminScreens } from './admin'
+import type { SaveSchoolIntegrationsInput } from '@/api/schoolIntegrations'
 import type { SchoolIntegrations } from '@/types'
 
 const SettingsScreen = adminScreens['school.settings']
@@ -19,12 +20,12 @@ const mockIntegrations: SchoolIntegrations = {
 }
 
 const getSchoolIntegrations = vi.fn(async () => mockIntegrations)
-const saveSchoolIntegrations = vi.fn(async () => mockIntegrations)
+const saveSchoolIntegrations = vi.fn(async (_input: SaveSchoolIntegrationsInput) => mockIntegrations)
 const verifySchoolRazorpay = vi.fn(async () => ({ status: 'configured' as const }))
 
 vi.mock('@/api/schoolIntegrations', () => ({
   getSchoolIntegrations: (...args: unknown[]) => getSchoolIntegrations(...(args as [])),
-  saveSchoolIntegrations: (...args: unknown[]) => saveSchoolIntegrations(...(args as [SchoolIntegrations])),
+  saveSchoolIntegrations: (input: SaveSchoolIntegrationsInput) => saveSchoolIntegrations(input),
   verifySchoolRazorpay: (...args: unknown[]) => verifySchoolRazorpay(...(args as [])),
 }))
 
@@ -62,10 +63,10 @@ describe('Settings — Integrations card', () => {
     fireEvent.click(within(container).getByText('Save integrations'))
 
     await waitFor(() => expect(saveSchoolIntegrations).toHaveBeenCalled())
-    const payload = saveSchoolIntegrations.mock.calls[0][0]
-    expect(payload.email.fromName).toBe('Riverdale School')
-    expect(payload.razorpay.keySecret).toBeUndefined()
-    expect(payload.razorpay.webhookSecret).toBeUndefined()
+    const payload = saveSchoolIntegrations.mock.calls[0]![0]
+    expect(payload.email!.fromName).toBe('Riverdale School')
+    expect(payload.razorpay!.keySecret).toBeUndefined()
+    expect(payload.razorpay!.webhookSecret).toBeUndefined()
   })
 
   it('tests the Razorpay connection', async () => {
