@@ -163,7 +163,10 @@ function FeeHistoryTab({ cur }: { cur: string }) {
       key: 'student', label: 'Student', sortValue: (p) => p.studentName,
       render: (p) => <div><div className="fw6">{p.studentName}</div><div className="t-xs muted">{p.cls}</div></div>,
     },
-    { key: 'feeType', label: 'Fee type', sortValue: (p) => p.feeType, render: (p) => <Badge tone={feeTypeMeta[p.feeType].tone}>{feeTypeMeta[p.feeType].label}</Badge> },
+    { key: 'feeType', label: 'Fee type', sortValue: (p) => p.feeType ?? '', render: (p) => {
+      const ft = (p.feeType ?? 'other') as FeeType
+      return <Badge tone={feeTypeMeta[ft].tone}>{feeTypeMeta[ft].label}</Badge>
+    } },
     { key: 'amount', label: 'Amount', align: 'right', sortValue: (p) => p.amount, render: (p) => <span className="fw6">{fmtMoney(p.amount, cur)}</span> },
     { key: 'mode', label: 'Mode', sortValue: (p) => p.mode, render: (p) => <Badge tone="neutral">{p.mode}</Badge> },
     { key: 'ref', label: 'Reference', sortValue: (p) => p.ref, render: (p) => p.ref ? <span className="t-sm muted">{p.ref}</span> : <span className="muted">—</span> },
