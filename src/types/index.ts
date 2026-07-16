@@ -20,16 +20,118 @@ export type UserOverrides = Record<string, Partial<Record<Cap, 'grant' | 'revoke
 export type SchoolStatus = 'active' | 'trial' | 'past_due'
 export type FeeStatus = 'paid' | 'partial' | 'due'
 export type FeeType = 'academic' | 'transport' | 'other'
-export interface FeePayment {
-  id: number
+
+export interface FeeHead {
+  id: string
+  name: string
+  code?: string
+  active: boolean
+  isSystem?: boolean
+}
+
+export interface FeeInvoiceLine {
+  headId: string
+  headName: string
+  amount: number
+}
+
+export interface FeeInvoice {
+  id: string
   studentId: string
   studentName: string
   cls: string
-  feeType: FeeType
+  grade: string
+  academicYear: string
+  term: string
+  lines: FeeInvoiceLine[]
+  total: number
+  paid: number
+  waived: number
+  due: number
+  status: FeeStatus
+  dueDate?: string
+}
+
+export interface FeeCheque {
+  number: string
+  bank?: string
+  date?: string
+  status?: string
+}
+
+export interface FeeGateway {
+  provider: 'razorpay'
+  orderId?: string
+  paymentId?: string
+  signature?: string
+}
+
+export interface FeePayment {
+  id: number
+  invoiceId?: string
+  studentId: string
+  studentName: string
+  cls: string
+  /** @deprecated prefer headId */
+  feeType?: FeeType | string
+  headId?: string
+  headName?: string
   amount: number
   mode: string
   ref: string
   date: string
+  note?: string
+  collectedBy?: string
+  cheque?: FeeCheque
+  gateway?: FeeGateway
+}
+
+export interface FeeReportSummary {
+  collectedToday: number
+  collectedTerm: number
+  outstanding: number
+  defaulters: number
+  billedTerm: number
+  pct: number
+  byClass: { label: string; value: number; n: number }[]
+  byMode: { label: string; value: number }[]
+  latestPayment?: FeePayment | null
+}
+
+export interface SchoolEmailSettings {
+  enabled: boolean
+  fromName: string
+  fromAddress: string
+  replyTo?: string
+  receiptTemplate?: string
+  reminderTemplate?: string
+}
+
+export interface SchoolSmsSettings {
+  enabled: boolean
+  senderId: string
+  receiptTemplate?: string
+  reminderTemplate?: string
+}
+
+export type RazorpayStatus = 'not_configured' | 'configured' | 'invalid'
+
+export interface SchoolRazorpaySettings {
+  enabled: boolean
+  keyId: string
+  /** Never returned from GET; only sent on PUT when changing */
+  keySecret?: string
+  webhookSecret?: string
+  mode: 'test' | 'live'
+  status: RazorpayStatus
+  keySecretSet?: boolean
+  webhookSecretSet?: boolean
+}
+
+export interface SchoolIntegrations {
+  email: SchoolEmailSettings
+  sms: SchoolSmsSettings
+  razorpay: SchoolRazorpaySettings
 }
 export type ActiveStatus = 'active' | 'inactive'
 export type BusStatus = 'on_route' | 'at_stop' | 'delayed' | 'idle' | 'maintenance'
@@ -40,6 +142,8 @@ export interface RoleMeta { label: string; short: string; desc: string }
 export interface School {
   id: string
   name: string
+  /** Human-readable school id (tenant slug), set when the school is created. */
+  slug?: string
   city: string
   plan: Tier
   students: number
@@ -129,6 +233,8 @@ export interface TeacherDocs {
 
 export interface Teacher {
   id: string
+  /** Human teacher id, e.g. scc-TCH-0001 (Guid stays in id for API). */
+  code?: string
   name: string
   gender: 'M' | 'F'
   dept: string
@@ -194,6 +300,8 @@ export interface StaffDocs {
 
 export interface Staff {
   id: string
+  /** Human staff id, e.g. scc-STF-0001 (Guid stays in id for API). */
+  code?: string
   name: string
   gender: 'M' | 'F'
   role: string
@@ -273,7 +381,9 @@ export interface Exam {
 }
 
 export interface PaperSlot {
-  id: number
+  id: string
+  classId?: string | null
+  className?: string
   subject: string
   date: string        // yyyy-mm-dd
   start: string       // HH:MM (24h)

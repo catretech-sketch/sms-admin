@@ -9,10 +9,12 @@ export const queryKeys = {
   teachers: {
     all: ['teachers'] as const,
     list: (opts: ListTeachersOpts = {}) => ['teachers', 'list', opts] as const,
+    detail: (id: string) => ['teachers', 'detail', id] as const,
   },
   staff: {
     all: ['staff'] as const,
     list: (opts: ListStaffOpts = {}) => ['staff', 'list', opts] as const,
+    detail: (id: string) => ['staff', 'detail', id] as const,
   },
   notifications: {
     all: ['notifications'] as const,
@@ -30,10 +32,13 @@ export const queryKeys = {
     all: ['subjects'] as const,
   },
   attendance: {
-    forClass: (classId: string) => ['attendance', classId] as const,
+    forClass: (classId: string, date = '') => ['attendance', classId, date] as const,
+    principal: (date = '') => ['attendance', 'principal', date] as const,
   },
   exams: {
     all: ['exams'] as const,
+    papers: (examId: string) => ['exams', 'papers', examId] as const,
+    grades: (paperId: string) => ['exams', 'grades', paperId] as const,
   },
   complaints: {
     all: ['complaints'] as const,
@@ -46,6 +51,18 @@ export const queryKeys = {
   },
   feePayments: {
     all: ['feePayments'] as const,
+  },
+  feeHeads: { all: ['feeHeads'] as const },
+  feeStructure: { all: ['feeStructure'] as const },
+  feeInvoices: {
+    all: ['feeInvoices'] as const,
+    list: (opts: Record<string, string> = {}) => ['feeInvoices', 'list', opts] as const,
+  },
+  feeReports: {
+    summary: ['feeReports', 'summary'] as const,
+  },
+  school: {
+    integrations: ['school', 'integrations'] as const,
   },
   owner: {
     dashboard: ['owner', 'dashboard'] as const,

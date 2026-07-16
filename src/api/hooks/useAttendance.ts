@@ -1,11 +1,37 @@
-import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/react-query'
-import { saveAttendance, type AttendanceMark } from '../attendance'
+import { useMutation, useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query'
+import { listAttendance, saveAttendance, type AttendanceMark, type AttendanceRecord } from '../attendance'
 import { queryKeys } from '../queryKeys'
 
-export function useSaveAttendance(): UseMutationResult<void, Error, { classId: string; period: number; marks: AttendanceMark[] }> {
+export function useClassAttendance(
+  classId: string | null | undefined,
+  date: string,
+): UseQueryResult<AttendanceRecord[]> {
+  return useQuery({
+    queryKey: queryKeys.attendance.forClass(classId ?? '', date),
+    queryFn: () => listAttendance(classId!, date),
+    enabled: Boolean(classId && date),
+  })
+}
+
+export function useSaveAttendance(): UseMutationResult<
+  void,
+  Error,
+  { classId: string; date: string; records: AttendanceMark[] }
+> {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ classId, period, marks }: { classId: string; period: number; marks: AttendanceMark[] }) => saveAttendance(classId, period, marks),
-    onSuccess: (_d, vars) => { qc.invalidateQueries({ queryKey: queryKeys.attendance.forClass(vars.classId) }) },
+    mutationFn: ({ classId, date, records }) => saveAttendance(classId, { date, records }),
+    onSuccess: async (_d, vars) => {
+      const key = queryKeys.attendance.forClass(vars.classId, vars.date)
+      const optimistic: AttendanceRecord[] = vars.records.map((r) => ({
+        id: `local-${r.studentId}`,
+        classId: vars.classId,
+        studentId: r.studentId,
+        date: vars.date,
+        status: r.status,
+      }))
+      qc.setQueryData(key, optimistic)
+      await qc.invalidateQueries({ queryKey: ['attendance'] })
+    },
   })
 }

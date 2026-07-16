@@ -66,53 +66,61 @@ describe('endTime', () => {
 })
 
 describe('findClashes', () => {
-  const base: PaperSlot = { id: 0, subject: 'English', date: '2026-09-08', start: '09:30', duration: 180, room: 'Hall 1', inv1: '', inv2: '' }
+  const base: PaperSlot = { id: 'p0', subject: 'English', date: '2026-09-08', start: '09:30', duration: 180, room: 'Hall 1', inv1: '', inv2: '' }
   const mk = (over: Partial<PaperSlot>): PaperSlot => ({ ...base, ...over })
 
   it('flags an invigilator in two overlapping slots on the same date', () => {
     const slots = [
-      mk({ id: 0, subject: 'English', inv1: 'R. Kumar' }),
-      mk({ id: 1, subject: 'Hindi', start: '11:00', inv1: 'R. Kumar' }),
+      mk({ id: 'p0', subject: 'English', inv1: 'R. Kumar' }),
+      mk({ id: 'p1', subject: 'Hindi', start: '11:00', inv1: 'R. Kumar' }),
     ]
     expect(findClashes(slots).some((m) => m.includes('R. Kumar'))).toBe(true)
   })
 
   it('does not flag invigilator when times do not overlap', () => {
     const slots = [
-      mk({ id: 0, subject: 'English', start: '09:00', duration: 60, inv1: 'R. Kumar' }),
-      mk({ id: 1, subject: 'Hindi', start: '10:30', duration: 60, inv1: 'R. Kumar' }),
+      mk({ id: 'p0', subject: 'English', start: '09:00', duration: 60, inv1: 'R. Kumar' }),
+      mk({ id: 'p1', subject: 'Hindi', start: '10:30', duration: 60, inv1: 'R. Kumar' }),
     ]
     expect(findClashes(slots).some((m) => m.includes('R. Kumar'))).toBe(false)
   })
 
   it('does not flag invigilator across different dates', () => {
     const slots = [
-      mk({ id: 0, subject: 'English', date: '2026-09-08', inv1: 'R. Kumar' }),
-      mk({ id: 1, subject: 'Hindi', date: '2026-09-09', inv1: 'R. Kumar' }),
+      mk({ id: 'p0', subject: 'English', date: '2026-09-08', inv1: 'R. Kumar' }),
+      mk({ id: 'p1', subject: 'Hindi', date: '2026-09-09', inv1: 'R. Kumar' }),
     ]
     expect(findClashes(slots).some((m) => m.includes('R. Kumar'))).toBe(false)
   })
 
   it('flags a double-booked room for overlapping slots', () => {
     const slots = [
-      mk({ id: 0, subject: 'English', room: 'Hall 1' }),
-      mk({ id: 1, subject: 'Hindi', start: '10:00', room: 'Hall 1' }),
+      mk({ id: 'p0', subject: 'English', room: 'Hall 1' }),
+      mk({ id: 'p1', subject: 'Hindi', start: '10:00', room: 'Hall 1' }),
     ]
     expect(findClashes(slots).some((m) => m.startsWith('Room Hall 1'))).toBe(true)
   })
 
   it('flags a subject allocated to two papers', () => {
     const slots = [
-      mk({ id: 0, subject: 'English', date: '2026-09-08' }),
-      mk({ id: 1, subject: 'English', date: '2026-09-12' }),
+      mk({ id: 'p0', subject: 'English', date: '2026-09-08' }),
+      mk({ id: 'p1', subject: 'English', date: '2026-09-12' }),
     ]
     expect(findClashes(slots).some((m) => m.startsWith('Subject English'))).toBe(true)
   })
 
+  it('allows the same subject for different classes', () => {
+    const slots = [
+      mk({ id: 'p0', classId: 'c1', className: 'VI-A', subject: 'English', date: '2026-09-08' }),
+      mk({ id: 'p1', classId: 'c2', className: 'VII-A', subject: 'English', date: '2026-09-12' }),
+    ]
+    expect(findClashes(slots).some((m) => m.startsWith('Subject English'))).toBe(false)
+  })
+
   it('returns [] for a clean datesheet', () => {
     const slots = [
-      mk({ id: 0, subject: 'English', inv1: 'R. Kumar', room: 'Hall 1' }),
-      mk({ id: 1, subject: 'Hindi', date: '2026-09-10', inv1: 'S. Rao', room: 'Hall 2' }),
+      mk({ id: 'p0', subject: 'English', inv1: 'R. Kumar', room: 'Hall 1' }),
+      mk({ id: 'p1', subject: 'Hindi', date: '2026-09-10', inv1: 'S. Rao', room: 'Hall 2' }),
     ]
     expect(findClashes(slots)).toEqual([])
   })

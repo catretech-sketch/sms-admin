@@ -39,8 +39,10 @@ export function reportFor(
   stu: Student,
   examId?: string,
   getMark?: (studentId: string, subject: string) => number | undefined,
+  subjectList?: string[],
 ): Report {
-  const rows = subjects.map((s) => {
+  const subs = subjectList?.length ? subjectList : subjects
+  const rows = subs.map((s) => {
     const max = 100
     const override = getMark?.(stu.id, s)
     const marks = override ?? studentSubjectMarks(stu, s, examId)
@@ -59,11 +61,13 @@ export function classRank(
   stu: Student,
   examId?: string,
   getMark?: (studentId: string, subject: string) => number | undefined,
+  peers?: Student[],
+  subjectList?: string[],
 ): RankInfo {
-  const peers = students.filter((s) => s.cls === stu.cls)
-  const scored = peers.map((s) => ({ id: s.id, pct: reportFor(s, examId, getMark).pct })).sort((a, b) => b.pct - a.pct)
+  const classPeers = peers ?? students.filter((s) => s.cls === stu.cls)
+  const scored = classPeers.map((s) => ({ id: s.id, pct: reportFor(s, examId, getMark, subjectList).pct })).sort((a, b) => b.pct - a.pct)
   const rank = scored.findIndex((s) => s.id === stu.id) + 1
-  return { rank, classSize: peers.length }
+  return { rank, classSize: classPeers.length }
 }
 
 export function attendanceMonths(stu: Student): MonthValue[] {

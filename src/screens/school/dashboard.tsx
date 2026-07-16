@@ -1,7 +1,7 @@
 /* ============================================================
    SchoolMate — School console: live Dashboard + Approvals inbox
    ============================================================ */
-import { useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import {
   Card, CardHead, Kpi, PageHead, Badge, Btn, Icon, Avatar,
@@ -12,8 +12,16 @@ import { SchoolPhoto } from '@/components/SchoolMark'
 import { grades } from '@/data/mockDb'
 import { useApprovals } from '@/api/hooks/useApprovals'
 import { useActOnApproval } from '@/api/hooks/useApprovalMutations'
+import { useStudents } from '@/api/hooks/useStudents'
+import { useTeachers } from '@/api/hooks/useTeachers'
+import { useStaff } from '@/api/hooks/useStaff'
+import { usePrincipalAttendance } from '@/api/hooks/usePrincipalAttendance'
+import {
+  loadPeopleAttendance, countPeoplePresent, PEOPLE_ATTENDANCE_CHANGED,
+  type CheckInInfo,
+} from '@/api/peopleAttendance'
 import { fmtMoney, fmtNum } from '@/lib/format'
-import type { Approval } from '@/types'
+import type { Approval, Role } from '@/types'
 
 /* ---------- small helpers ---------- */
 const STAGES = [
@@ -26,7 +34,6 @@ const RESULT_BANDS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', 'D', 'E']
 
 const ACTIVITY: { time: string; text: string }[] = [
   { time: 'just now', text: 'Payment received — ₹48,000 from Aarav Sharma (X-A)' },
-  { time: '3m', text: 'Grade VII-B attendance submitted by S. Rao · 41/44 present' },
   { time: '11m', text: 'Report cards published — Grade V (Periodic Test 1)' },
   { time: '24m', text: 'New admission enquiry — Nursery 2026 batch' },
   { time: '38m', text: 'Bus 12 departed route R-04 · ETA first stop 7:42 AM' },
@@ -39,6 +46,15 @@ const ANNOUNCEMENTS: { tag: string; tone: BadgeTone; title: string; when: string
   { tag: 'Notice', tone: 'neutral', title: 'PTM scheduled this Saturday, 10 AM – 1 PM', when: '3 days ago' },
 ]
 
+function todayIso(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function canSeeLiveAttendance(role: Role): boolean {
+  return role === 'owner' || role === 'admin' || role === 'principal' || role === 'vice_principal'
+}
+
 /* ============================================================
    School Dashboard
    ============================================================ */
@@ -46,29 +62,110 @@ function SchoolDashboard() {
   const app = useApp()
   const s = app.school
   const cur = s.currency
+  const liveAtt = canSeeLiveAttendance(app.role)
+  const today = todayIso()
 
-  /* derived (deterministic, plausible) finance + people figures */
-  const feesToday = Math.round(s.students * 920)
-  const outstanding = Math.round(s.students * (100 - s.fees) * 145)
-  const staffPresent = Math.round((s.staff * 96.5) / 100)
-  const staffOnLeave = s.staff - staffPresent
+  const studentsQ = useStudents()
+  const teachersQ = useTeachers()
+  const staffQ = useStaff()
+  const attQ = usePrincipalAttendance(today, liveAtt)
 
-  const teacherCount = Math.round(s.staff * 0.62)
-  const supportCount = s.staff - teacherCount
-  const studentsPresent = Math.round((s.students * s.attendance) / 100)
-  const ratio = Math.round(s.students / Math.max(1, teacherCount))
+  /* Re-read local teacher/staff marks after Attendance save (or window focus). */
+  const [peopleAttTick, setPeopleAttTick] = useState(0)
+  useEffect(() => {
+    const bump = () => setPeopleAttTick((n) => n + 1)
+    window.addEventListener(PEOPLE_ATTENDANCE_CHANGED, bump)
+    window.addEventListener('focus', bump)
+    return () => {
+      window.removeEventListener(PEOPLE_ATTENDANCE_CHANGED, bump)
+      window.removeEventListener('focus', bump)
+    }
+  }, [])
 
-  /* people-at-a-glance present rates */
-  const teacherRate = 97
-  const supportRate = 94
-  const teachersPresent = Math.round((teacherCount * teacherRate) / 100)
-  const supportPresent = Math.round((supportCount * supportRate) / 100)
+  const liveStudents = studentsQ.data?.length ?? s.students
+  const liveTeachers = teachersQ.data?.length ?? Math.round(s.staff * 0.62)
+  const liveSupport = staffQ.data?.length ?? Math.max(0, s.staff - liveTeachers)
+
+  const apiRoll = attQ.data?.studentTotal ?? 0
+  const studentTotal = Math.max(apiRoll, liveStudents)
+  const studentsPresent = attQ.data?.presentTotal
+    ?? Math.round((liveStudents * (s.attendance || 0)) / 100)
+  const attendancePct = studentTotal > 0
+    ? Math.round((studentsPresent / studentTotal) * 100)
+    : (attQ.data ? Math.round(Number(attQ.data.overallPct) || 0) : Math.round(s.attendance || 0))
+
+  /* Teachers: teacher-app check-in OR CRM Attendance mark — same rule as the Attendance roster. */
+  const teachersPresent = useMemo(() => {
+    const teachers = teachersQ.data ?? []
+    if (!teachers.length) return 0
+    const marks = loadPeopleAttendance('teachers', today)
+    const checkIn = new Map<string, CheckInInfo>()
+    for (const row of attQ.data?.staff ?? []) {
+      checkIn.set(row.teacherId, { checkedIn: row.checkedIn, at: row.checkInAt })
+      checkIn.set(row.name.toLowerCase(), { checkedIn: row.checkedIn, at: row.checkInAt })
+    }
+    return countPeoplePresent(
+      'teachers',
+      teachers.map((t) => ({ id: t.id, name: t.name })),
+      marks,
+      { checkIn, principalKnown: attQ.isSuccess },
+    )
+  }, [teachersQ.data, attQ.data, attQ.isSuccess, today, peopleAttTick])
+
+  const teacherRate = liveTeachers ? Math.round((teachersPresent / liveTeachers) * 100) : 0
+
+  /* Support staff: CRM Attendance · Staff tab marks for today */
+  const supportPresent = useMemo(() => {
+    const staff = staffQ.data ?? []
+    if (!staff.length) return 0
+    const marks = loadPeopleAttendance('staff', today)
+    return countPeoplePresent('staff', staff.map((p) => ({ id: p.id, name: p.name })), marks)
+  }, [staffQ.data, today, peopleAttTick])
+
+  const supportRate = liveSupport ? Math.round((supportPresent / liveSupport) * 100) : 0
+
+  const peoplePresent = teachersPresent + supportPresent
+  const peopleTotal = liveTeachers + liveSupport
+  const peopleRate = peopleTotal ? Math.round((peoplePresent / peopleTotal) * 100) : 0
+  const staffAway = Math.max(0, peopleTotal - peoplePresent)
+
+  /* derived finance figures (until fee APIs feed the dashboard) */
+  const feesToday = Math.round(liveStudents * 920)
+  const outstanding = Math.round(liveStudents * (100 - s.fees) * 145)
+  const ratio = Math.round(liveStudents / Math.max(1, liveTeachers))
 
   const months = ['Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun']
-  const attTrend = [90.4, 91.2, 89.8, 92.1, 93.0, 92.4, 93.6, s.attendance]
+  const attTrend = useMemo(
+    () => [90.4, 91.2, 89.8, 92.1, 93.0, 92.4, 93.6, attendancePct],
+    [attendancePct],
+  )
 
-  const genderBoys = Math.round(s.students * 0.53)
-  const genderGirls = s.students - genderBoys
+  const activity = useMemo(() => {
+    const rows = [...ACTIVITY]
+    if (attQ.isSuccess || studentsPresent > 0) {
+      rows.unshift({
+        time: 'today',
+        text: `Students · ${fmtNum(studentsPresent)} of ${fmtNum(studentTotal)} present (${attendancePct}%)`,
+      })
+    }
+    rows.unshift({
+      time: 'today',
+      text: `Teachers · ${fmtNum(teachersPresent)} of ${fmtNum(liveTeachers)} present (${teacherRate}%)`,
+    })
+    rows.unshift({
+      time: 'today',
+      text: `Staff · ${fmtNum(supportPresent)} of ${fmtNum(liveSupport)} present (${supportRate}%)`,
+    })
+    return rows
+  }, [
+    attQ.isSuccess, studentsPresent, studentTotal, attendancePct,
+    teachersPresent, liveTeachers, teacherRate,
+    supportPresent, liveSupport, supportRate,
+  ])
+
+  const genderBoys = Math.round(liveStudents * 0.53)
+  const genderGirls = liveStudents - genderBoys
+  const attLiveLabel = attQ.isFetching ? 'Refreshing…' : (attQ.isSuccess ? 'Live today' : 'Live roster')
 
   return (
     <div className="col gap20">
@@ -87,17 +184,17 @@ function SchoolDashboard() {
       <div className="sm-kpi-grid">
         <Kpi
           icon="users" iconBg="var(--brand-50)" iconColor="var(--brand-600)"
-          label="Total enrollment" value={fmtNum(s.students)}
+          label="Total enrollment" value={fmtNum(liveStudents)}
           delta="3.8%" deltaDir="up"
-          foot={`${grades.length} grades · ${fmtNum(s.staff)} staff`}
-          spark={[1980, 2012, 2040, 2065, 2090, 2110, 2130, s.students]} sparkColor="var(--brand-600)"
+          foot={`${grades.length} grades · ${fmtNum(peopleTotal)} staff`}
+          spark={[1980, 2012, 2040, 2065, 2090, 2110, 2130, liveStudents]} sparkColor="var(--brand-600)"
         />
         <Kpi
           icon="check" iconBg="var(--success-bg)" iconColor="var(--success)"
-          label="Today's attendance" value={s.attendance + '%'}
-          delta="0.7%" deltaDir="up"
-          foot={`${fmtNum(studentsPresent)} of ${fmtNum(s.students)} present`}
-          spark={[91, 92, 90, 93, 92, 94, 93, s.attendance]} sparkColor="var(--success)"
+          label="Today's attendance" value={`${attendancePct}%`}
+          delta={attLiveLabel} deltaDir="up"
+          foot={`${fmtNum(studentsPresent)} of ${fmtNum(studentTotal)} students present`}
+          spark={[91, 92, 90, 93, 92, 94, 93, attendancePct]} sparkColor="var(--success)"
         />
         <Kpi
           icon="rupee" iconBg="var(--info-bg)" iconColor="var(--info)"
@@ -115,10 +212,10 @@ function SchoolDashboard() {
         />
         <Kpi
           icon="briefcase" iconBg="var(--brand-50)" iconColor="var(--brand-600)"
-          label="Staff present" value={`${fmtNum(staffPresent)}/${fmtNum(s.staff)}`}
-          delta="1.2%" deltaDir="up"
-          foot={`${staffOnLeave} on leave today`}
-          spark={[176, 178, 175, 180, 179, 181, 180, staffPresent]} sparkColor="var(--brand-600)"
+          label="Teachers & staff" value={`${fmtNum(peoplePresent)}/${fmtNum(peopleTotal)}`}
+          delta={`${peopleRate}%`} deltaDir="up"
+          foot={`Teachers ${fmtNum(teachersPresent)}/${fmtNum(liveTeachers)} · Staff ${fmtNum(supportPresent)}/${fmtNum(liveSupport)} · ${fmtNum(staffAway)} away`}
+          spark={[176, 178, 175, 180, 179, 181, 180, peoplePresent]} sparkColor="var(--brand-600)"
         />
       </div>
 
@@ -126,28 +223,33 @@ function SchoolDashboard() {
       <div className="sm-grid-3">
         <PeopleCard
           icon="users" tone="var(--brand-600)" label="Students"
-          count={s.students} sub={`Student–teacher ratio ${ratio}:1`}
-          rate={s.attendance} present={studentsPresent} total={s.students}
-          onClick={() => app.go('school.sis')}
+          count={liveStudents} sub={`Student–teacher ratio ${ratio}:1 · ${attLiveLabel}`}
+          rate={attendancePct} present={studentsPresent} total={studentTotal}
+          onClick={() => app.go('school.attendance')}
         />
         <PeopleCard
           icon="cap" tone="var(--success)" label="Teachers"
-          count={teacherCount} sub={`Across 8 departments`}
-          rate={teacherRate} present={teachersPresent} total={teacherCount}
-          onClick={() => app.go('school.teachers')}
+          count={liveTeachers} sub="Teacher app check-in + Attendance marks"
+          rate={teacherRate} present={teachersPresent} total={liveTeachers}
+          onClick={() => app.go('school.attendance')}
         />
         <PeopleCard
           icon="briefcase" tone="var(--info)" label="Support staff"
-          count={supportCount} sub={`Transport · security · admin`}
-          rate={supportRate} present={supportPresent} total={supportCount}
-          onClick={() => app.go('school.staff')}
+          count={liveSupport} sub="From Attendance · Staff tab"
+          rate={supportRate} present={supportPresent} total={liveSupport}
+          onClick={() => app.go('school.attendance')}
         />
       </div>
 
       {/* ---- Trends: attendance line + fee donut ---- */}
       <div className="sm-grid-2">
         <Card>
-          <CardHead title="Attendance trend" sub="Daily average · last 8 months" icon="trend" />
+          <CardHead
+            title="Attendance trend"
+            sub={attQ.isSuccess ? `Daily average · today ${attendancePct}% (live)` : 'Daily average · last 8 months'}
+            icon="trend"
+            action={<Btn size="sm" variant="ghost" icon="check" onClick={() => app.go('school.attendance')}>Open attendance</Btn>}
+          />
           <div style={{ marginTop: 12 }}>
             <LineChart
               series={[{ data: attTrend, color: 'var(--brand-600)', label: 'Attendance %' }]}
@@ -189,10 +291,10 @@ function SchoolDashboard() {
           <CardHead title="Enrolment by stage" icon="layers" />
           <div className="row ai-center jc-center" style={{ margin: '8px 0 14px' }}>
             <Donut
-              segments={STAGES.map((st) => ({ value: Math.round(s.students * st.share), color: st.color, label: st.label }))}
+              segments={STAGES.map((st) => ({ value: Math.round(liveStudents * st.share), color: st.color, label: st.label }))}
               size={138} thickness={16}
               center={<div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 20, fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1 }}>{fmtNum(s.students)}</div>
+                <div style={{ fontSize: 20, fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1 }}>{fmtNum(liveStudents)}</div>
                 <div className="t-xs muted3">students</div>
               </div>}
             />
@@ -211,7 +313,7 @@ function SchoolDashboard() {
               size={138} thickness={16}
               center={<div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 20, fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1 }}>
-                  {Math.round((genderBoys / s.students) * 100)}:{Math.round((genderGirls / s.students) * 100)}
+                  {liveStudents ? Math.round((genderBoys / liveStudents) * 100) : 0}:{liveStudents ? Math.round((genderGirls / liveStudents) * 100) : 0}
                 </div>
                 <div className="t-xs muted3">boys : girls</div>
               </div>}
@@ -254,7 +356,7 @@ function SchoolDashboard() {
             action={<Badge tone="success" dot>Live</Badge>}
           />
           <div className="col gap12" style={{ marginTop: 12 }}>
-            {ACTIVITY.map((a, i) => (
+            {activity.map((a, i) => (
               <div key={i} className="row ai-center gap12">
                 <span className="sm-dot-live" />
                 <div className="t-md" style={{ flex: 1 }}>{a.text}</div>

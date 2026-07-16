@@ -50,8 +50,10 @@ export function findClashes(slots: PaperSlot[]): string[] {
   for (let i = 0; i < slots.length; i++) {
     for (let j = i + 1; j < slots.length; j++) {
       const a = slots[i], b = slots[j]
-      if (a.subject && b.subject && a.subject === b.subject) {
-        out.add(`Subject ${a.subject} — allocated to two papers`)
+      const sameClassScope = (a.classId ?? '') === (b.classId ?? '')
+      if (sameClassScope && a.subject && b.subject && a.subject === b.subject) {
+        const cls = a.className || b.className
+        out.add(`Subject ${a.subject} — allocated to two papers${cls ? ` for ${cls}` : ''}`)
       }
       if (overlap(a, b)) {
         const ai = [a.inv1, a.inv2].filter(Boolean)

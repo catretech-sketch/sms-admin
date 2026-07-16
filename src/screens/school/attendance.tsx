@@ -1,103 +1,128 @@
 /* ============================================================
    SchoolMate — Attendance
-   Today's-at-a-glance summary, group control (Students ·
-   Teachers · Staff · Period-wise · Geo-fence), live roster with
-   search + status filter, correction action, and the [P] geofence
-   locked state. Frontend-only, deterministic mock data.
+   Students: class-wise (day/month) — marks from CRM + teacher app.
+   Teachers: check-ins from teacher app + present/absent edit.
+   Staff: photos + present/absent. Geo-fence: Platinum preview.
    ============================================================ */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import { can } from '@/lib/gating'
 import {
-  PageHead, Card, CardHead, Btn, Badge, Avatar, Search, Select, Segmented,
+  PageHead, Card, CardHead, Btn, Badge, Avatar, Search, Select, Segmented, Input,
   Icon, Empty, DataTable, type Column, type BadgeTone,
   DemoBadge,
 } from '@/components/ui'
-import { TierGate } from '@/components/shell/gates'
-import { students, teachers, staff, grades, sections, subjects } from '@/data/mockDb'
-import { useClasses } from '@/api/hooks/useClasses'
-import { useSaveAttendance } from '@/api/hooks/useAttendance'
+import { TierGate, RestrictedScreen } from '@/components/shell/gates'
+import { useStudents } from '@/api/hooks/useStudents'
+import { useTeachers } from '@/api/hooks/useTeachers'
+import { useStaff } from '@/api/hooks/useStaff'
+import { usePrincipalAttendance } from '@/api/hooks/usePrincipalAttendance'
+import { peoplePhotoUrl } from '@/api/peopleExtras'
+import {
+  loadPeopleAttendance, savePeopleAttendance, effectivePeopleStatus,
+  countPeoplePresent, PEOPLE_ATTENDANCE_CHANGED, type CheckInInfo,
+} from '@/api/peopleAttendance'
+import { ClassWiseStudents } from './attendanceClassWise'
+import type { AttendanceStatus } from '@/api/attendance'
+import type { Teacher, Staff, Role } from '@/types'
 
-/* ---------- group model ---------- */
-type Group = 'students' | 'teachers' | 'staff' | 'period' | 'geo'
-const GROUP_OPTS = [
+type Group = 'students' | 'teachers' | 'staff' | 'geo'
+type AttStatus = AttendanceStatus
+
+/** Owner / Admin / Principal / VP — full school roll (students + teachers + staff). */
+function seesAllPeople(role: Role): boolean {
+  return role === 'owner' || role === 'admin' || role === 'principal' || role === 'vice_principal'
+}
+
+/** Leadership can always mark anyone present/absent; teachers keep class Edit from the matrix. */
+function canMarkAttendance(role: Role): boolean {
+  if (seesAllPeople(role)) return true
+  return can(role, 'attendance', 'E')
+}
+
+const GROUP_OPTS_ALL = [
   { value: 'students', label: 'Students' },
   { value: 'teachers', label: 'Teachers' },
   { value: 'staff', label: 'Staff' },
-  { value: 'period', label: 'Subject-wise' },
   { value: 'geo', label: 'Geo-fence' },
 ]
 
-/* ---------- deterministic status derivation ---------- */
-type AttStatus = 'present' | 'late' | 'absent'
-function hash(s: string): number {
-  let h = 0
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
-  return h
-}
-/* Higher personal attendance % => more likely present today. A thin
-   band just below the threshold is treated as "late". */
-function statusOf(id: string, attendance: number): AttStatus {
-  const r = hash(id) % 100
-  if (r >= attendance) return 'absent'
-  if (r >= attendance - 7) return 'late'
-  return 'present'
-}
-function checkIn(id: string, status: AttStatus): string {
-  if (status === 'absent') return '—'
-  const base = status === 'late' ? 510 : 450      // 8:30 vs 7:30 (minutes)
-  const span = status === 'late' ? 30 : 40
-  const m = base + (hash(id + 'c') % span)
-  const hh = Math.floor(m / 60), mm = m % 60
-  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`
-}
+const GROUP_OPTS_TEACHER = [
+  { value: 'students', label: 'Students' },
+]
 
 const STATUS_TONE: Record<AttStatus, BadgeTone> = { present: 'success', late: 'warning', absent: 'danger' }
 const STATUS_LABEL: Record<AttStatus, string> = { present: 'Present', late: 'Late', absent: 'Absent' }
+const STATUS_OPTS = [
+  { value: 'present', label: 'Present' },
+  { value: 'late', label: 'Late' },
+  { value: 'absent', label: 'Absent' },
+]
 
-/* ---------- normalised person row ---------- */
-interface Person {
-  id: string; name: string; hue: number
-  group: Exclude<Group, 'period' | 'geo'>
-  sub: string                 // class / department / role
-  status: AttStatus
-  checkin: string
-}
-function buildPeople(group: Person['group']): Person[] {
-  if (group === 'students') {
-    return students.map((s) => {
-      const status = statusOf(s.id, s.attendance)
-      return { id: s.id, name: s.name, hue: s.avatarHue, group, sub: s.cls, status, checkin: checkIn(s.id, status) }
-    })
-  }
-  if (group === 'teachers') {
-    return teachers.map((t) => {
-      const status = statusOf(t.id, t.attendance)
-      return { id: t.id, name: t.name, hue: t.avatarHue, group, sub: `${t.dept} · ${t.desig}`, status, checkin: checkIn(t.id, status) }
-    })
-  }
-  return staff.map((s) => {
-    const status = statusOf(s.id, s.attendance)
-    return { id: s.id, name: s.name, hue: s.avatarHue, group, sub: `${s.role} · ${s.dept}`, status, checkin: checkIn(s.id, status) }
-  })
-}
+const SUB_LABEL = { students: 'Class', teachers: 'Department', staff: 'Role' } as const
+const GROUP_NAME = { students: 'Students', teachers: 'Teachers', staff: 'Support staff' } as const
+const GROUP_ICON = { students: 'users', teachers: 'cap', staff: 'briefcase' } as const
 
-const SUB_LABEL: Record<Person['group'], string> = { students: 'Class', teachers: 'Department', staff: 'Role' }
-const GROUP_NAME: Record<Person['group'], string> = { students: 'Students', teachers: 'Teachers', staff: 'Support staff' }
-const GROUP_ICON: Record<Person['group'], string> = { students: 'users', teachers: 'cap', staff: 'briefcase' }
+function todayIso(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
 /* ============================================================
-   Summary card (today's-at-a-glance) — clickable, drives group
+   Summary cards — live headcount + today's present count
    ============================================================ */
 function SummaryCard({ group, tone, active, onClick }: {
-  group: Person['group']; tone: string; active: boolean; onClick: () => void
+  group: 'students' | 'teachers' | 'staff'; tone: string; active: boolean; onClick: () => void
 }) {
-  const { present, total, rate } = useMemo(() => {
-    const ppl = buildPeople(group)
-    const present = ppl.filter((p) => p.status !== 'absent').length
-    const total = ppl.length
-    return { present, total, rate: total ? Math.round((present / total) * 100) : 0 }
+  const studentsQ = useStudents()
+  const teachersQ = useTeachers()
+  const staffQ = useStaff()
+  const today = todayIso()
+  const principalQ = usePrincipalAttendance(today, group === 'students' || group === 'teachers')
+
+  // Re-read local teacher/staff marks after a roster save.
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    if (group === 'students') return
+    const bump = () => setTick((n) => n + 1)
+    window.addEventListener(PEOPLE_ATTENDANCE_CHANGED, bump)
+    window.addEventListener('focus', bump)
+    return () => {
+      window.removeEventListener(PEOPLE_ATTENDANCE_CHANGED, bump)
+      window.removeEventListener('focus', bump)
+    }
   }, [group])
+
+  const people =
+    group === 'students' ? (studentsQ.data ?? [])
+    : group === 'teachers' ? (teachersQ.data ?? [])
+    : (staffQ.data ?? [])
+  const total = group === 'students'
+    ? Math.max(principalQ.data?.studentTotal ?? 0, people.length)
+    : people.length
+
+  const present = useMemo(() => {
+    if (group === 'students') return principalQ.data?.presentTotal ?? 0
+    const roster = (group === 'teachers' ? teachersQ.data : staffQ.data) ?? []
+    const marks = loadPeopleAttendance(group, today)
+    const checkIn = new Map<string, CheckInInfo>()
+    for (const s of principalQ.data?.staff ?? []) {
+      checkIn.set(s.teacherId, { checkedIn: s.checkedIn, at: s.checkInAt })
+      checkIn.set(s.name.toLowerCase(), { checkedIn: s.checkedIn, at: s.checkInAt })
+    }
+    return countPeoplePresent(
+      group,
+      roster.map((p) => ({ id: p.id, name: p.name })),
+      marks,
+      { checkIn, principalKnown: principalQ.isSuccess },
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [group, today, teachersQ.data, staffQ.data, principalQ.data, principalQ.isSuccess, tick])
+
+  const rate = group === 'students'
+    ? (total > 0 ? Math.round((present / total) * 100) : Math.round(Number(principalQ.data?.overallPct) || 0))
+    : (total ? Math.round((present / total) * 100) : 0)
+
   return (
     <Card hover onClick={onClick} style={active ? { borderColor: tone, boxShadow: `0 0 0 1px ${tone}` } : undefined}>
       <div className="row ai-center jc-between">
@@ -112,7 +137,10 @@ function SummaryCard({ group, tone, active, onClick }: {
         </div>
         <Icon name="chevRight" size={18} style={{ color: 'var(--text-3)' }} />
       </div>
-      <div className="row ai-center gap8" style={{ marginTop: 12 }}>
+      <div className="t-sm muted" style={{ marginTop: 10 }}>
+        Today · live
+      </div>
+      <div className="row ai-center gap8" style={{ marginTop: 10 }}>
         <div className="sm-meter" style={{ flex: 1, width: 'auto' }}>
           <span style={{ width: `${rate}%`, background: tone }} />
         </div>
@@ -123,49 +151,94 @@ function SummaryCard({ group, tone, active, onClick }: {
 }
 
 /* ============================================================
-   Roster (Students / Teachers / Staff) — search + status filter
+   Teachers / Staff roster — photos + present/absent (owner/admin/principal)
    ============================================================ */
-function clsParts(cls: string): [string, string] {
-  const i = cls.lastIndexOf('-')
-  return i < 0 ? [cls, ''] : [cls.slice(0, i), cls.slice(i + 1)]
+interface PersonRow {
+  id: string
+  name: string
+  hue: number
+  sub: string
+  ytd: number
+  photo?: string
+  status: AttStatus
+  appCheckIn?: boolean
+  checkInAt?: string | null
 }
 
-function Roster({ group, editable }: { group: Person['group']; editable: boolean }) {
+function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editable: boolean }) {
   const toast = useToast()
-  const isStudents = group === 'students'
+  const teachersQ = useTeachers()
+  const staffQ = useStaff()
+  const [date, setDate] = useState(todayIso)
   const [q, setQ] = useState('')
   const [filter, setFilter] = useState<'all' | AttStatus>('all')
-  const [grade, setGrade] = useState('all')
-  const [section, setSection] = useState('all')
+  const [draft, setDraft] = useState<Record<string, AttStatus>>({})
+  const [saved, setSaved] = useState<Record<string, AttStatus>>({})
+  const principalQ = usePrincipalAttendance(date, group === 'teachers')
 
-  const all = useMemo(() => buildPeople(group), [group])
+  useEffect(() => {
+    setSaved(loadPeopleAttendance(group, date))
+    setDraft({})
+  }, [group, date])
 
-  /* class-wise / section-wise scope (students only; p.sub is the class) */
-  const scoped = useMemo(() => {
-    if (!isStudents) return all
-    return all.filter((p) => {
-      const [g, sec] = clsParts(p.sub)
-      if (grade !== 'all' && g !== grade) return false
-      if (section !== 'all' && sec !== section) return false
-      return true
-    })
-  }, [all, isStudents, grade, section])
+  const appCheckIn = useMemo(() => {
+    const m = new Map<string, CheckInInfo>()
+    for (const s of principalQ.data?.staff ?? []) {
+      m.set(s.teacherId, { checkedIn: s.checkedIn, at: s.checkInAt })
+      m.set(s.name.toLowerCase(), { checkedIn: s.checkedIn, at: s.checkInAt })
+    }
+    return m
+  }, [principalQ.data])
 
-  /* search next, so the status counts reflect the visible set */
+  const statusOf = (id: string, name: string): AttStatus => {
+    if (draft[id]) return draft[id]
+    return effectivePeopleStatus(
+      group,
+      { id, name },
+      saved,
+      { checkIn: appCheckIn, principalKnown: principalQ.isSuccess },
+    )
+  }
+
+  const all = useMemo((): PersonRow[] => {
+    if (group === 'teachers') {
+      return (teachersQ.data ?? []).map((t: Teacher) => {
+        const hit = appCheckIn.get(t.id) ?? appCheckIn.get(t.name.toLowerCase())
+        return {
+          id: t.id,
+          name: t.name,
+          hue: t.avatarHue,
+          sub: `${t.dept} · ${t.desig}`,
+          ytd: Number(t.attendance) || 0,
+          photo: peoplePhotoUrl('teacher', t.id),
+          status: statusOf(t.id, t.name),
+          appCheckIn: hit?.checkedIn,
+          checkInAt: hit?.at,
+        }
+      })
+    }
+    return (staffQ.data ?? []).map((s: Staff) => ({
+      id: s.id,
+      name: s.name,
+      hue: s.avatarHue,
+      sub: `${s.role} · ${s.dept}`,
+      ytd: Number(s.attendance) || 0,
+      photo: peoplePhotoUrl('staff', s.id),
+      status: statusOf(s.id, s.name),
+    }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [group, teachersQ.data, staffQ.data, draft, saved, appCheckIn, principalQ.isSuccess])
+
   const searched = useMemo(() => {
     const term = q.trim().toLowerCase()
-    if (!term) return scoped
-    return scoped.filter((p) => p.name.toLowerCase().includes(term) || p.id.toLowerCase().includes(term))
-  }, [scoped, q])
+    if (!term) return all
+    return all.filter((p) => p.name.toLowerCase().includes(term) || p.id.toLowerCase().includes(term))
+  }, [all, q])
 
-  const gradeOpts = useMemo(() => {
-    const present = [...new Set(students.map((s) => clsParts(s.cls)[0]))].sort((a, b) => grades.indexOf(a) - grades.indexOf(b))
-    return [{ value: 'all', label: 'All grades' }, ...present.map((g) => ({ value: g, label: `Grade ${g}` }))]
-  }, [])
-  const sectionOpts = useMemo(() => {
-    const present = [...new Set(students.map((s) => clsParts(s.cls)[1]))].filter(Boolean).sort((a, b) => sections.indexOf(a) - sections.indexOf(b))
-    return [{ value: 'all', label: 'All sections' }, ...present.map((s) => ({ value: s, label: `Section ${s}` }))]
-  }, [])
+  const rows = useMemo(
+    () => (filter === 'all' ? searched : searched.filter((p) => p.status === filter)),
+    [searched, filter],
+  )
 
   const counts = useMemo(() => {
     const c = { present: 0, late: 0, absent: 0 }
@@ -173,12 +246,10 @@ function Roster({ group, editable }: { group: Person['group']; editable: boolean
     return c
   }, [searched])
 
-  const rows = useMemo(
-    () => filter === 'all' ? searched : searched.filter((p) => p.status === filter),
-    [searched, filter],
-  )
-
   const presentTotal = counts.present + counts.late
+  const onRoll = all.length
+  const absentOrUnmarked = Math.max(0, onRoll - presentTotal)
+  const attendancePct = onRoll ? Math.round((presentTotal / onRoll) * 100) : 0
 
   const filterOpts = [
     { value: 'all', label: `All (${searched.length})` },
@@ -187,223 +258,169 @@ function Roster({ group, editable }: { group: Person['group']; editable: boolean
     { value: 'absent', label: `Absent (${counts.absent})` },
   ]
 
-  const cols: Column<Person>[] = [
+  const setStatus = (id: string, st: AttStatus) => setDraft((d) => ({ ...d, [id]: st }))
+
+  const markAll = (st: AttStatus) =>
+    setDraft((d) => ({ ...d, ...Object.fromEntries(all.map((p) => [p.id, st])) }))
+
+  const submit = () => {
+    const marks: Record<string, AttStatus> = { ...saved }
+    for (const p of all) marks[p.id] = statusOf(p.id, p.name)
+    savePeopleAttendance(group, date, marks)
+    setSaved(marks)
+    setDraft({})
+    toast.success('Attendance saved', `${GROUP_NAME[group]} · ${date} · ${presentTotal}/${onRoll} present`)
+  }
+
+  const cols: Column<PersonRow>[] = [
     {
       key: 'name', label: 'Name', sortValue: (r) => r.name,
       render: (r) => (
         <div className="row ai-center gap12">
-          <Avatar name={r.name} hue={r.hue} size={34} />
+          <Avatar name={r.name} hue={r.hue} size={44} src={r.photo} />
           <div>
             <div className="t-md fw6">{r.name}</div>
-            <div className="t-xs muted3">{r.id}</div>
+            <div className="t-xs muted3">
+              {r.id}
+              {r.appCheckIn ? ` · app in ${r.checkInAt ? new Date(r.checkInAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}` : ''}
+            </div>
           </div>
         </div>
       ),
     },
     { key: 'sub', label: SUB_LABEL[group], sortValue: (r) => r.sub, render: (r) => <span className="t-sm muted">{r.sub}</span> },
-    { key: 'checkin', label: 'Check-in', sortValue: (r) => r.checkin, render: (r) => <span className="t-sm">{r.checkin}</span> },
-    { key: 'status', label: 'Status', render: (r) => <Badge tone={STATUS_TONE[r.status]} dot>{STATUS_LABEL[r.status]}</Badge> },
     {
-      key: 'act', label: '', align: 'right',
+      key: 'source', label: 'Source',
+      render: (r) => group === 'teachers' && r.appCheckIn
+        ? <Badge tone="info" icon="phone">Teacher app</Badge>
+        : <Badge tone="neutral">Manual</Badge>,
+    },
+    {
+      key: 'ytd', label: 'YTD %', sortValue: (r) => r.ytd,
+      render: (r) => <Badge tone={r.ytd >= 90 ? 'success' : r.ytd >= 75 ? 'warning' : 'danger'} dot>{r.ytd}%</Badge>,
+    },
+    {
+      key: 'status', label: 'Today',
       render: (r) => editable
-        ? <Btn size="sm" variant="ghost" icon="edit" onClick={() => toast.info('Attendance correction', `${r.name} (${r.id}) marked present for today`)}>Correct</Btn>
-        : <span className="t-xs muted3">—</span>,
+        ? <Segmented value={r.status} onChange={(v) => setStatus(r.id, v as AttStatus)} options={STATUS_OPTS} />
+        : <Badge tone={STATUS_TONE[r.status]} dot>{STATUS_LABEL[r.status]}</Badge>,
     },
   ]
+
+  const loading = group === 'teachers'
+    ? teachersQ.isLoading || principalQ.isLoading
+    : staffQ.isLoading
 
   return (
     <Card pad={false}>
       <CardHead
-        title={<span className="row ai-center gap8">{GROUP_NAME[group]} roster<DemoBadge /></span>}
-        sub={isStudents
-          ? `${grade === 'all' ? 'All grades' : `Grade ${grade}`}${section === 'all' ? '' : ` · Sec ${section}`} · ${presentTotal} of ${scoped.length} present`
-          : `${presentTotal} of ${scoped.length} present today`}
+        title={`${GROUP_NAME[group]} roster`}
+        sub={group === 'teachers'
+          ? `${date} · teacher app check-ins show automatically · ${presentTotal}/${all.length} present`
+          : `${date} · ${presentTotal} of ${all.length} present`}
         icon={GROUP_ICON[group]}
         action={
           <div className="row ai-center gap8 wrap">
-            {isStudents && <Select options={gradeOpts} value={grade} onChange={(e) => setGrade(e.target.value)} />}
-            {isStudents && <Select options={sectionOpts} value={section} onChange={(e) => setSection(e.target.value)} />}
-            <Search value={q} onChange={setQ} placeholder={`Find ${group === 'students' ? 'student' : group === 'teachers' ? 'teacher' : 'staff'}…`} style={{ width: 200 }} />
+            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ width: 150 }} />
+            <Search value={q} onChange={setQ} placeholder={`Find ${group}…`} style={{ width: 180 }} />
             <Select options={filterOpts} value={filter} onChange={(e) => setFilter(e.target.value as 'all' | AttStatus)} />
           </div>
         }
       />
-      <DataTable
-        columns={cols}
-        rows={rows}
-        pageSize={8}
-        rowKey={(r) => r.id}
-        initialSort={{ key: isStudents ? 'sub' : 'name', dir: 'asc' }}
-        empty={<Empty icon="search" title="No matches" body="No one matches your search, class/section or status filter." />}
-      />
-      <div className="row ai-center jc-between" style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
-        <span className="t-sm muted">Marking is live — changes save automatically.</span>
-        <Btn variant="primary" icon="check" disabled={!editable}
-          onClick={() => toast.success('Attendance submitted', `${GROUP_NAME[group]} · ${presentTotal}/${scoped.length} present`)}>
-          Submit attendance
-        </Btn>
-      </div>
-    </Card>
-  )
-}
-
-/* ============================================================
-   Subject-wise — driven by the class's timetable. Pick a class
-   and a period (P1–P8); the subject + teacher come from that
-   class's published timetable. Mark each student and submit.
-   ============================================================ */
-const PERIODS = 8
-const STATUS_OPTS = [
-  { value: 'present', label: 'Present' },
-  { value: 'late', label: 'Late' },
-  { value: 'absent', label: 'Absent' },
-]
-
-/* deterministic teacher for a subject (qualified pool, falls back to all) */
-function teacherForSubject(subject: string, salt: string): { id: string; name: string } {
-  const pool = teachers.filter((t) => t.subjects.includes(subject))
-  const list = pool.length ? pool : teachers
-  const t = list[hash(subject + salt) % list.length]
-  return { id: t.id, name: t.name }
-}
-
-/* a class's published daily timetable: period -> subject + teacher (deterministic) */
-interface TtSlot { period: number; subject: string; teacherId: string; teacherName: string }
-function classTimetable(cls: string): TtSlot[] {
-  return Array.from({ length: PERIODS }, (_, i) => {
-    const p = i + 1
-    const subject = subjects[hash(`${cls}-P${p}`) % subjects.length]
-    const t = teacherForSubject(subject, `${cls}-P${p}`)
-    return { period: p, subject, teacherId: t.id, teacherName: t.name }
-  })
-}
-
-function SubjectWise({ editable }: { editable: boolean }) {
-  const toast = useToast()
-  const { data: classesData } = useClasses()
-  const classList = (classesData ?? []).map((c) => c.name)
-  const saveAttendance = useSaveAttendance()
-  const [cls, setCls] = useState(students[0]?.cls ?? classList[0])
-  const [period, setPeriod] = useState(1)
-  const [marks, setMarks] = useState<Record<string, AttStatus>>({})
-
-  const timetable = useMemo(() => classTimetable(cls), [cls])
-  const slot = timetable[period - 1]
-  const roster = useMemo(() => students.filter((s) => s.cls === cls), [cls])
-  const markKey = (id: string) => `${cls}|P${period}|${id}`
-  const statusFor = (s: { id: string; attendance: number }): AttStatus =>
-    marks[markKey(s.id)] ?? statusOf(s.id + 'P' + period, s.attendance)
-  const presentCount = roster.filter((s) => statusFor(s) !== 'absent').length
-
-  const setStatus = (id: string, st: AttStatus) => setMarks((m) => ({ ...m, [markKey(id)]: st }))
-  const markAllPresent = () =>
-    setMarks((m) => ({ ...m, ...Object.fromEntries(roster.map((s) => [markKey(s.id), 'present' as AttStatus])) }))
-
-  return (
-    <Card pad={false}>
-      <CardHead
-        title="Subject-wise attendance"
-        sub={`${cls} · from the class timetable`}
-        icon="grid"
-        action={
-          <div className="row ai-center gap8">
-            <Select options={classList} value={cls} onChange={(e) => setCls(e.target.value)} />
-            <Select
-              value={String(period)}
-              onChange={(e) => setPeriod(Number(e.target.value))}
-              options={timetable.map((t) => ({ value: String(t.period), label: `P${t.period} · ${t.subject}` }))}
-            />
-          </div>
-        }
-      />
-
-      {/* period header — subject + teacher pulled from the timetable */}
-      <div className="row ai-center jc-between gap12 wrap" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)' }}>
-        <div className="row ai-center gap10">
-          <Badge tone="brand" icon="clock">Period {slot.period}</Badge>
-          <span className="t-md fw6">{slot.subject}</span>
-          <span className="t-sm muted">· {slot.teacherName}</span>
-        </div>
-        <Badge tone={presentCount === roster.length ? 'success' : 'neutral'}>{presentCount}/{roster.length} present</Badge>
-      </div>
-
-      {roster.length === 0 ? (
-        <div style={{ padding: 8 }}><Empty icon="users" title="No students" body={`No students are enrolled in ${cls}.`} /></div>
+      {loading ? (
+        <div style={{ padding: 24 }}><span className="t-sm muted">Loading…</span></div>
       ) : (
         <>
-          <div className="row ai-center jc-between gap12 wrap" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
-            <span className="t-sm muted">Mark each student for {slot.subject} (Period {slot.period}).</span>
-            {editable && <Btn size="sm" variant="secondary" icon="check" onClick={markAllPresent}>Mark all present</Btn>}
+          <div className="sm-att-hero">
+            <div className="sm-att-hero-kpis">
+              <div>
+                <div className="sm-att-hero-val">{attendancePct}%</div>
+                <div className="t-sm muted">{GROUP_NAME[group]} · today</div>
+              </div>
+              <div className="sm-att-hero-stat">
+                <div className="t-lg fw7">{presentTotal}</div>
+                <div className="t-xs muted3">Present</div>
+              </div>
+              <div className="sm-att-hero-stat">
+                <div className="t-lg fw7">{absentOrUnmarked}</div>
+                <div className="t-xs muted3">Absent / unmarked</div>
+              </div>
+              <div className="sm-att-hero-stat">
+                <div className="t-lg fw7">{onRoll}</div>
+                <div className="t-xs muted3">On roll</div>
+              </div>
+            </div>
+            <div className="row ai-center gap8 wrap">
+              {group === 'teachers'
+                ? <Badge tone="info" icon="phone">Teacher app check-ins</Badge>
+                : <Badge tone="neutral">Staff roll-call</Badge>}
+              <span className="t-xs muted3">{date}</span>
+            </div>
+            <div className="sm-meter" style={{ width: '100%', height: 8, marginTop: 4 }}>
+              <span style={{ width: `${attendancePct}%`, background: 'var(--success)' }} />
+            </div>
           </div>
-          <div className="col">
-            {roster.map((s) => {
-              const st = statusFor(s)
-              return (
-                <div key={s.id} className="row ai-center jc-between gap12" style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
-                  <div className="row ai-center gap12" style={{ minWidth: 0 }}>
-                    <Avatar name={s.name} hue={s.avatarHue} size={32} />
-                    <div style={{ minWidth: 0 }}>
-                      <div className="t-md fw6">{s.name}</div>
-                      <div className="t-xs muted3">{s.id} · {s.cls}</div>
-                    </div>
-                  </div>
-                  {editable
-                    ? <Segmented value={st} onChange={(v) => setStatus(s.id, v as AttStatus)} options={STATUS_OPTS} />
-                    : <Badge tone={STATUS_TONE[st]} dot>{STATUS_LABEL[st]}</Badge>}
-                </div>
-              )
-            })}
-          </div>
-          <div className="row ai-center jc-between" style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
-            <span className="t-sm muted">{presentCount} present · {roster.length - presentCount} absent</span>
-            <Btn variant="primary" icon="check" disabled={!editable}
-              onClick={() => {
-                const payload = roster.map((r) => ({ studentId: r.id, status: marks[markKey(r.id)] ?? 'present' as const }))
-                saveAttendance.mutate(
-                  { classId: cls, period: slot.period, marks: payload },
-                  {
-                    onSuccess: () => { toast.success('Attendance submitted', `${cls} · P${slot.period} ${slot.subject} · ${presentCount}/${roster.length} present`) },
-                    onError: (err) => { toast.danger('Could not submit', err instanceof Error ? err.message : 'Please try again.') },
-                  },
-                )
-              }}>
-              Submit attendance
-            </Btn>
-          </div>
+          <DataTable
+            columns={cols}
+            rows={rows}
+            pageSize={8}
+            rowKey={(r) => r.id}
+            initialSort={{ key: 'name', dir: 'asc' }}
+            empty={<Empty icon="users" title="No one yet" body={`No ${group} found for this school.`} />}
+          />
         </>
       )}
+      <div className="row ai-center jc-between" style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
+        <span className="t-sm muted">
+          {group === 'teachers'
+            ? 'Teacher app check-ins appear here. Owner / Admin / Principal can override present / absent for anyone.'
+            : editable
+              ? 'Owner / Admin / Principal can mark any staff present or absent.'
+              : 'View only.'}
+        </span>
+        <div className="row ai-center gap8 wrap">
+          {editable && (
+            <>
+              <Btn size="sm" variant="secondary" icon="check" disabled={!all.length} onClick={() => markAll('present')}>All present</Btn>
+              <Btn size="sm" variant="ghost" disabled={!all.length} onClick={() => markAll('absent')}>All absent</Btn>
+            </>
+          )}
+          <Btn
+            variant="primary"
+            icon="check"
+            disabled={!editable || !all.length}
+            onClick={submit}
+          >
+            Submit attendance
+          </Btn>
+        </div>
+      </div>
     </Card>
   )
 }
 
 /* ============================================================
-   Geo-fence (Platinum) — sample UI behind TierGate
+   Geo-fence (Platinum) — preview UI
    ============================================================ */
 const GEO_CHECKINS = [
-  { name: 'Main Gate', within: 142, status: 'inside' as const },
-  { name: 'Staff Parking', within: 38, status: 'inside' as const },
-  { name: 'Sports Ground', within: 6, status: 'edge' as const },
-  { name: 'Off-campus', within: 3, status: 'outside' as const },
+  { name: 'Main Gate', within: 0, status: 'inside' as const },
+  { name: 'Staff Parking', within: 0, status: 'inside' as const },
+  { name: 'Sports Ground', within: 0, status: 'edge' as const },
+  { name: 'Off-campus', within: 0, status: 'outside' as const },
 ]
-function GeoFence() {
-  const force = [
-    ...teachers.map((t) => ({ id: t.id, attendance: t.attendance })),
-    ...staff.map((s) => ({ id: s.id, attendance: s.attendance })),
-  ]
-  const inside = force.filter((p) => statusOf(p.id, p.attendance) !== 'absent').length
 
+function GeoFence() {
   return (
     <TierGate feature="attendance.geofence" title="Geo-fenced check-in">
       <Card pad={false}>
         <CardHead
           title={<span className="row ai-center gap8">Geo-fenced check-in<DemoBadge /></span>}
-          sub="Auto check-in for teachers & staff entering campus"
+          sub="Auto check-in for teachers & staff entering campus (Platinum)"
           icon="pin"
-          action={<Badge tone="info" icon="globe">Live</Badge>}
+          action={<Badge tone="info" icon="globe">Preview</Badge>}
         />
         <div className="row ai-center gap10 wrap" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
-          <Badge tone="success" icon="cap">{inside} of {force.length} teachers &amp; staff inside the fence</Badge>
-          <span className="t-xs muted3">Students aren’t geo-fenced — they’re marked class- &amp; subject-wise.</span>
+          <span className="t-xs muted3">Live fence counts need the staff check-in API — this is a layout preview.</span>
         </div>
         <div className="sm-grid-2 gap16" style={{ padding: 16 }}>
           <div style={{
@@ -422,7 +439,7 @@ function GeoFence() {
                   <span className="sm-kpi-ic" style={{ marginBottom: 0 }}><Icon name="pin" size={16} /></span>
                   <div>
                     <div className="t-md fw6">{g.name}</div>
-                    <div className="t-xs muted3">{g.within} people detected</div>
+                    <div className="t-xs muted3">Awaiting live detections</div>
                   </div>
                 </div>
                 <Badge tone={g.status === 'inside' ? 'success' : g.status === 'edge' ? 'warning' : 'danger'} dot>
@@ -442,38 +459,51 @@ function GeoFence() {
    ============================================================ */
 function AttendanceScreen() {
   const app = useApp()
-  const editable = can(app.role, 'attendance', 'E')
+  const allPeople = seesAllPeople(app.role)
+  const canView = allPeople || can(app.role, 'attendance', 'V') || can(app.role, 'attendance', 'E')
+  const editable = canMarkAttendance(app.role)
+  const groupOpts = allPeople ? GROUP_OPTS_ALL : GROUP_OPTS_TEACHER
   const [group, setGroup] = useState<Group>('students')
 
+  useEffect(() => {
+    if (!groupOpts.some((o) => o.value === group)) setGroup('students')
+  }, [groupOpts, group])
+
   const dateStr = new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+
+  if (!canView) {
+    return <RestrictedScreen title="Attendance" note="Your role does not include attendance access." />
+  }
 
   return (
     <div>
       <PageHead
         title="Attendance"
-        sub={dateStr}
-        actions={<Btn variant="secondary" icon="download">Export register</Btn>}
+        sub={allPeople
+          ? `${dateStr} · Owner / Admin / Principal can mark present / absent for any student, teacher or staff`
+          : dateStr}
+        actions={<Btn variant="secondary" icon="download" disabled>Export register</Btn>}
       />
 
-      {/* Today's at a glance */}
-      <div className="sm-grid-3" style={{ marginBottom: 16 }}>
-        <SummaryCard group="students" tone="var(--brand-600)" active={group === 'students'} onClick={() => setGroup('students')} />
-        <SummaryCard group="teachers" tone="#7c3aed" active={group === 'teachers'} onClick={() => setGroup('teachers')} />
-        <SummaryCard group="staff" tone="#0d9488" active={group === 'staff'} onClick={() => setGroup('staff')} />
-      </div>
+      {allPeople && (
+        <div className="sm-grid-3" style={{ marginBottom: 16 }}>
+          <SummaryCard group="students" tone="var(--brand-600)" active={group === 'students'} onClick={() => setGroup('students')} />
+          <SummaryCard group="teachers" tone="#7c3aed" active={group === 'teachers'} onClick={() => setGroup('teachers')} />
+          <SummaryCard group="staff" tone="#0d9488" active={group === 'staff'} onClick={() => setGroup('staff')} />
+        </div>
+      )}
 
-      {/* Group control */}
       <div style={{ marginBottom: 16 }}>
-        <Segmented value={group} onChange={(v) => setGroup(v as Group)} options={GROUP_OPTS} />
+        <Segmented value={group} onChange={(v) => setGroup(v as Group)} options={groupOpts} />
       </div>
 
-      {/* Active group */}
-      {(group === 'students' || group === 'teachers' || group === 'staff') && <Roster group={group} editable={editable} />}
-      {group === 'period' && <SubjectWise editable={editable} />}
-      {group === 'geo' && <GeoFence />}
+      {group === 'students' && <ClassWiseStudents editable={editable} leadership={allPeople} />}
+      {allPeople && (group === 'teachers' || group === 'staff') && <StaffRoster group={group} editable={editable} />}
+      {allPeople && group === 'geo' && <GeoFence />}
     </div>
   )
 }
 
-import type { ComponentType } from 'react'
-export const attendanceScreens: Record<string, ComponentType> = { 'school.attendance': AttendanceScreen }
+export const attendanceScreens: Record<string, ComponentType> = {
+  'school.attendance': AttendanceScreen,
+}
