@@ -1,9 +1,9 @@
-# Offline Fee Management (SaaS) Design
+# Fee Management (SaaS) Design — Offline + Razorpay
 
 **Date:** 2026-07-17  
-**Status:** Approved (chat)  
-**Screen:** `school.fees` (`src/screens/school/finance.tsx`) + Owner settings + dashboards  
-**Scope:** Offline / manual office collection only — no Razorpay / online gateway in this release.
+**Status:** Approved (chat) — updated to include per-school Razorpay + Owner integrations  
+**Screen:** `school.fees` + Owner **school integrations** settings + dashboards  
+**Scope:** Offline office collection **and** school-wise Razorpay online pay. Mail + SMS + Razorpay are configured **per school** in Owner settings (not shared platform keys for school fee cash).
 
 ## Summary
 
@@ -11,28 +11,83 @@ Replace dummy fee KPIs and local-only structure with a real, tenant-scoped fee l
 
 1. Configurable fee heads + per-grade structure  
 2. Student invoices (billed / paid / due / status)  
-3. Manual office payments (Cash, UPI, Cheque, Card/POS, Bank transfer, DD, Waiver/adjustment)  
-4. Parent notices (App + Email + SMS) using school-branded sender/templates from Owner settings  
-5. Reports + live fee figures on Admin / Principal / Owner dashboards  
+3. Offline payments (Cash, UPI manual, Cheque, Card/POS, Bank transfer, DD, Waiver)  
+4. **Online pay via each school’s own Razorpay** (keys in Owner school settings)  
+5. Parent notices (App + Email + SMS) using **that school’s** mail/SMS config from Owner settings  
+6. Reports + live fee figures on Admin / Principal / Owner dashboards  
 
 ## Goals
 
-- Schools can define fee heads and class/grade amounts, then collect offline payments with full audit trail.  
+- Schools collect fees offline **or** online; every school can use **its own** Razorpay account.  
+- Owner configures **per-school integrations** in one place: Email, SMS, Razorpay.  
 - Parents get paid/due notices from the school’s configured email + SMS templates (plus in-app).  
-- Owner / Principal / Admin see real collected vs outstanding — no hardcoded dashboard finance.  
-- Payment modes cover every common office possibility without online checkout.
+- Owner / Principal / Admin see real collected vs outstanding — no hardcoded dashboard finance.
 
 ## Non-goals (this release)
 
-- Razorpay / Stripe / parent self-pay links  
+- Platform-owned Razorpay for **student fees** (platform Razorpay may still exist for SaaS subscription billing — separate from school fee cash)  
+- Stripe / other gateways  
 - PDF receipt generation (toast + history + notification is enough)  
 - Multi-currency fee books beyond school `currency`  
-- Automatic bank reconciliation  
-- Payroll / HR (unchanged; stays separate)
+- Automatic bank reconciliation beyond Razorpay webhooks  
+- Payroll / HR (unchanged)
 
 ---
 
-## 1. Domain model
+## 1. Owner school integrations (single settings surface)
+
+**Where:** Owner console → open a school (or school settings) → **Integrations** panel.  
+Same pattern for every customer school: credentials never live on the Fees screen; Admin only *uses* what Owner enabled.
+
+### 1a. Email (school-wise)
+
+| Setting | Purpose |
+|---------|---------|
+| Enabled | Toggle email channel for this school |
+| From name | e.g. Greenwood Valley School |
+| From address | School’s sending address (or platform relay + school identity) |
+| Reply-to | Optional |
+| Templates | Fee receipt + fee reminder bodies with placeholders |
+
+### 1b. SMS (school-wise)
+
+| Setting | Purpose |
+|---------|---------|
+| Enabled | Toggle SMS for this school |
+| Sender ID / provider config | School DLT / sender as backend supports |
+| Templates | Receipt + reminder SMS with `{{student}}`, `{{amount}}`, `{{due}}`, `{{school}}`, `{{mode}}`, `{{ref}}`, `{{pay_link}}` |
+
+### 1c. Razorpay (school-wise — custom per customer)
+
+| Setting | Purpose |
+|---------|---------|
+| Enabled | Online fee pay on/off for this school |
+| Key ID | School’s Razorpay Key ID |
+| Key secret | School’s Razorpay Key Secret (write-only in UI; never echo full secret back) |
+| Webhook secret | For payment.captured verification |
+| Test / Live mode | Explicit mode badge |
+| Status | `not_configured` \| `configured` \| `invalid` (after verify) |
+
+**Rules:**
+
+- Each school (tenant) stores **its own** Razorpay keys — no cross-school reuse.  
+- Fees UI shows “Collect online / Send pay link” only when this school’s Razorpay is `configured` + enabled.  
+- SaaS subscription Razorpay (Catre / platform billing) stays separate; do not mix platform keys into student fee collection.  
+- Owner can **Test connection** (lightweight verify) before saving as configured.
+
+### APIs for integrations
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/me/schools/{id}/integrations` | Email + SMS + Razorpay status (secrets masked) |
+| PUT | `/me/schools/{id}/integrations` | Save email / SMS / Razorpay fields |
+| POST | `/me/schools/{id}/integrations/razorpay/verify` | Optional key check |
+
+(If backend splits `comms-settings` vs `payment-settings`, UI still presents **one Integrations** page.)
+
+---
+
+## 2. Domain model
 
 ### Fee head (fee type)
 
@@ -45,7 +100,7 @@ Replace dummy fee KPIs and local-only structure with a real, tenant-scoped fee l
 | `isSystem` | Starter heads cannot be hard-deleted if payments exist |
 
 **Default starter heads (per school):** Academic, Transport, Exam, Admission, Hostel, Lab, Library, Uniform, Other.  
-Schools may add custom heads; rename/deactivate allowed when no open invoices block it.
+Schools may add custom heads; rename/deactivate allowed when safe.
 
 ### Fee structure
 
@@ -53,58 +108,48 @@ Per grade: use live class grades from the Classes API when available; otherwise 
 
 `Record<grade, Record<headId, amount>>`
 
-**v1 stores the amount matrix only** (no installment schedules). Term/due window lives on the invoice (`term` label + optional `dueDate` string on generate).
+**v1 stores the amount matrix only.** Term/due window lives on the invoice (`term` label + optional `dueDate` on generate).
 
 ### Invoice (student fee bill)
 
 | Field | Notes |
 |-------|--------|
-| `id` | Invoice id (pay endpoint already uses `/fees/invoices/{id}/pay`) |
+| `id` | Invoice id |
 | `studentId` | |
 | `academicYear` | e.g. 2026-27 |
 | `term` / label | e.g. Term-2 |
 | `lines[]` | `{ headId, headName, amount }` |
-| `total` | Sum of lines |
-| `paid` | Sum of successful payments |
-| `waived` | Sum of waiver adjustments |
-| `due` | `total - paid - waived` |
+| `total` / `paid` / `waived` / `due` | |
 | `status` | `paid` \| `partial` \| `due` |
 
-Generating invoices from structure: Admin action “Generate term invoices” for selected grades (or on first open of fee year). Exact generate UX can be a single button + grade multi-select on Structure tab.
+Generate: Structure tab → selected grades + year + term → `POST /fees/invoices/generate`.
 
-### Payment (offline)
+### Payment
 
 | Field | Notes |
 |-------|--------|
 | `id` | |
 | `invoiceId` | |
-| `studentId`, `studentName`, `cls` | Denormalized for history table |
-| `headId` | Fee head id; UI shows head name from heads list (`feeType` legacy field accepted only as display fallback) |
+| `studentId`, `studentName`, `cls` | Denormalized for history |
+| `headId` | Fee head id |
 | `amount` | |
-| `mode` | See modes below |
-| `ref` | UPI txn / cheque no / POS slip / transfer ref |
-| `date` | Payment date |
+| `mode` | Offline modes **or** `Razorpay` |
+| `ref` | Offline ref **or** Razorpay payment id |
+| `date` | |
 | `note` | Optional |
-| `collectedBy` | User id / name from session |
-| `cheque` | Optional: `{ number, bank, date, status }` when mode = Cheque |
+| `collectedBy` | User for offline; `razorpay` / system for online |
+| `cheque` | Optional when mode = Cheque |
+| `gateway` | Optional: `{ provider: 'razorpay', orderId, paymentId, signature }` |
 
-**Payment modes (v1):**
+**Offline modes:** Cash, UPI (manual), Cheque, Card/POS, Bank transfer, DD, Adjustment / waiver.  
 
-- Cash  
-- UPI (manual)  
-- Cheque  
-- Card / POS  
-- Bank transfer  
-- DD  
-- Adjustment / waiver  
-
-Recording a payment updates invoice `paid`/`due`/`status` and appends to payment history. Waiver mode increases `waived` (Principal `fees` `A` cap); other modes require `fees` `E`.
+**Online mode:** `Razorpay` — created only after verified webhook (or verified checkout callback); never mark paid on “link sent” alone.
 
 ---
 
-## 2. API surface (frontend contract)
+## 3. Fee APIs (frontend contract)
 
-Wire is snake_case; follow existing `feePayments.ts` / `announcements.ts` patterns.
+Wire is snake_case; follow existing `feePayments.ts` / announcements patterns.
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -115,147 +160,113 @@ Wire is snake_case; follow existing `feePayments.ts` / `announcements.ts` patter
 | GET | `/fees/structure` | Grade × head amounts |
 | PUT | `/fees/structure` | Save structure matrix |
 | GET | `/fees/invoices` | List invoices (`q`, `status`, `grade`, `class`) |
-| POST | `/fees/invoices/generate` | Generate from structure for grades/term |
-| POST | `/fees/invoices/{id}/pay` | Record offline payment (**already bound**) |
+| POST | `/fees/invoices/generate` | Generate from structure |
+| POST | `/fees/invoices/{id}/pay` | Record **offline** payment (**already bound**) |
+| POST | `/fees/invoices/{id}/razorpay/order` | Create order with **this school’s** Razorpay keys |
+| POST | `/fees/invoices/{id}/razorpay/verify` | Optional client verify after checkout |
 | GET | `/fees/payments` | Payment history (**already bound**) |
-| GET | `/fees/reports/summary` | School KPIs: collected today/term, outstanding, defaulters, by class, by mode |
-| POST | `/fees/reminders` | Send due reminders (audience = defaulters or selected students) |
-| GET | `/me/schools/fee-summary` | Owner portfolio rollup (**already bound**) |
+| GET | `/fees/reports/summary` | School KPIs + by class + by mode (incl. Razorpay) |
+| POST | `/fees/reminders` | Due reminders; may include pay link when Razorpay enabled |
+| GET | `/me/schools/fee-summary` | Owner portfolio (**already bound**) |
 
-Owner notification settings (school-scoped, edited in Owner console):
+Webhook (backend): Razorpay → school tenant → mark invoice paid → create payment row mode `Razorpay` → trigger receipt notice.
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/me/schools/{id}/comms-settings` | Email from-name/from-address, SMS sender/templates |
-| PUT | `/me/schools/{id}/comms-settings` | Save |
+**Existing keep:** `listFeePayments`, `payInvoice`, `useOwnerFeeSummary`.  
 
-If backend uses different path names, keep this contract as the UI binding target and adapt resource modules once.
-
-**Existing keep:** `listFeePayments`, `payInvoice`, `useOwnerFeeSummary`.
-
-**Remove / stop using for finance KPIs:** mock `students` fee math, hardcoded dashboard `feesToday` / `outstanding`, in-session-only structure as source of truth (migrate to API; AppProvider may keep cache only until hooks land).
+**Stop using for finance KPIs:** mock student fee math, hardcoded dashboard fees, AppProvider-only structure as source of truth.
 
 ---
 
-## 3. School Fees UI (`FeesScreen`)
-
-Tabs (keep three; enrich):
+## 4. School Fees UI (`FeesScreen`)
 
 ### Collection
-- KPIs from `/fees/reports/summary` (collected today, term collected, outstanding, defaulters).  
-- Collection-by-class bars from same summary.  
-- Table of invoices (not mock student feeStatus): search, status filter, Record / Waiver actions by gate.  
-- Remove fake “Live payment received” cue unless summary exposes a latest payment; if present, show real latest payment.  
-- **Send reminders** → modal: channels App / Email / SMS, audience defaulters or selected rows → `POST /fees/reminders` (reuse announcement-style channel payload + `collectAudienceContacts` for selected students).  
-- Export remains stub or CSV of current filtered rows if easy; not blocking.
+- KPIs from `/fees/reports/summary`.  
+- Invoice table: search, status filter, Record / Waiver by gate.  
+- When school Razorpay configured: **Send pay link** / **Collect online** on due rows (creates order + opens checkout or copies parent link).  
+- **Send reminders** → App / Email / SMS; if Razorpay on, reminder can include pay link placeholder.  
+- Live cue only from real latest payment (offline or Razorpay).
 
 ### History
-- Already wired to `useFeePayments`; add filters for mode + date range if API supports query params; otherwise client filter.
+- `useFeePayments`; filter by mode (includes Razorpay) + date when possible.
 
 ### Structure
-- Load/save heads + structure via API (replace DemoBadge / AppProvider-only save).  
-- Add head / remove inactive head / edit amounts / Save structure.  
-- **Generate invoices** button: selected grades + academic year + term label → `POST /fees/invoices/generate`.
+- Heads + structure via API; **Generate invoices**.
 
-### Record payment modal
-- Fee head select from active heads (not hard-coded Academic/Transport/Other only).  
-- Amount, mode (full mode list), ref, note; cheque fields when mode = Cheque.  
-- Submit → `payInvoice(invoiceId, payment)`.
+### Record payment (offline)
+- Head, amount, full offline mode list, ref, note, cheque fields → `payInvoice`.
 
-### Waiver modal
-- Principal (`fees` `A`); posts via the same pay endpoint with mode `Adjustment / waiver` (no separate waiver API in v1). Keep audit toast.
+### Waiver
+- Principal `fees` `A`; mode `Adjustment / waiver` via pay endpoint.
 
-**Roles (existing gating):**
-
-| Role | Caps |
-|------|------|
-| Admin / Owner-as-admin | `E` record + structure |
-| Principal | `A` waiver (+ view) |
-| Vice Principal | `V` view |
-| Staff | `V` view |
-| Teacher | none |
+**Roles:** Admin/Owner `E` record + structure + send pay link; Principal `A` waiver; VP/Staff `V`; Teacher none.
 
 ---
 
-## 4. Parent notices (App · Email · SMS)
+## 5. Parent notices
 
-### Triggers
-1. **Payment recorded** — receipt notice to guardians of that student.  
-2. **Due reminder** — batch from Collection “Send reminders”.  
+**Triggers:** payment recorded (offline or Razorpay webhook); batch due reminder.
 
-### Channels
-Same pattern as `examNotify`: `createAnnouncement` with `channels`, `emails`, `phones`, school name, type `fee_receipt` | `fee_reminder`.
+**Channels:** App + Email + SMS via announcement / feeNotify pattern (`fee_receipt`, `fee_reminder`), using **that school’s** Owner integration templates and sender identity.
 
-### Branding / Owner settings
-Owner console (per school in portfolio):
-
-- **Email:** from display name, from address (or “use platform relay with school reply-to”), optional reply-to.  
-- **SMS:** sender id / template slots for receipt and reminder body (placeholders: `{{student}}`, `{{amount}}`, `{{due}}`, `{{school}}`, `{{mode}}`, `{{ref}}`).  
-- Save via comms-settings API.  
-
-School staff do not invent SMTP credentials in Fees screen — Owner configures once; Fees only picks channels.
-
-If SMTP/SMS provider is not ready on backend, UI still posts reminders/announcements; delivery is best-effort via existing announcement pipeline.
+Staff never enter SMTP/Razorpay secrets on Fees — Owner Integrations only.
 
 ---
 
-## 5. Dashboards
+## 6. Dashboards
 
-### School dashboard (`school.dashboard`)
-- Replace derived `feesToday` / `outstanding` / fee donut with `/fees/reports/summary` (or a thin school dashboard fee slice).  
-- Activity line for latest fee payment when available.  
-- Fee announcements row can remain from live announcements list later; not required for v1 of this spec.
-
-### Owner revenue (`owner.revenue`)
-- Already live via fee-summary — keep; ensure school pay + invoices flow updates backend so portfolio numbers stay real.
-
-### Principal / Admin
-- Same school Fees module + same dashboard KPIs; no separate fee UI.
+- **School dashboard:** bind fee KPIs/donut to `/fees/reports/summary`.  
+- **Owner revenue:** keep fee-summary; include Razorpay cash in collected.  
+- Principal / Admin: same Fees module + dashboard.
 
 ---
 
-## 6. Frontend modules (implementation sketch)
+## 7. Frontend modules
 
 | Area | Files |
 |------|--------|
-| Types | `src/types/index.ts` — add `FeeHead`, `FeeInvoice`; payments use `headId`; deprecate fixed `FeeType` union in UI |
-| API | `feeHeads.ts`, `feeStructure.ts`, `feeInvoices.ts`, extend `feePayments.ts`, `feeReports.ts`, `feeReminders.ts`, owner `commsSettings` |
-| Hooks | `useFeeHeads`, `useFeeStructure`, `useFeeInvoices`, extend pay/list, `useFeeSummary`, `useFeeReminders` |
-| Notify | `src/lib/feeNotify.ts` (mirror `examNotify.ts`) |
-| UI | `finance.tsx` Collection/History/Structure; Owner settings panel for comms |
-| Dashboards | `dashboard.tsx` fee KPIs; leave owner revenue as-is |
-| Tests | API module tests + `financeFees.test.tsx` + feeNotify + dashboard summary smoke |
+| Types | `FeeHead`, `FeeInvoice`; payment `headId` + gateway fields; `SchoolIntegrations` |
+| API | fee heads/structure/invoices/reports/reminders; extend payments; `schoolIntegrations.ts` |
+| Hooks | fee hooks + `useSchoolIntegrations` / save / razorpay verify |
+| Notify | `src/lib/feeNotify.ts` |
+| UI | `finance.tsx`; Owner Integrations (Email · SMS · Razorpay) per school |
+| Dashboards | `dashboard.tsx` fee KPIs |
+| Tests | API + finance + feeNotify + integrations save/mask secrets |
 
-Query keys: extend `queryKeys` with `feeHeads`, `feeStructure`, `feeInvoices`, `feeReports.summary`, `owner.commsSettings(schoolId)`.
+Query keys: `feeHeads`, `feeStructure`, `feeInvoices`, `feeReports.summary`, `owner.integrations(schoolId)`.
 
 ---
 
-## 7. Migration from current code
+## 8. Migration
 
 | Current | Change |
 |---------|--------|
-| Collection built from mock `students` + `feeStatus` | Switch to invoices API |
-| Structure in AppProvider only | Persist via `/fees/structure` + heads API |
-| Hard-coded `FeeType` three values | Active heads list |
-| `payInvoice` + history | Keep; enrich payment payload |
-| Dashboard fake fee math | Bind summary API |
-| Send reminders → communication intent only | Real fee reminder modal + API |
-| DemoBadge on Structure | Remove when API-backed |
+| Mock collection rows | Invoices API |
+| AppProvider structure | `/fees/structure` + heads |
+| Fixed three fee types | Active heads |
+| pay + history | Keep; add Razorpay order/verify + webhook-driven rows |
+| Dashboard fake fees | Summary API |
+| Reminders → communication intent | Fee reminder + optional pay link |
+| Owner settings (branding only) | Add per-school Integrations: Email, SMS, Razorpay |
 
 ---
 
-## 8. Success criteria
+## 9. Success criteria
 
-- Admin can add a fee head, set grade amounts, generate/open invoices, record Cash/UPI/Cheque/POS/etc., see history.  
-- Principal can approve waiver.  
-- Reminder/receipt can target App + Email + SMS using Owner-configured school templates when backend supports them.  
-- School dashboard and Owner fee collection show numbers from APIs, not `mockDb` fee %.  
-- `npm test`, typecheck, and build stay green.
+- Owner configures **per school** Email, SMS, and Razorpay keys; secrets masked on reload.  
+- Admin records offline modes and (when Razorpay configured) creates pay orders / pay links.  
+- Successful Razorpay payment updates invoice + history + parent receipt notice.  
+- Reminders use school mail/SMS settings; unpaid reminders can carry pay link.  
+- Dashboards show API numbers including Razorpay collections.  
+- `npm test`, typecheck, build green.
 
-## 9. Phased delivery (within this design)
+---
 
-1. **Ledger** — heads, structure, invoices list, pay (modes), history, school summary reports.  
-2. **Notify + Owner comms settings** — feeNotify + reminders + settings UI.  
-3. **Dashboards** — wire school dashboard fee KPIs to summary.  
+## 10. Phased delivery
 
-Razorpay / online pay is explicitly **out**; may be a follow-up spec later.
+1. **Ledger** — heads, structure, invoices, offline pay modes, history, school summary.  
+2. **Owner Integrations** — Email + SMS + Razorpay school-wise settings UI + APIs.  
+3. **Notify** — feeNotify + reminders (templates from integrations).  
+4. **Razorpay collect** — order create, checkout/pay link, webhook → paid + receipt.  
+5. **Dashboards** — school fee KPIs from summary.
+
+Platform subscription Razorpay remains out of this fee cash path.
