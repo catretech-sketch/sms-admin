@@ -27,4 +27,29 @@ describe('payInvoice', () => {
     expect(body.student_id).toBe('s1')
     expect(body.fee_type).toBe('academic')
   })
+
+  it('POSTs head_id, note, cheque, and invoice_id when provided', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { ...wirePayment, head_id: 'h1', note: 'Term 1' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await payInvoice('INV-9', {
+      id: 0,
+      invoiceId: 'INV-9',
+      studentId: 's1',
+      studentName: 'Asha',
+      cls: 'X-A',
+      headId: 'h1',
+      amount: 4800,
+      mode: 'Cheque',
+      ref: 'CHQ-42',
+      date: '2026-06-01',
+      note: 'Term 1',
+      cheque: { number: 'CHQ-42', bank: 'SBI', date: '2026-06-01' },
+    })
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
+    expect(body.head_id).toBe('h1')
+    expect(body.note).toBe('Term 1')
+    expect(body.invoice_id).toBe('INV-9')
+    expect(body.cheque).toMatchObject({ number: 'CHQ-42', bank: 'SBI', date: '2026-06-01' })
+    expect(body.fee_type).toBeUndefined()
+  })
 })

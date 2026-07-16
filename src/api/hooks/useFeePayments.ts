@@ -11,6 +11,10 @@ export function usePayInvoice(): UseMutationResult<FeePayment, Error, { invoiceI
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ invoiceId, payment }: { invoiceId: string; payment: FeePayment }) => payInvoice(invoiceId, payment),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.feePayments.all }) },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.feePayments.all })
+      qc.invalidateQueries({ queryKey: queryKeys.feeInvoices.all })
+      qc.invalidateQueries({ queryKey: queryKeys.feeReports.summary })
+    },
   })
 }

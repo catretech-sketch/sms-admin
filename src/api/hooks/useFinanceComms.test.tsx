@@ -3,6 +3,7 @@ import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useComplaints } from './useComplaints'
 import { useFeePayments, usePayInvoice } from './useFeePayments'
+import { useFeeReportSummary } from './useFeeReports'
 import { useFeeHeads, useCreateFeeHead } from './useFeeHeads'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -22,13 +23,35 @@ describe('useComplaints', () => {
 })
 
 describe('usePayInvoice', () => {
-  it('POSTs and invalidates fee payments', async () => {
+  it('POSTs and invalidates fee payments, invoices, and report summary', async () => {
     const qc = client(); const invalidate = vi.spyOn(qc, 'invalidateQueries')
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: { id: 1, student_id: 's1', student_name: 'A', cls: 'X', fee_type: 'academic', amount: 1, mode: 'UPI', ref: 'r', date: 'd' } })))
     const { result } = renderHook(() => usePayInvoice(), { wrapper: wrap(qc) })
     result.current.mutate({ invoiceId: 'INV-1', payment: { id: 0, studentId: 's1', studentName: 'A', cls: 'X', feeType: 'academic', amount: 1, mode: 'UPI', ref: 'r', date: 'd' } })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['feePayments'] })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['feeInvoices'] })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['feeReports', 'summary'] })
+  })
+})
+
+describe('useFeeReportSummary', () => {
+  it('resolves mapped fee report summary', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: {
+        collected_today: 1000,
+        collected_term: 2000,
+        outstanding: 500,
+        defaulters: 2,
+        billed_term: 2500,
+        pct: 80,
+        by_class: [],
+        by_mode: [],
+      },
+    })))
+    const { result } = renderHook(() => useFeeReportSummary(), { wrapper: wrap(client()) })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data).toMatchObject({ collectedToday: 1000, collectedTerm: 2000, outstanding: 500, defaulters: 2 })
   })
 })
 
