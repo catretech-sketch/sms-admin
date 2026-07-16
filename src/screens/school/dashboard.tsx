@@ -16,6 +16,7 @@ import { useStudents } from '@/api/hooks/useStudents'
 import { useTeachers } from '@/api/hooks/useTeachers'
 import { useStaff } from '@/api/hooks/useStaff'
 import { usePrincipalAttendance } from '@/api/hooks/usePrincipalAttendance'
+import { useFeeReportSummary } from '@/api/hooks/useFeeReports'
 import {
   loadPeopleAttendance, countPeoplePresent, PEOPLE_ATTENDANCE_CHANGED,
   type CheckInInfo,
@@ -69,6 +70,7 @@ function SchoolDashboard() {
   const teachersQ = useTeachers()
   const staffQ = useStaff()
   const attQ = usePrincipalAttendance(today, liveAtt)
+  const feeQ = useFeeReportSummary()
 
   /* Re-read local teacher/staff marks after Attendance save (or window focus). */
   const [peopleAttTick, setPeopleAttTick] = useState(0)
@@ -129,9 +131,12 @@ function SchoolDashboard() {
   const peopleRate = peopleTotal ? Math.round((peoplePresent / peopleTotal) * 100) : 0
   const staffAway = Math.max(0, peopleTotal - peoplePresent)
 
-  /* derived finance figures (until fee APIs feed the dashboard) */
-  const feesToday = Math.round(liveStudents * 920)
-  const outstanding = Math.round(liveStudents * (100 - s.fees) * 145)
+  const feesToday = feeQ.data?.collectedToday ?? 0
+  const outstanding = feeQ.data?.outstanding ?? 0
+  const collectedPct = feeQ.data?.pct ?? 0
+  const collectedTerm = feeQ.data?.collectedTerm ?? 0
+  const latestPayment = feeQ.data?.latestPayment
+  const feeLoading = feeQ.isLoading
   const ratio = Math.round(liveStudents / Math.max(1, liveTeachers))
 
   const months = ['Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun']
@@ -142,6 +147,12 @@ function SchoolDashboard() {
 
   const activity = useMemo(() => {
     const rows = [...ACTIVITY]
+    if (latestPayment) {
+      rows.unshift({
+        time: 'just now',
+        text: `Payment received — ${fmtMoney(latestPayment.amount, cur)} from ${latestPayment.studentName} (${latestPayment.cls})`,
+      })
+    }
     if (attQ.isSuccess || studentsPresent > 0) {
       rows.unshift({
         time: 'today',
@@ -158,6 +169,7 @@ function SchoolDashboard() {
     })
     return rows
   }, [
+    latestPayment, cur,
     attQ.isSuccess, studentsPresent, studentTotal, attendancePct,
     teachersPresent, liveTeachers, teacherRate,
     supportPresent, liveSupport, supportRate,
@@ -198,16 +210,16 @@ function SchoolDashboard() {
         />
         <Kpi
           icon="rupee" iconBg="var(--info-bg)" iconColor="var(--info)"
-          label="Fees collected today" value={fmtMoney(feesToday, cur)}
+          label="Fees collected today" value={feeLoading ? '—' : fmtMoney(feesToday, cur)}
           delta="12.4%" deltaDir="up"
-          foot={`${s.fees}% of annual target met`}
+          foot={`${collectedPct}% of term billed collected`}
           spark={[12, 18, 9, 22, 16, 24, 19, 27]} sparkColor="var(--info)"
         />
         <Kpi
           icon="wallet" iconBg="var(--warning-bg)" iconColor="var(--warning)"
-          label="Outstanding dues" value={fmtMoney(outstanding, cur)}
+          label="Outstanding dues" value={feeLoading ? '—' : fmtMoney(outstanding, cur)}
           delta="4.1%" deltaDir="down"
-          foot={`${100 - s.fees}% of families pending`}
+          foot={`${100 - collectedPct}% of term billed pending`}
           spark={[42, 40, 41, 38, 37, 35, 34, 32]} sparkColor="var(--warning)"
         />
         <Kpi
@@ -259,25 +271,27 @@ function SchoolDashboard() {
         </Card>
 
         <Card>
-          <CardHead title="Fee collection" sub="Annual target progress" icon="rupee" />
+          <CardHead title="Fee collection" sub="Term billed progress" icon="rupee" />
           <div className="row ai-center jc-between gap16 wrap" style={{ marginTop: 12 }}>
             <Donut
               segments={[
-                { value: s.fees, color: 'var(--success)', label: 'Collected' },
-                { value: 100 - s.fees, color: 'var(--surface-3)', label: 'Pending' },
+                { value: collectedPct, color: 'var(--success)', label: 'Collected' },
+                { value: 100 - collectedPct, color: 'var(--surface-3)', label: 'Pending' },
               ]}
               size={148} thickness={18}
               center={
                 <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: 26, fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1 }}>{s.fees}%</div>
+                  <div style={{ fontSize: 26, fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1 }}>
+                    {feeLoading ? '—' : `${collectedPct}%`}
+                  </div>
                   <div className="t-xs muted3" style={{ marginTop: 2 }}>collected</div>
                 </div>
               }
             />
             <div className="col gap12" style={{ flex: 1, minWidth: 160 }}>
               <Legend items={[
-                { color: 'var(--success)', label: `Collected — ${fmtMoney(feesToday * 64, cur)}` },
-                { color: 'var(--surface-3)', label: `Outstanding — ${fmtMoney(outstanding, cur)}` },
+                { color: 'var(--success)', label: `Collected — ${feeLoading ? '—' : fmtMoney(collectedTerm, cur)}` },
+                { color: 'var(--surface-3)', label: `Outstanding — ${feeLoading ? '—' : fmtMoney(outstanding, cur)}` },
               ]} />
               <div className="t-sm muted">On-time collection is up <strong style={{ color: 'var(--success)' }}>12.4%</strong> vs last month.</div>
             </div>
