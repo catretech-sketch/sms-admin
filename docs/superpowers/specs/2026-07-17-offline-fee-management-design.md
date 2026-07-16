@@ -1,9 +1,9 @@
 # Fee Management (SaaS) Design — Offline + Razorpay
 
 **Date:** 2026-07-17  
-**Status:** Approved (chat) — updated to include per-school Razorpay + Owner integrations  
-**Screen:** `school.fees` + Owner **school integrations** settings + dashboards  
-**Scope:** Offline office collection **and** school-wise Razorpay online pay. Mail + SMS + Razorpay are configured **per school** in Owner settings (not shared platform keys for school fee cash).
+**Status:** Approved (chat) — updated to include school settings for mail/SMS and per-school Razorpay  
+**Screen:** `school.fees` + School Settings / Integrations + dashboards  
+**Scope:** Offline office collection **and** school-wise Razorpay online pay. Mail + SMS are configured in **School Settings** for easy school-admin setup; Razorpay remains per school and can be managed from the same integrations surface.
 
 ## Summary
 
@@ -12,14 +12,14 @@ Replace dummy fee KPIs and local-only structure with a real, tenant-scoped fee l
 1. Configurable fee heads + per-grade structure  
 2. Student invoices (billed / paid / due / status)  
 3. Offline payments (Cash, UPI manual, Cheque, Card/POS, Bank transfer, DD, Waiver)  
-4. **Online pay via each school’s own Razorpay** (keys in Owner school settings)  
-5. Parent notices (App + Email + SMS) using **that school’s** mail/SMS config from Owner settings  
+4. **Online pay via each school’s own Razorpay** (school-wise keys)  
+5. Parent notices (App + Email + SMS) using **that school’s** mail/SMS config from School Settings  
 6. Reports + live fee figures on Admin / Principal / Owner dashboards  
 
 ## Goals
 
 - Schools collect fees offline **or** online; every school can use **its own** Razorpay account.  
-- Owner configures **per-school integrations** in one place: Email, SMS, Razorpay.  
+- School settings expose easy **per-school integrations**: Email, SMS, Razorpay.  
 - Parents get paid/due notices from the school’s configured email + SMS templates (plus in-app).  
 - Owner / Principal / Admin see real collected vs outstanding — no hardcoded dashboard finance.
 
@@ -34,10 +34,11 @@ Replace dummy fee KPIs and local-only structure with a real, tenant-scoped fee l
 
 ---
 
-## 1. Owner school integrations (single settings surface)
+## 1. School integrations (single settings surface)
 
-**Where:** Owner console → open a school (or school settings) → **Integrations** panel.  
-Same pattern for every customer school: credentials never live on the Fees screen; Admin only *uses* what Owner enabled.
+**Where:** School Console → Settings / Integrations. Owner can reach the same panel when managing a school, but the implementation target is a **school settings** screen so each school can manage its own mail/SMS/Razorpay setup easily.
+
+Same pattern for every customer school: credentials never live on the Fees screen; Admin only *uses* what the school integration settings enabled.
 
 ### 1a. Email (school-wise)
 
@@ -48,6 +49,8 @@ Same pattern for every customer school: credentials never live on the Fees scree
 | From address | School’s sending address (or platform relay + school identity) |
 | Reply-to | Optional |
 | Templates | Fee receipt + fee reminder bodies with placeholders |
+
+**Implementation note:** Email should be easy first: support the platform relay / school identity path before custom SMTP. Custom SMTP can be a later backend option if required.
 
 ### 1b. SMS (school-wise)
 
@@ -79,11 +82,13 @@ Same pattern for every customer school: credentials never live on the Fees scree
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/me/schools/{id}/integrations` | Email + SMS + Razorpay status (secrets masked) |
-| PUT | `/me/schools/{id}/integrations` | Save email / SMS / Razorpay fields |
-| POST | `/me/schools/{id}/integrations/razorpay/verify` | Optional key check |
+| GET | `/school/integrations` | Current school Email + SMS + Razorpay status (secrets masked) |
+| PUT | `/school/integrations` | Save current school Email / SMS / Razorpay fields |
+| POST | `/school/integrations/razorpay/verify` | Optional key check |
+| GET | `/me/schools/{id}/integrations` | Owner view of a school’s integrations (optional alias) |
+| PUT | `/me/schools/{id}/integrations` | Owner save for selected school (optional alias) |
 
-(If backend splits `comms-settings` vs `payment-settings`, UI still presents **one Integrations** page.)
+If backend splits `comms-settings` vs `payment-settings`, UI still presents **one Integrations** page. The simplest frontend implementation is a School Settings tab backed by `/school/integrations`; Owner routes can reuse the same component after entering a school.
 
 ---
 
@@ -206,9 +211,9 @@ Webhook (backend): Razorpay → school tenant → mark invoice paid → create p
 
 **Triggers:** payment recorded (offline or Razorpay webhook); batch due reminder.
 
-**Channels:** App + Email + SMS via announcement / feeNotify pattern (`fee_receipt`, `fee_reminder`), using **that school’s** Owner integration templates and sender identity.
+**Channels:** App + Email + SMS via announcement / feeNotify pattern (`fee_receipt`, `fee_reminder`), using **that school’s** School Settings templates and sender identity.
 
-Staff never enter SMTP/Razorpay secrets on Fees — Owner Integrations only.
+Staff never enter mail/SMS/Razorpay secrets on Fees — School Settings / Integrations only.
 
 ---
 
@@ -228,11 +233,11 @@ Staff never enter SMTP/Razorpay secrets on Fees — Owner Integrations only.
 | API | fee heads/structure/invoices/reports/reminders; extend payments; `schoolIntegrations.ts` |
 | Hooks | fee hooks + `useSchoolIntegrations` / save / razorpay verify |
 | Notify | `src/lib/feeNotify.ts` |
-| UI | `finance.tsx`; Owner Integrations (Email · SMS · Razorpay) per school |
+| UI | `finance.tsx`; School Settings / Integrations (Email · SMS · Razorpay) per school |
 | Dashboards | `dashboard.tsx` fee KPIs |
 | Tests | API + finance + feeNotify + integrations save/mask secrets |
 
-Query keys: `feeHeads`, `feeStructure`, `feeInvoices`, `feeReports.summary`, `owner.integrations(schoolId)`.
+Query keys: `feeHeads`, `feeStructure`, `feeInvoices`, `feeReports.summary`, `school.integrations`, optional `owner.integrations(schoolId)`.
 
 ---
 
@@ -246,13 +251,13 @@ Query keys: `feeHeads`, `feeStructure`, `feeInvoices`, `feeReports.summary`, `ow
 | pay + history | Keep; add Razorpay order/verify + webhook-driven rows |
 | Dashboard fake fees | Summary API |
 | Reminders → communication intent | Fee reminder + optional pay link |
-| Owner settings (branding only) | Add per-school Integrations: Email, SMS, Razorpay |
+| School settings (profile/branding today) | Add Integrations: Email, SMS, Razorpay |
 
 ---
 
 ## 9. Success criteria
 
-- Owner configures **per school** Email, SMS, and Razorpay keys; secrets masked on reload.  
+- School Settings configure **per school** Email, SMS, and Razorpay keys; secrets masked on reload. Owner can access the same settings for a managed school.  
 - Admin records offline modes and (when Razorpay configured) creates pay orders / pay links.  
 - Successful Razorpay payment updates invoice + history + parent receipt notice.  
 - Reminders use school mail/SMS settings; unpaid reminders can carry pay link.  
@@ -264,7 +269,7 @@ Query keys: `feeHeads`, `feeStructure`, `feeInvoices`, `feeReports.summary`, `ow
 ## 10. Phased delivery
 
 1. **Ledger** — heads, structure, invoices, offline pay modes, history, school summary.  
-2. **Owner Integrations** — Email + SMS + Razorpay school-wise settings UI + APIs.  
+2. **School Integrations** — Email + SMS + Razorpay school-wise settings UI + APIs.  
 3. **Notify** — feeNotify + reminders (templates from integrations).  
 4. **Razorpay collect** — order create, checkout/pay link, webhook → paid + receipt.  
 5. **Dashboards** — school fee KPIs from summary.
