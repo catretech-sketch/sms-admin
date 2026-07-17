@@ -3,27 +3,36 @@
    Live exams · datesheet (API) · marks (API grades) · report cards
    Notify parents via Email · SMS · App (same path as announcements).
    ============================================================ */
-import { useEffect, useMemo, useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useState, Fragment, type ComponentType } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useApp, useToast } from '@/lib/hooks'
 import { useExams, useCreateExam, useUpdateExam } from '@/api/hooks/useExams'
-import { useExamPapers, useCreateExamPaper, useUpdateExamPaper, useDeleteExamPaper } from '@/api/hooks/useExamPapers'
+import { useExamPapers } from '@/api/hooks/useExamPapers'
 import { useGrades, useUpsertGrade, useExamMarksMap } from '@/api/hooks/useGrades'
 import { useStudents } from '@/api/hooks/useStudents'
 import { useTeachers } from '@/api/hooks/useTeachers'
 import { useSubjectNames } from '@/api/hooks/useSubjects'
 import { useClasses, useClassNames } from '@/api/hooks/useClasses'
 import { loadExamAttendance, saveExamAttendance } from '@/api/examAttendance'
-import { paperToSlot, slotToCreateInput, slotToUpdateInput } from '@/api/examPapers'
+import { paperToSlot, slotToCreateInput, slotToUpdateInput, createExamPaper, updateExamPaper, deleteExamPaper } from '@/api/examPapers'
+import { queryKeys } from '@/api/queryKeys'
+import { subjectsForClass } from '@/api/classSubjects'
 import { notifyExamAudience } from '@/lib/examNotify'
-import { groupExamTimetable, printExamTimetable, autoBuildExamSlots } from '@/lib/examTimetable'
+import { groupExamTimetable, printExamTimetable, autoBuildExamSlots, buildExamPeriodGrid, examSubjectStyle } from '@/lib/examTimetable'
 import { can } from '@/lib/gating'
 import { endTime, findClashes, markKey } from '@/lib/examData'
 import { reportFor, classRank, gradeFor } from '@/lib/format'
-import { compareClassesAscending, gradeRank } from '@/lib/defaultClasses'
+import {
+  compareClassesAscending,
+  gradeRank,
+  DEFAULT_GRADES,
+  EXAM_CURRICULUM_TYPES,
+  formatExamGradesLabel,
+} from '@/lib/defaultClasses'
 import type { ExamPaper } from '@/api/examPapers'
 import {
   PageHead, Tabs, Card, CardHead, Btn, Badge, Select, Field, Input, Segmented,
-  Modal, Drawer, Icon, Empty, Progress, DataTable,
+  Modal, Drawer, Icon, Empty, Progress, Spinner, DataTable,
   type Column, type BadgeTone,
 } from '@/components/ui'
 import type { Exam, Student, PaperSlot } from '@/types'
@@ -98,7 +107,7 @@ function ExamAutoModal({
 }: ExamAutoModalProps) {
   const toast = useToast()
   const [startDate, setStartDate] = useState(defaultStart)
-  const [sessionMode, setSessionMode] = useState<'one' | 'two'>('one')
+  const [sessionMode, setSessionMode] = useState<'one' | 'two'>('two')
   const [morning, setMorning] = useState('09:30')
   const [afternoon, setAfternoon] = useState('13:30')
   const [duration, setDuration] = useState(180)
@@ -113,7 +122,7 @@ function ExamAutoModal({
   useEffect(() => {
     if (!open) return
     setStartDate(defaultStart)
-    setSessionMode('one')
+    setSessionMode('two')
     setMorning('09:30'); setAfternoon('13:30')
     setDuration(180); setGapDays(0)
     setSkipSunday(true); setSkipSaturday(false)
@@ -171,23 +180,55 @@ function ExamAutoModal({
     [classes, selected],
   )
 
+  /* Each class maps to its own subjects (Academics class→subject); fall back to the catalog. */
+  const classSubjectsByValue = useMemo(() => {
+    const m = new Map<string, string[]>()
+    for (const c of classes) m.set(c.value, subjectsForClass(c.value, c.label, subjects))
+    return m
+  }, [classes, subjects])
+
+  const targetSubjects = useMemo(
+    () => targets.map((c) => ({
+      cls: c,
+      subjects: classSubjectsByValue.get(c.value) ?? [],
+    })),
+    [targets, classSubjectsByValue],
+  )
+
   const preview = useMemo(() => {
-    if (!targets.length || !subjects.length || !startDate) return []
-    const common = { subjects, startDate, sessions, duration, gapDays, skipSunday, skipSaturday, room }
-    return targets.flatMap((c) =>
-      autoBuildExamSlots({ ...common, classId: c.value, className: c.label }),
+    if (!targetSubjects.length || !startDate) return []
+    const common = { startDate, sessions, duration, gapDays, skipSunday, skipSaturday, room }
+    return targetSubjects.flatMap(({ cls, subjects: classSubjects }) =>
+      classSubjects.length
+        ? autoBuildExamSlots({ ...common, subjects: classSubjects, classId: cls.value, className: cls.label })
+        : [],
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subjects, startDate, sessionMode, morning, afternoon, duration, gapDays, skipSunday, skipSaturday, room, targets])
+  }, [targetSubjects, startDate, sessionMode, morning, afternoon, duration, gapDays, skipSunday, skipSaturday, room])
 
-  const papersPerClass = subjects.length
   const classCount = targets.length
+  const subjectCounts = targetSubjects.map((t) => t.subjects.length)
+  const minSubjects = subjectCounts.length ? Math.min(...subjectCounts) : 0
+  const maxSubjects = subjectCounts.length ? Math.max(...subjectCounts) : 0
+  const sameSubjectCount = minSubjects === maxSubjects
+  const papersPerClassLabel = sameSubjectCount ? `${maxSubjects}` : `${minSubjects}–${maxSubjects}`
   const lastDate = preview.length ? preview.reduce((mx, s) => (s.date > mx ? s.date : mx), preview[0].date) : ''
 
   const apply = () => {
     if (!subjects.length) { toast.danger('No subjects', 'Add subjects in Academics first.'); return }
     if (!startDate) { toast.danger('Pick a start date', 'Choose when the exam begins.'); return }
     if (!classCount) { toast.danger('Pick classes', 'Select Nursery–XII classes for this exam.'); return }
+    if (!morning.trim()) { toast.danger('Morning time', 'Set the morning exam start time.'); return }
+    if (sessionMode === 'two') {
+      if (!afternoon.trim()) { toast.danger('Afternoon time', 'Set the afternoon exam start time.'); return }
+      const toMin = (t: string) => {
+        const m = /^(\d{1,2}):(\d{2})$/.exec(t.trim())
+        return m ? Number(m[1]) * 60 + Number(m[2]) : 0
+      }
+      if (toMin(afternoon) <= toMin(morning)) {
+        toast.danger('Invalid times', 'Afternoon must start after the morning exam.'); return
+      }
+    }
     if (!preview.length) { toast.danger('Nothing generated', 'Check the start date and sessions.'); return }
     const now = Date.now()
     const slots: PaperSlot[] = preview.map((s, i) => ({
@@ -205,7 +246,7 @@ function ExamAutoModal({
     onApply(slots, replace)
     toast.success(
       'Timetable generated',
-      `${classCount} class${classCount > 1 ? 'es' : ''} · ${papersPerClass} subject${papersPerClass > 1 ? 's' : ''} · ${slots.length} papers — review, then Save.`,
+      `${classCount} class${classCount > 1 ? 'es' : ''} · ${papersPerClassLabel} subject${maxSubjects > 1 ? 's' : ''} each · ${slots.length} papers — review, then Save.`,
     )
     onClose()
   }
@@ -214,12 +255,12 @@ function ExamAutoModal({
     <Modal
       open={open} onClose={onClose} icon="sparkle" size="lg"
       title="Auto-generate exam timetable"
-      sub="Same time periods for every selected class · then tweak manually"
+      sub="Pick 1 or 2 exams per day · no day gap by default (back-to-back exam days)"
       footer={
         <div className="row gap8 ai-center jc-between" style={{ width: '100%' }}>
           <span className="t-xs muted">
             {classCount
-              ? `${classCount} × ${papersPerClass} = ${preview.length} papers`
+              ? `${classCount} × ${papersPerClassLabel} = ${preview.length} papers`
               : 'Select at least one class'}
           </span>
           <div className="row gap8">
@@ -236,14 +277,36 @@ function ExamAutoModal({
           <Field label="Start date" required>
             <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
           </Field>
-          <Field label="Sessions per day (time periods)">
+          <Field label="Exams per day" hint="Same for every selected class">
             <Segmented
               value={sessionMode}
               onChange={(v) => setSessionMode(v as 'one' | 'two')}
-              options={[{ value: 'one', label: 'One paper / day' }, { value: 'two', label: 'Morning + Afternoon' }]}
+              options={[
+                { value: 'one', label: '1 exam / day' },
+                { value: 'two', label: '2 exams / day' },
+              ]}
             />
           </Field>
         </div>
+
+        <Field
+          label="Day gap between exam days"
+          hint={gapDays === 0
+            ? 'No day gap — papers continue the next working day'
+            : gapDays === 1
+              ? 'One free day between exam days'
+              : 'Two free days between exam days'}
+        >
+          <Segmented
+            value={String(gapDays)}
+            onChange={(v) => setGapDays(Number(v))}
+            options={[
+              { value: '0', label: 'No day gap' },
+              { value: '1', label: '1 day off' },
+              { value: '2', label: '2 days off' },
+            ]}
+          />
+        </Field>
 
         {classes.length > 0 ? (
           <Field label="Classes · Nursery → XII" required>
@@ -251,7 +314,7 @@ function ExamAutoModal({
               <div className="row ai-center jc-between wrap gap8">
                 <span className="t-xs muted">
                   {selected.size
-                    ? `${selected.size} of ${classes.length} selected · same schedule for each`
+                    ? `${selected.size} of ${classes.length} selected · ${papersPerClassLabel} subject${maxSubjects === 1 ? '' : 's'} per class`
                     : 'Select all, a grade, or individual sections'}
                 </span>
                 <Btn size="sm" variant={allSelected ? 'primary' : 'secondary'} icon={allSelected ? 'check' : 'layers'} onClick={toggleAll}>
@@ -269,16 +332,20 @@ function ExamAutoModal({
                 })}
               </div>
               <div className="sm-exam-class-grid">
-                {classes.map((c) => (
-                  <button
-                    key={c.value}
-                    type="button"
-                    className={`sm-exam-class-chip${selected.has(c.value) ? ' on' : ''}`}
-                    onClick={() => toggleClass(c.value)}
-                  >
-                    {c.label}
-                  </button>
-                ))}
+                {classes.map((c) => {
+                  const n = classSubjectsByValue.get(c.value)?.length ?? 0
+                  return (
+                    <button
+                      key={c.value}
+                      type="button"
+                      className={`sm-exam-class-chip${selected.has(c.value) ? ' on' : ''}`}
+                      onClick={() => toggleClass(c.value)}
+                      title={`${c.label} · ${n} subject${n === 1 ? '' : 's'}`}
+                    >
+                      {c.label}{n ? ` · ${n}` : ''}
+                    </button>
+                  )
+                })}
               </div>
             </div>
           </Field>
@@ -287,23 +354,18 @@ function ExamAutoModal({
         )}
 
         <div className="sm-grid-2 gap16">
-          <Field label={sessionMode === 'two' ? 'Morning start' : 'Start time'}>
+          <Field label="Morning start" required={sessionMode === 'two'} hint={sessionMode === 'one' ? 'Only session today' : 'First exam of the day'}>
             <Input type="time" value={morning} onChange={(e) => setMorning(e.target.value)} />
           </Field>
-          {sessionMode === 'two' && (
-            <Field label="Afternoon start">
+          {sessionMode === 'two' ? (
+            <Field label="Afternoon start" required hint="Second exam of the day (max 2)">
               <Input type="time" value={afternoon} onChange={(e) => setAfternoon(e.target.value)} />
             </Field>
+          ) : (
+            <div />
           )}
           <Field label="Duration (min)">
             <Input type="number" min={1} value={String(duration)} onChange={(e) => setDuration(Math.max(1, Math.round(Number(e.target.value) || 0)))} />
-          </Field>
-          <Field label="Gap between exam days">
-            <Select
-              options={[{ value: '0', label: 'Every day' }, { value: '1', label: 'Alternate days' }, { value: '2', label: 'Every 3rd day' }]}
-              value={String(gapDays)}
-              onChange={(e) => setGapDays(Number(e.target.value))}
-            />
           </Field>
           <Field label="Room / hall (optional)">
             <Input value={room} placeholder="e.g. Exam Hall" onChange={(e) => setRoom(e.target.value)} />
@@ -323,7 +385,7 @@ function ExamAutoModal({
             <div className="t-xs muted3">Preview</div>
             <div className="t-sm fw6">
               {preview.length
-                ? `${classCount} classes · ${papersPerClass} subjects · ${fmtDate(startDate)} → ${fmtDate(lastDate)}`
+                ? `${classCount} classes · ${papersPerClassLabel} subjects · ${sessionMode === 'two' ? `2/day (${morning} + ${afternoon})` : `1/day (${morning})`} · ${gapDays === 0 ? 'no day gap' : `${gapDays} day${gapDays > 1 ? 's' : ''} off`} · ${fmtDate(startDate)} → ${fmtDate(lastDate)}`
                 : 'Pick classes to preview the timetable'}
             </div>
           </div>
@@ -337,33 +399,82 @@ function ExamAutoModal({
 /* ============================================================
    Create exam
    ============================================================ */
+const EXAM_TYPE_PRESETS = ['Term', 'Unit Test', 'Periodic', 'Board Prep', 'Custom'] as const
+const GRADE_PRESETS: { label: string; grades: readonly string[] }[] = [
+  { label: 'All Nursery–XII', grades: DEFAULT_GRADES },
+  { label: 'Pre-primary', grades: ['Nursery', 'LKG', 'UKG'] },
+  { label: 'I–V', grades: ['I', 'II', 'III', 'IV', 'V'] },
+  { label: 'VI–VIII', grades: ['VI', 'VII', 'VIII'] },
+  { label: 'IX–X', grades: ['IX', 'X'] },
+  { label: 'XI–XII', grades: ['XI', 'XII'] },
+]
+
 function CreateExamModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const toast = useToast()
   const createExam = useCreateExam()
   const subjectNames = useSubjectNames()
   const [name, setName] = useState('')
-  const [type, setType] = useState('Term')
-  const [gradeRange, setGradeRange] = useState('VI–XII')
+  const [typePreset, setTypePreset] = useState<string>('Term')
+  const [customType, setCustomType] = useState('')
+  const [curriculum, setCurriculum] = useState<string>('CBSE')
+  const [grades, setGrades] = useState<Set<string>>(() => new Set(DEFAULT_GRADES))
   const [from, setFrom] = useState(todayIso())
   const [to, setTo] = useState(todayIso())
 
   useEffect(() => {
     if (!open) return
-    setName(''); setType('Term'); setGradeRange('VI–XII')
-    setFrom(todayIso()); setTo(todayIso())
+    setName('')
+    setTypePreset('Term')
+    setCustomType('')
+    setCurriculum('CBSE')
+    setGrades(new Set(DEFAULT_GRADES))
+    setFrom(todayIso())
+    setTo(todayIso())
   }, [open])
+
+  const allGradesOn = grades.size === DEFAULT_GRADES.length
+  const gradesLabel = formatExamGradesLabel(grades, curriculum)
+  const resolvedType = typePreset === 'Custom' ? customType.trim() : typePreset
+
+  const toggleGrade = (g: string) => {
+    setGrades((prev) => {
+      const next = new Set(prev)
+      if (next.has(g)) next.delete(g)
+      else next.add(g)
+      return next
+    })
+  }
+
+  const applyGradePreset = (preset: readonly string[]) => {
+    setGrades(new Set(preset))
+  }
+
+  const toggleAllGrades = () => {
+    setGrades(allGradesOn ? new Set() : new Set(DEFAULT_GRADES))
+  }
 
   const submit = () => {
     if (!name.trim()) { toast.danger('Name required', 'Please enter an exam name.'); return }
+    if (typePreset === 'Custom' && !customType.trim()) {
+      toast.danger('Type required', 'Enter a custom exam type, or pick a preset.'); return
+    }
+    if (!grades.size) { toast.danger('Pick grades', 'Select at least one grade (Nursery–XII).'); return }
     if (to < from) { toast.danger('Invalid dates', 'End date cannot be before the start date.'); return }
     const exam: Exam = {
       id: '',
-      name: name.trim(), type, grades: gradeRange, from, to,
-      subjects: Math.max(1, subjectNames.length), status: 'scheduled', marksEntered: 0, published: false,
+      name: name.trim(),
+      type: resolvedType,
+      grades: gradesLabel,
+      from,
+      to,
+      subjects: Math.max(1, subjectNames.length),
+      status: 'scheduled',
+      marksEntered: 0,
+      published: false,
     }
     createExam.mutate(exam, {
       onSuccess: () => {
-        toast.success('Exam created', `${name} scheduled for ${gradeRange}.`)
+        toast.success('Exam created', `${name} scheduled for ${gradesLabel}.`)
         onClose()
       },
       onError: (err) => toast.danger('Could not create exam', err instanceof Error ? err.message : 'Please try again.'),
@@ -372,8 +483,8 @@ function CreateExamModal({ open, onClose }: { open: boolean; onClose: () => void
 
   return (
     <Modal
-      open={open} onClose={onClose} icon="clipboard"
-      title="Create exam / test" sub="Set up a new examination schedule"
+      open={open} onClose={onClose} icon="clipboard" size="lg"
+      title="Create exam / test" sub="Nursery → XII · pick grades and curriculum type"
       footer={
         <div className="row gap8 jc-end">
           <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
@@ -388,13 +499,60 @@ function CreateExamModal({ open, onClose }: { open: boolean; onClose: () => void
           <Input icon="clipboard" value={name} placeholder="e.g. Term 2 Examination" onChange={(e) => setName(e.target.value)} />
         </Field>
         <div className="sm-grid-2 gap16">
-          <Field label="Type">
-            <Select options={['Term', 'Unit Test', 'Periodic', 'Board Prep']} value={type} onChange={(e) => setType(e.target.value)} />
+          <Field label="Exam type">
+            <Select
+              options={[...EXAM_TYPE_PRESETS]}
+              value={typePreset}
+              onChange={(e) => setTypePreset(e.target.value)}
+            />
           </Field>
-          <Field label="Grades">
-            <Select options={['I–V', 'VI–X', 'VI–XII', 'XII']} value={gradeRange} onChange={(e) => setGradeRange(e.target.value)} />
+          <Field label="Curriculum type" hint="Board / scheme (CBSE, ICSE, State Board…)">
+            <Select
+              options={[...EXAM_CURRICULUM_TYPES]}
+              value={curriculum}
+              onChange={(e) => setCurriculum(e.target.value)}
+            />
           </Field>
         </div>
+        {typePreset === 'Custom' && (
+          <Field label="Custom type" required>
+            <Input value={customType} placeholder="e.g. Mid-term · Pre-board" onChange={(e) => setCustomType(e.target.value)} />
+          </Field>
+        )}
+        <Field label="Grades · Nursery → XII" required>
+          <div className="col gap10">
+            <div className="row ai-center jc-between wrap gap8">
+              <span className="t-xs muted">
+                {grades.size
+                  ? `${grades.size} of ${DEFAULT_GRADES.length} · ${gradesLabel}`
+                  : 'Select grades for this exam'}
+              </span>
+              <Btn size="sm" variant={allGradesOn ? 'primary' : 'secondary'} icon={allGradesOn ? 'check' : 'layers'} onClick={toggleAllGrades}>
+                {allGradesOn ? 'Clear all' : 'Select all Nursery–XII'}
+              </Btn>
+            </div>
+            <div className="row wrap gap8">
+              {GRADE_PRESETS.map((p) => (
+                <Btn key={p.label} size="sm" variant="ghost" onClick={() => applyGradePreset(p.grades)}>
+                  {p.label}
+                </Btn>
+              ))}
+            </div>
+            <div className="sm-exam-class-grid" role="group" aria-label="Select grades">
+              {DEFAULT_GRADES.map((g) => (
+                <button
+                  key={g}
+                  type="button"
+                  className={`sm-exam-class-chip${grades.has(g) ? ' on' : ''}`}
+                  aria-pressed={grades.has(g)}
+                  onClick={() => toggleGrade(g)}
+                >
+                  {g}
+                </button>
+              ))}
+            </div>
+          </div>
+        </Field>
         <div className="sm-grid-2 gap16">
           <Field label="From">
             <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
@@ -419,10 +577,8 @@ function DatesheetDrawer({ exam, onClose }: { exam: Exam | null; onClose: () => 
   const subjectNames = useSubjectNames()
   const classesQ = useClasses()
   const teachersQ = useTeachers()
+  const qc = useQueryClient()
   const papersQ = useExamPapers(exam?.id ?? null)
-  const createPaper = useCreateExamPaper()
-  const updatePaper = useUpdateExamPaper()
-  const deletePaper = useDeleteExamPaper()
   const updateExam = useUpdateExam()
 
   const [slots, setSlots] = useState<PaperSlot[]>([])
@@ -430,6 +586,8 @@ function DatesheetDrawer({ exam, onClose }: { exam: Exam | null; onClose: () => 
   const [sms, setSms] = useState(true)
   const [appCh, setAppCh] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [savePct, setSavePct] = useState(0)
+  const [saveLabel, setSaveLabel] = useState('')
   const [autoOpen, setAutoOpen] = useState(false)
 
   useEffect(() => {
@@ -495,23 +653,38 @@ function DatesheetDrawer({ exam, onClose }: { exam: Exam | null; onClose: () => 
 
   const persistSlots = async (): Promise<boolean> => {
     if (!exam || clashes.length) return false
+    const existingIds = [...(papersQ.data ?? []).map((p) => p.id)]
+    const keepIds = new Set(slots.filter((s) => !isTempId(s.id)).map((s) => s.id))
+    const toDelete = existingIds.filter((id) => !keepIds.has(id))
+    const total = toDelete.length + slots.length + 1 // +1 for exam patch
+    let done = 0
+    const tick = (label: string) => {
+      done += 1
+      setSaveLabel(label)
+      setSavePct(Math.min(100, Math.round((100 * done) / Math.max(1, total))))
+    }
     try {
-      const existingIds = new Set((papersQ.data ?? []).map((p) => p.id))
-      const keepIds = new Set(slots.filter((s) => !isTempId(s.id)).map((s) => s.id))
-
-      for (const id of existingIds) {
-        if (!keepIds.has(id)) await deletePaper.mutateAsync({ id, examId: exam.id })
+      setSavePct(0)
+      setSaveLabel('Preparing…')
+      for (const id of toDelete) {
+        await deleteExamPaper(id)
+        tick(`Removing old papers… ${done}/${total}`)
       }
-      for (const s of slots) {
+      for (let i = 0; i < slots.length; i++) {
+        const s = slots[i]
+        const n = i + 1
         if (isTempId(s.id)) {
-          await createPaper.mutateAsync(slotToCreateInput(exam.id, s))
+          await createExamPaper(slotToCreateInput(exam.id, s))
+          tick(`Saving papers… ${n}/${slots.length}`)
         } else {
           const current = (papersQ.data ?? []).find((p) => p.id === s.id)
           if ((current?.classId ?? null) !== (s.classId ?? null)) {
-            await deletePaper.mutateAsync({ id: s.id, examId: exam.id })
-            await createPaper.mutateAsync(slotToCreateInput(exam.id, s))
+            await deleteExamPaper(s.id)
+            await createExamPaper(slotToCreateInput(exam.id, s))
+            tick(`Saving papers… ${n}/${slots.length}`)
           } else {
-            await updatePaper.mutateAsync({ id: s.id, examId: exam.id, patch: slotToUpdateInput(s) })
+            await updateExamPaper(s.id, slotToUpdateInput(s))
+            tick(`Updating papers… ${n}/${slots.length}`)
           }
         }
       }
@@ -519,6 +692,11 @@ function DatesheetDrawer({ exam, onClose }: { exam: Exam | null; onClose: () => 
         id: exam.id,
         patch: { subjects: slots.length, status: 'scheduled' },
       })
+      tick('Finishing…')
+      await qc.invalidateQueries({ queryKey: queryKeys.exams.papers(exam.id) })
+      await qc.invalidateQueries({ queryKey: queryKeys.exams.all })
+      setSavePct(100)
+      setSaveLabel('Done')
       return true
     } catch (err) {
       toast.danger('Could not save datesheet', err instanceof Error ? err.message : 'Please try again.')
@@ -531,6 +709,8 @@ function DatesheetDrawer({ exam, onClose }: { exam: Exam | null; onClose: () => 
     setBusy(true)
     const ok = await persistSlots()
     setBusy(false)
+    setSavePct(0)
+    setSaveLabel('')
     if (ok) toast.success('Datesheet saved', `${exam.name} · ${slots.length} papers`)
   }
 
@@ -542,8 +722,15 @@ function DatesheetDrawer({ exam, onClose }: { exam: Exam | null; onClose: () => 
     }
     setBusy(true)
     const ok = await persistSlots()
-    if (!ok) { setBusy(false); return }
+    if (!ok) {
+      setBusy(false)
+      setSavePct(0)
+      setSaveLabel('')
+      return
+    }
     try {
+      setSaveLabel('Notifying parents…')
+      setSavePct(98)
       const res = await notifyExamAudience(
         exam, app.school.name, 'datesheet',
         { email, sms, app: appCh },
@@ -560,6 +747,8 @@ function DatesheetDrawer({ exam, onClose }: { exam: Exam | null; onClose: () => 
       toast.danger('Saved, but notify failed', err instanceof Error ? err.message : 'Try again from Publish.')
     } finally {
       setBusy(false)
+      setSavePct(0)
+      setSaveLabel('')
     }
   }
 
@@ -576,22 +765,41 @@ function DatesheetDrawer({ exam, onClose }: { exam: Exam | null; onClose: () => 
           <div className="row gap8 jc-between ai-center">
             <span className="t-xs muted">{clashes.length ? `${clashes.length} clash(es) to resolve` : 'No clashes'}</span>
             <div className="row gap8">
-              <Btn variant="ghost" onClick={onClose}>Close</Btn>
+              <Btn variant="ghost" onClick={onClose} disabled={busy}>Close</Btn>
               {canEdit && (
                 <Btn variant="secondary" icon="check" disabled={clashes.length > 0 || busy} onClick={() => void save()}>
-                  Save
+                  {busy && savePct < 100 ? `Saving ${savePct}%` : 'Save'}
                 </Btn>
               )}
               {canPublish && (
                 <Btn variant="primary" icon="bell" disabled={clashes.length > 0 || busy} onClick={() => void publish()}>
-                  {busy ? 'Sending…' : 'Publish & notify'}
+                  {busy ? (savePct >= 98 ? 'Sending…' : `Saving ${savePct}%`) : 'Publish & notify'}
                 </Btn>
               )}
             </div>
           </div>
+          {busy && (
+            <div className="col gap6" style={{ width: '100%' }}>
+              <div className="row ai-center jc-between">
+                <span className="t-xs muted">{saveLabel || 'Working…'}</span>
+                <span className="t-xs fw6">{savePct}%</span>
+              </div>
+              <Progress value={savePct} color="var(--brand-600)" height={8} />
+            </div>
+          )}
         </div>
       }
     >
+      {busy && (
+        <div className="sm-exam-save-overlay" aria-live="polite">
+          <div className="sm-exam-save-card">
+            <Spinner size={22} />
+            <div className="t-sm fw6" style={{ marginTop: 10 }}>{saveLabel || 'Saving datesheet…'}</div>
+            <div className="t-xs muted" style={{ marginTop: 4 }}>{savePct}% complete</div>
+            <div style={{ width: '100%', marginTop: 12 }}><Progress value={savePct} height={10} /></div>
+          </div>
+        </div>
+      )}
       {papersQ.isLoading && <div className="t-sm muted" style={{ marginBottom: 12 }}>Loading papers…</div>}
       {clashes.length > 0 && (
         <div className="row ai-start gap8" style={{ padding: '10px 12px', borderRadius: 10, marginBottom: 14, background: 'var(--danger-bg, rgba(220,38,38,.1))', color: 'var(--danger)', border: '1px solid var(--danger)' }}>
@@ -604,8 +812,8 @@ function DatesheetDrawer({ exam, onClose }: { exam: Exam | null; onClose: () => 
         <span className="t-sm muted">{slots.length} paper{slots.length === 1 ? '' : 's'}</span>
         {canEdit && (
           <div className="row gap8">
-            <Btn variant="secondary" size="sm" icon="sparkle" onClick={() => setAutoOpen(true)}>Auto-generate</Btn>
-            <Btn variant="secondary" size="sm" icon="plus" onClick={addPaper}>Add paper</Btn>
+            <Btn variant="secondary" size="sm" icon="sparkle" disabled={busy} onClick={() => setAutoOpen(true)}>Auto-generate</Btn>
+            <Btn variant="secondary" size="sm" icon="plus" disabled={busy} onClick={addPaper}>Add paper</Btn>
           </div>
         )}
       </div>
@@ -1299,8 +1507,8 @@ function ExamTimetableTab({ onEditDatesheet }: { onEditDatesheet: (e: Exam) => v
     [papersQ.data, classId],
   )
 
-  const days = useMemo(
-    () => groupExamTimetable(papers.map((p: ExamPaper) => ({
+  const flatPapers = useMemo(
+    () => papers.map((p: ExamPaper) => ({
       id: p.id,
       classId: p.classId,
       className: classNameOf(p.classId),
@@ -1312,12 +1520,15 @@ function ExamTimetableTab({ onEditDatesheet }: { onEditDatesheet: (e: Exam) => v
       inv1: p.inv1,
       inv2: p.inv2,
       maxMarks: p.maxMarks,
-    }))),
+    })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [papers],
   )
 
-  const paperCount = days.reduce((n, d) => n + d.papers.length, 0)
+  const days = useMemo(() => groupExamTimetable(flatPapers), [flatPapers])
+  const periodGrid = useMemo(() => buildExamPeriodGrid(flatPapers), [flatPapers])
+
+  const paperCount = flatPapers.length
   const clashes = useMemo(
     () => findClashes(papers.map((p) => ({
       id: p.id, subject: p.subject, date: p.date, start: p.start,
@@ -1337,9 +1548,15 @@ function ExamTimetableTab({ onEditDatesheet }: { onEditDatesheet: (e: Exam) => v
       from: exam.from,
       to: exam.to,
       days,
+      papers: flatPapers,
+      schoolLogoInitials: app.school.logo,
+      schoolLogoUrl: app.school.logoUrl,
+      schoolImageUrl: app.school.imageUrl,
+      schoolBrandColor: app.school.color,
+      schoolCity: app.school.city,
     })
     if (!ok) toast.danger('Pop-up blocked', 'Allow pop-ups to print the exam timetable.')
-    else toast.success('Print ready', 'Use Save as PDF in the print dialog if needed.')
+    else toast.success('Print ready', 'Same period grid as on screen · Save as PDF in the dialog.')
   }
 
   const notify = async () => {
@@ -1393,7 +1610,7 @@ function ExamTimetableTab({ onEditDatesheet }: { onEditDatesheet: (e: Exam) => v
             </Btn>
           )}
           <Btn variant="secondary" size="sm" icon="download" disabled={!paperCount} onClick={doPrint}>
-            Print / PDF
+            Save PDF
           </Btn>
         </div>
       </div>
@@ -1450,47 +1667,67 @@ function ExamTimetableTab({ onEditDatesheet }: { onEditDatesheet: (e: Exam) => v
             </div>
           )}
 
-          <div className="sm-exam-tt-days">
-            {days.map((day) => (
-              <div key={day.date} className="sm-exam-tt-day">
-                <div className="sm-exam-tt-day-head">
-                  <div>
-                    <div className="fw7">
-                      {new Date(day.date + 'T00:00:00').toLocaleDateString('en-IN', {
-                        weekday: 'long', day: '2-digit', month: 'short', year: 'numeric',
-                      })}
-                    </div>
-                    <div className="t-xs muted3">{day.papers.length} paper{day.papers.length === 1 ? '' : 's'}</div>
+          {/* Period × date grid — same look as class weekly timetable */}
+          <div className="sm-exam-tt-grid-wrap">
+            <div
+              className="sm-exam-tt-grid"
+              style={{
+                gridTemplateColumns: `88px repeat(${Math.max(1, periodGrid.dates.length)}, minmax(100px, 1fr))`,
+              }}
+            >
+              <div />
+              {periodGrid.dates.map((d) => (
+                <div key={d} className="sm-exam-tt-colhead">
+                  <div className="fw7 t-sm">
+                    {new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short' })}
                   </div>
-                  <Badge tone="brand">{fmtDate(day.date)}</Badge>
+                  <div className="t-xs muted3">{fmtDate(d)}</div>
                 </div>
-                <div className="sm-exam-tt-slots">
-                  {day.papers.map((p) => {
-                    const inv = [p.inv1, p.inv2].filter(Boolean).join(' · ')
-                    return (
-                      <div key={p.id} className="sm-exam-tt-slot">
-                        <div className="sm-exam-tt-time">
-                          <div className="fw7">{p.start}</div>
-                          <div className="t-xs muted3">{endTime(p.start, p.duration)}</div>
+              ))}
+              {periodGrid.sessions.map((sess) => {
+                const sample = flatPapers.find((p) => p.start === sess.start)
+                const timeSub = sample
+                  ? `${sess.start} – ${endTime(sess.start, sample.duration)}`
+                  : sess.start
+                return (
+                  <Fragment key={sess.start}>
+                    <div className="sm-exam-tt-rowhead">
+                      <div className="fw7 t-sm">{sess.label}</div>
+                      <div className="t-xs muted3">{timeSub}</div>
+                    </div>
+                    {periodGrid.dates.map((date) => {
+                      const list = periodGrid.cell(date, sess.start)
+                      if (!list.length) {
+                        return <div key={`${date}-${sess.start}`} className="sm-exam-tt-cell empty">—</div>
+                      }
+                      const st = examSubjectStyle(list[0].subject)
+                      return (
+                        <div
+                          key={`${date}-${sess.start}`}
+                          className="sm-exam-tt-cell"
+                          style={{ background: st.bg, borderColor: st.bd, color: st.fg }}
+                        >
+                          {list.map((p) => {
+                            const inv = [p.inv1, p.inv2].filter(Boolean).join(' · ')
+                            return (
+                              <div key={p.id} className="sm-exam-tt-cell-block">
+                                <div className="fw7 t-sm" style={{ color: st.fg }}>{p.subject}</div>
+                                <div className="t-xs" style={{ color: 'var(--text-2)' }}>
+                                  {[!classId && p.className ? p.className : '', p.room, inv].filter(Boolean).join(' · ') || `${p.duration} min`}
+                                </div>
+                              </div>
+                            )
+                          })}
                         </div>
-                        <div className="sm-exam-tt-body">
-                          <div className="row ai-center gap8 wrap">
-                            <div className="fw6">{p.subject}</div>
-                            <Badge tone="neutral">{p.className || 'All classes'}</Badge>
-                          </div>
-                          <div className="t-xs muted">
-                            {p.duration} min
-                            {p.room ? ` · ${p.room}` : ''}
-                            {inv ? ` · ${inv}` : ''}
-                            {p.maxMarks != null ? ` · ${p.maxMarks} marks` : ''}
-                          </div>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            ))}
+                      )
+                    })}
+                  </Fragment>
+                )
+              })}
+            </div>
+            <div className="t-xs muted" style={{ marginTop: 10 }}>
+              Period rows × exam dates — same layout as the class timetable. Print / Save PDF matches this view.
+            </div>
           </div>
         </>
       )}

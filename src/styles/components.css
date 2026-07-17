@@ -263,7 +263,7 @@ html[dir=rtl] .sm-drawer{ border-left:none; border-right:1px solid var(--border)
 html[data-theme=dark] .sm-modal-ic{ background:var(--surface-3); }
 .sm-modal-title{ font-size:16px; font-weight:700; }
 .sm-modal-body{ padding:20px; overflow:auto; }
-.sm-drawer-body{ padding:20px; overflow:auto; flex:1; }
+.sm-drawer-body{ padding:20px; overflow:auto; flex:1; position:relative; }
 .sm-modal-foot{ display:flex; align-items:center; justify-content:flex-end; gap:10px; padding:15px 20px; border-top:1px solid var(--border); background:var(--surface-2); border-radius:0 0 var(--r-xl) var(--r-xl); }
 
 /* ---------- Popover ---------- */
@@ -364,7 +364,7 @@ html[dir=rtl] .sm-toasts{ right:auto; left:22px; }
   .sm-att-hero-val{ font-size:28px; }
 }
 
-/* ---- Exam timetable ---- */
+/* ---- Exam timetable (period grid like class TT) ---- */
 .sm-exam-tt-hero{
   display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap;
   padding:16px 18px; border-bottom:1px solid var(--border); background:var(--surface-2);
@@ -372,29 +372,30 @@ html[dir=rtl] .sm-toasts{ right:auto; left:22px; }
 .sm-exam-tt-kpis{ display:flex; align-items:flex-end; gap:28px; flex-wrap:wrap; }
 .sm-exam-tt-val{ font-size:32px; font-weight:700; letter-spacing:-.03em; line-height:1; color:var(--brand-700, var(--brand-600)); }
 .sm-exam-tt-stat{ min-width:72px; }
-.sm-exam-tt-days{ display:flex; flex-direction:column; gap:0; }
-.sm-exam-tt-day{ border-bottom:1px solid var(--border); }
-.sm-exam-tt-day:last-child{ border-bottom:none; }
-.sm-exam-tt-day-head{
-  display:flex; align-items:center; justify-content:space-between; gap:12px;
-  padding:14px 18px; background:color-mix(in srgb, var(--brand-600) 6%, var(--surface));
-  border-bottom:1px solid var(--border);
+.sm-exam-tt-grid-wrap{ padding:16px 18px 20px; overflow-x:auto; }
+.sm-exam-tt-grid{
+  display:grid; gap:5px; min-width:520px;
 }
-.sm-exam-tt-slots{ display:flex; flex-direction:column; }
-.sm-exam-tt-slot{
-  display:flex; align-items:stretch; gap:14px;
-  padding:12px 18px; border-bottom:1px solid var(--border);
+.sm-exam-tt-colhead{
+  text-align:center; padding:6px 4px;
 }
-.sm-exam-tt-slot:last-child{ border-bottom:none; }
-.sm-exam-tt-time{
-  flex:0 0 72px; padding:6px 0; border-right:2px solid var(--brand-600);
-  color:var(--brand-700, var(--brand-600));
+.sm-exam-tt-rowhead{
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  text-align:center; padding:6px 4px;
 }
-.sm-exam-tt-body{ flex:1; min-width:0; padding:4px 0; }
+.sm-exam-tt-cell{
+  min-height:64px; border-radius:8px; padding:8px; border:1px solid var(--border);
+  display:flex; flex-direction:column; justify-content:center; gap:4px;
+  background:var(--surface);
+}
+.sm-exam-tt-cell.empty{
+  align-items:center; color:var(--text-3); background:var(--surface-2); font-weight:600;
+}
+.sm-exam-tt-cell-block + .sm-exam-tt-cell-block{
+  margin-top:6px; padding-top:6px; border-top:1px dashed color-mix(in srgb, var(--border) 80%, transparent);
+}
 @media (max-width:720px){
   .sm-exam-tt-val{ font-size:26px; }
-  .sm-exam-tt-slot{ flex-direction:column; gap:6px; }
-  .sm-exam-tt-time{ flex:none; border-right:none; border-bottom:2px solid var(--brand-600); padding-bottom:8px; }
 }
 
 /* Exam auto-generate class picker */
@@ -416,4 +417,16 @@ html[dir=rtl] .sm-toasts{ right:auto; left:22px; }
   display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
   padding:12px 14px; border-radius:12px;
   border:1px solid var(--border); background:var(--surface-2);
+}
+.sm-exam-save-overlay{
+  position:absolute; inset:0; z-index:5;
+  display:flex; align-items:center; justify-content:center;
+  background:color-mix(in srgb, var(--surface-1) 72%, transparent);
+  backdrop-filter:blur(2px);
+}
+.sm-exam-save-card{
+  width:min(320px, 86%); padding:20px 22px; border-radius:14px; text-align:center;
+  border:1px solid var(--border); background:var(--surface-1);
+  box-shadow:0 12px 40px color-mix(in srgb, #000 12%, transparent);
+  display:flex; flex-direction:column; align-items:center;
 }
