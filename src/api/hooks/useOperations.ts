@@ -1,8 +1,11 @@
+import { useState, useEffect, useRef } from 'react'
 import {
   useQuery, useMutation, useQueryClient,
   type UseQueryResult, type UseMutationResult,
 } from '@tanstack/react-query'
 import { queryKeys } from '../queryKeys'
+import { config } from '../config'
+import { tokenStore } from '../auth/tokenStore'
 import {
   getLibrarySummary, getTransportSummary, getTransportFleet,
   listBusStudents, assignStudentToBus, unassignStudentFromBus, updateBusLocation, sendBusNotification,
@@ -88,6 +91,88 @@ export function useSendBusNotification(): UseMutationResult<{ reach: number }, E
   return useMutation({
     mutationFn: ({ busId, ...input }) => sendBusNotification(busId, input),
   })
+}
+
+/**
+ * WebSocket subscription for live fleet updates.
+ * Connects to `{apiBase}/transport/fleet/live` (ws:// or wss://).
+ * When connected, it writes incoming messages directly into the
+ * transportFleet query cache — no HTTP round-trip needed.
+ * Falls back gracefully: if the backend doesn't support WS, the caller
+ * can fall back to polling (check the returned `connected` flag).
+ * Reconnects with exponential back-off (1 s → 2 s → … → 30 s).
+ */
+export function useFleetWebSocket(enabled = true): { connected: boolean } {
+  const qc = useQueryClient()
+  const [connected, setConnected] = useState(false)
+  const wsRef = useRef<WebSocket | null>(null)
+  const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const backoffRef = useRef(1000)
+  const activeRef = useRef(true)
+
+  useEffect(() => {
+    if (!enabled) return
+    activeRef.current = true
+    backoffRef.current = 1000
+
+    const wsBase = config.apiBaseUrl.replace(/^http/, 'ws')
+    const endpoint = wsBase + '/transport/fleet/live'
+
+    function connect() {
+      if (!activeRef.current) return
+      const token = tokenStore.getAccess()
+      const url = token ? `${endpoint}?token=${encodeURIComponent(token)}` : endpoint
+      const ws = new WebSocket(url)
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        setConnected(true)
+        backoffRef.current = 1000
+      }
+
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data as string) as { type: string; data: unknown }
+          if (msg.type === 'fleet_update' && Array.isArray(msg.data)) {
+            qc.setQueryData(queryKeys.operations.transportFleet, msg.data)
+          } else if (msg.type === 'bus_update' && msg.data && typeof msg.data === 'object') {
+            qc.setQueryData<FleetBus[]>(queryKeys.operations.transportFleet, (prev) => {
+              const update = msg.data as FleetBus
+              if (!prev) return [update]
+              const idx = prev.findIndex((b) => b.busId === update.busId)
+              if (idx === -1) return [...prev, update]
+              const next = [...prev]
+              next[idx] = update
+              return next
+            })
+          }
+        } catch { /* ignore malformed messages */ }
+      }
+
+      ws.onclose = () => {
+        setConnected(false)
+        wsRef.current = null
+        if (!activeRef.current) return
+        retryRef.current = setTimeout(() => {
+          backoffRef.current = Math.min(backoffRef.current * 2, 30_000)
+          connect()
+        }, backoffRef.current)
+      }
+
+      ws.onerror = () => { ws.close() }
+    }
+
+    connect()
+
+    return () => {
+      activeRef.current = false
+      if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null }
+      if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); wsRef.current = null }
+      setConnected(false)
+    }
+  }, [enabled, qc])
+
+  return { connected }
 }
 
 export function useCreateBus(): UseMutationResult<FleetBus, Error, CreateBusInput> {

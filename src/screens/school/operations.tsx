@@ -38,6 +38,7 @@ import {
   useCreateSportsTeam, useCreateSportsEvent, useCreateSportsMedal,
   useUpdateBusLocation,
   useSendBusNotification,
+  useFleetWebSocket,
 } from '@/api/hooks/useOperations'
 import type { FleetBus, TransportRoute, RouteStop, SportsMedal } from '@/api/operations'
 import type { Bus, Complaint } from '@/types'
@@ -2068,7 +2069,9 @@ function DriverModePanel({ fleet }: { fleet: FleetBus[] }) {
    ============================================================ */
 function GpsScreen() {
   const app = useApp()
-  const fleetQ = useTransportFleet()
+  const { connected: wsConnected } = useFleetWebSocket()
+  // When WS is live, poll every 30 s as a fallback; otherwise keep 5 s polling.
+  const fleetQ = useTransportFleet(true, wsConnected ? 30_000 : 5_000)
   const fleet = fleetQ.data ?? []
 
   const onRoute = fleet.filter((b) => b.status === 'on_route').length
@@ -2080,7 +2083,11 @@ function GpsScreen() {
     <div>
       <PageHead title="Live bus tracking"
         sub="GPS fleet monitoring · live speed & next stop"
-        actions={app.plan !== 'platinum' ? <Btn variant="platinum" icon="sparkle" onClick={() => app.upgrade('platinum')}>Upgrade to Platinum</Btn> : <Badge tone="success" soft dot>Live</Badge>} />
+        actions={app.plan !== 'platinum'
+          ? <Btn variant="platinum" icon="sparkle" onClick={() => app.upgrade('platinum')}>Upgrade to Platinum</Btn>
+          : wsConnected
+            ? <Badge tone="success" soft dot>Live · WebSocket</Badge>
+            : <Badge tone="warning" soft dot>Live · polling</Badge>} />
       <div className="col gap16">
         <div className="sm-kpi-grid" style={{ gridTemplateColumns: 'repeat(4,1fr)' }}>
           <Kpi icon="bus" label="Vehicles" value={fleet.length} />
