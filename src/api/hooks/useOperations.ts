@@ -5,14 +5,14 @@ import {
 import { queryKeys } from '../queryKeys'
 import {
   getLibrarySummary, getTransportSummary, getTransportFleet,
-  listBusStudents, assignStudentToBus, unassignStudentFromBus, updateBusLocation,
+  listBusStudents, assignStudentToBus, unassignStudentFromBus, updateBusLocation, sendBusNotification,
   createBus, listTransportRoutes, createRoute, listRouteStops,
   getHostelSummary, listHostelBlocks, createHostelBlock, listHostelRooms, createHostelRoom,
   listHostelResidents, createHostelResident,
   getSportsSummary, listSportsTeams, createSportsTeam, listSportsEvents, createSportsEvent,
   listSportsMedals, createSportsMedal,
   type LibrarySummary, type TransportSummary, type FleetBus, type StudentBusAssignment,
-  type TransportRoute, type CreateBusInput, type CreateRouteInput, type RouteStop, type BusLocationInput,
+  type TransportRoute, type CreateBusInput, type CreateRouteInput, type RouteStop, type BusLocationInput, type SendBusNotificationInput,
   type HostelSummary, type SportsSummary,
   type HostelBlock, type HostelRoom, type HostelResident,
   type SportsTeam, type SportsEvent, type SportsMedal,
@@ -81,6 +81,12 @@ export function useUpdateBusLocation(): UseMutationResult<void, Error, { busId: 
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: queryKeys.operations.transportFleet })
     },
+  })
+}
+
+export function useSendBusNotification(): UseMutationResult<{ reach: number }, Error, { busId: string } & SendBusNotificationInput> {
+  return useMutation({
+    mutationFn: ({ busId, ...input }) => sendBusNotification(busId, input),
   })
 }
 

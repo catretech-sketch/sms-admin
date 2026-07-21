@@ -137,6 +137,20 @@ export async function updateBusLocation(busId: string, input: BusLocationInput):
   })
 }
 
+export interface SendBusNotificationInput {
+  eventType: 'departed' | 'approaching' | 'arrived'
+  stopId?: string | null
+  channels: ('push' | 'sms')[]
+}
+
+export async function sendBusNotification(busId: string, input: SendBusNotificationInput): Promise<{ reach: number }> {
+  if (!busId) throw new Error('Bus ID required')
+  return request<{ reach: number }>(`/transport/buses/${busId}/notify`, {
+    method: 'POST',
+    body: camelToSnake(input),
+  })
+}
+
 /* ---------- Hostel ---------- */
 export async function getHostelSummary(): Promise<HostelSummary> {
   return asObj<HostelSummary>(await request<Record<string, unknown>>('/hostel/summary'))

@@ -5,6 +5,7 @@ import {
   createSportsTeam, createSportsEvent, createSportsMedal,
   listBusStudents, assignStudentToBus, unassignStudentFromBus,
   listRouteStops, updateBusLocation,
+  sendBusNotification,
 } from './operations'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -169,5 +170,27 @@ describe('bus location update', () => {
 
   it('throws when busId is empty', async () => {
     await expect(updateBusLocation('', { lat: 0, lng: 0 })).rejects.toThrow('Bus ID required')
+  })
+})
+
+describe('bus parent notifications', () => {
+  it('POSTs notify event with snake_case body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { reach: 38 } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await sendBusNotification('B1', { eventType: 'departed', channels: ['push', 'sms'] })
+    expect(result.reach).toBe(38)
+    const [url, opts] = fetchMock.mock.calls[0]
+    expect(String(url)).toMatch(/\/transport\/buses\/B1\/notify$/)
+    expect(opts.method).toBe('POST')
+    const body = JSON.parse(opts.body as string)
+    expect(body).toMatchObject({ event_type: 'departed', channels: ['push', 'sms'] })
+  })
+
+  it('includes stop_id when provided', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { reach: 12 } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await sendBusNotification('B1', { eventType: 'approaching', stopId: 'ST5', channels: ['push'] })
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string)
+    expect(body).toMatchObject({ event_type: 'approaching', stop_id: 'ST5' })
   })
 })

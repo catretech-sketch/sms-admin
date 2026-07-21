@@ -37,6 +37,7 @@ import {
   useSportsSummary, useSportsTeams, useSportsEvents, useSportsMedals,
   useCreateSportsTeam, useCreateSportsEvent, useCreateSportsMedal,
   useUpdateBusLocation,
+  useSendBusNotification,
 } from '@/api/hooks/useOperations'
 import type { FleetBus, TransportRoute, RouteStop, SportsMedal } from '@/api/operations'
 import type { Bus, Complaint } from '@/types'
@@ -1220,6 +1221,7 @@ function BusFleet({ fleet: fleetProp, loading: loadingProp, error: errorProp }: 
   const loading = loadingProp ?? self.isLoading
   const error = errorProp ?? self.isError
   const [ridersFor, setRidersFor] = useState<FleetBus | null>(null)
+  const [notifyFor, setNotifyFor] = useState<FleetBus | null>(null)
 
   const active = fleet.filter((b) => b.status === 'on_route' || b.status === 'at_stop' || b.status === 'delayed').length
 
@@ -1259,7 +1261,10 @@ function BusFleet({ fleet: fleetProp, loading: loadingProp, error: errorProp }: 
     {
       key: 'riders', label: '', align: 'right',
       render: (r) => (
-        <IconBtn icon="users" title="Manage riders" onClick={() => setRidersFor(r)} />
+        <div className="row gap6 jc-end">
+          <IconBtn icon="bell" title="Notify parents" onClick={() => setNotifyFor(r)} />
+          <IconBtn icon="users" title="Manage riders" onClick={() => setRidersFor(r)} />
+        </div>
       ),
     },
   ]
@@ -1283,6 +1288,9 @@ function BusFleet({ fleet: fleetProp, loading: loadingProp, error: errorProp }: 
       )}
       {ridersFor && (
         <BusRidersModal bus={ridersFor} onClose={() => setRidersFor(null)} />
+      )}
+      {notifyFor && (
+        <BusNotifyModal bus={notifyFor} onClose={() => setNotifyFor(null)} />
       )}
     </div>
   )
@@ -1897,6 +1905,86 @@ function SportsManageModal({ open, onClose, teams }: {
           {teams.length === 0 && <div className="t-xs muted3">Tip: add teams and events too so the dashboard is complete.</div>}
         </div>
       )}
+    </Modal>
+  )
+}
+
+/* ============================================================
+   BUS NOTIFY MODAL
+   ============================================================ */
+function BusNotifyModal({ bus, onClose }: { bus: FleetBus; onClose: () => void }) {
+  const toast = useToast()
+  const notify = useSendBusNotification()
+  const stopsQ = useRouteStops(bus.routeId ?? null)
+  const stops: RouteStop[] = stopsQ.data ?? []
+
+  const [eventType, setEventType] = useState<'departed' | 'approaching' | 'arrived'>('departed')
+  const [stopId, setStopId] = useState('')
+  const [usePush, setUsePush] = useState(true)
+  const [useSms, setUseSms] = useState(true)
+
+  const channels = [...(usePush ? ['push'] : []), ...(useSms ? ['sms'] : [])] as ('push' | 'sms')[]
+
+  const send = () => {
+    if (channels.length === 0) { toast.danger('Pick a channel', 'Choose at least one notification channel.'); return }
+    notify.mutate(
+      { busId: bus.busId, eventType, stopId: stopId || null, channels },
+      {
+        onSuccess: ({ reach }) => {
+          toast.success('Parents notified', `${reach} parent${reach === 1 ? '' : 's'} alerted.`)
+          onClose()
+        },
+        onError: (e) => toast.danger('Could not send', e instanceof Error ? e.message : 'Please try again.'),
+      },
+    )
+  }
+
+  const EVENT_LABELS: Record<typeof eventType, string> = {
+    departed: 'Bus has departed',
+    approaching: 'Bus is approaching a stop',
+    arrived: 'Bus has arrived at stop',
+  }
+
+  return (
+    <Modal open onClose={onClose} size="sm" icon="bell" title={`Notify parents · Bus ${bus.busNo}`}
+      sub="Send a real-time alert to parents of students riding this bus"
+      footer={
+        <div className="row gap8 jc-end">
+          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn variant="primary" icon="bell" disabled={notify.isPending || channels.length === 0} onClick={send}>
+            {notify.isPending ? 'Sending…' : 'Send alert'}
+          </Btn>
+        </div>
+      }>
+      <div className="col gap16">
+        <Field label="Event type">
+          <Select value={eventType} onChange={(e) => setEventType(e.target.value as typeof eventType)}
+            options={[
+              { value: 'departed', label: 'Bus departed' },
+              { value: 'approaching', label: 'Approaching stop' },
+              { value: 'arrived', label: 'Arrived at stop' },
+            ]} />
+        </Field>
+        {(eventType === 'approaching' || eventType === 'arrived') && stops.length > 0 && (
+          <Field label="Which stop?" hint="Leave blank to send for all stops">
+            <Select value={stopId} onChange={(e) => setStopId(e.target.value)}
+              options={[
+                { value: '', label: 'All stops / not specified' },
+                ...stops.sort((a, b) => a.sequence - b.sequence).map((s) => ({ value: s.id, label: `${s.sequence}. ${s.name}` })),
+              ]} />
+          </Field>
+        )}
+        <Field label="Channels">
+          <div className="row gap16">
+            <Checkbox label="Push notification" checked={usePush} onChange={() => setUsePush((v) => !v)} />
+            <Checkbox label="SMS" checked={useSms} onChange={() => setUseSms((v) => !v)} />
+          </div>
+        </Field>
+        <div className="t-xs muted3 row ai-center gap6">
+          <Icon name="users" size={12} />
+          <span>"{EVENT_LABELS[eventType]}{bus.routeName ? ` · Route ${bus.routeName}` : ''} · Bus {bus.busNo}"</span>
+        </div>
+      </div>
     </Modal>
   )
 }
