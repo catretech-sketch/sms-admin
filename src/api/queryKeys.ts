@@ -27,6 +27,7 @@ export const queryKeys = {
   },
   classes: {
     all: ['classes'] as const,
+    subjects: (classId: string) => ['classes', 'subjects', classId] as const,
   },
   subjects: {
     all: ['subjects'] as const,
@@ -34,6 +35,7 @@ export const queryKeys = {
   attendance: {
     forClass: (classId: string, date = '') => ['attendance', classId, date] as const,
     principal: (date = '') => ['attendance', 'principal', date] as const,
+    studentMonths: (studentId: string, classId = '') => ['attendance', 'studentMonths', studentId, classId] as const,
   },
   exams: {
     all: ['exams'] as const,
@@ -45,6 +47,7 @@ export const queryKeys = {
   },
   threads: {
     all: ['threads'] as const,
+    messages: (threadId: string) => ['threads', 'messages', threadId] as const,
   },
   announcements: {
     all: ['announcements'] as const,
@@ -61,8 +64,31 @@ export const queryKeys = {
   feeReports: {
     summary: ['feeReports', 'summary'] as const,
   },
+  payroll: {
+    salaryProfiles: ['payroll', 'salaryProfiles'] as const,
+    salaryStructures: ['payroll', 'salaryStructures'] as const,
+    runAll: ['payroll', 'run'] as const,
+    run: (period: string) => ['payroll', 'run', period] as const,
+    preview: (period: string) => ['payroll', 'preview', period] as const,
+  },
   school: {
     integrations: ['school', 'integrations'] as const,
+  },
+  operations: {
+    librarySummary: ['operations', 'library', 'summary'] as const,
+    transportSummary: ['operations', 'transport', 'summary'] as const,
+    transportFleet: ['operations', 'transport', 'fleet'] as const,
+    transportRoutes: ['operations', 'transport', 'routes'] as const,
+    busStudents: (busId: string) => ['operations', 'transport', 'busStudents', busId] as const,
+    transportRouteStops: (routeId: string) => ['operations', 'transport', 'routeStops', routeId] as const,
+    hostelSummary: ['operations', 'hostel', 'summary'] as const,
+    hostelBlocks: ['operations', 'hostel', 'blocks'] as const,
+    hostelRooms: ['operations', 'hostel', 'rooms'] as const,
+    hostelResidents: ['operations', 'hostel', 'residents'] as const,
+    sportsSummary: ['operations', 'sports', 'summary'] as const,
+    sportsTeams: ['operations', 'sports', 'teams'] as const,
+    sportsEvents: ['operations', 'sports', 'events'] as const,
+    sportsMedals: ['operations', 'sports', 'medals'] as const,
   },
   owner: {
     dashboard: ['owner', 'dashboard'] as const,
