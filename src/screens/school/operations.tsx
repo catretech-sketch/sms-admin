@@ -1970,7 +1970,7 @@ function BusNotifyModal({ bus, onClose }: { bus: FleetBus; onClose: () => void }
             <Select value={stopId} onChange={(e) => setStopId(e.target.value)}
               options={[
                 { value: '', label: 'All stops / not specified' },
-                ...stops.sort((a, b) => a.sequence - b.sequence).map((s) => ({ value: s.id, label: `${s.sequence}. ${s.name}` })),
+                ...[...stops].sort((a, b) => a.sequence - b.sequence).map((s) => ({ value: s.id, label: `${s.sequence}. ${s.name}` })),
               ]} />
           </Field>
         )}
@@ -2023,7 +2023,7 @@ function DriverModePanel({ fleet }: { fleet: FleetBus[] }) {
   const stop = () => {
     if (watchRef.current != null) { navigator.geolocation.clearWatch(watchRef.current); watchRef.current = null }
     setTracking(false)
-    if (driverBusId) updateLocation.mutate({ busId: driverBusId, lat: 0, lng: 0, status: 'idle' })
+    if (driverBusId) updateLocation.mutate({ busId: driverBusId, status: 'idle' })
   }
 
   useEffect(() => () => { if (watchRef.current != null) navigator.geolocation.clearWatch(watchRef.current) }, [])

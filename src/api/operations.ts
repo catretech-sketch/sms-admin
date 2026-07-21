@@ -123,8 +123,8 @@ export async function unassignStudentFromBus(busId: string, studentId: string): 
 }
 
 export interface BusLocationInput {
-  lat: number
-  lng: number
+  lat?: number
+  lng?: number
   speedKmh?: number
   status?: BusStatus
 }
