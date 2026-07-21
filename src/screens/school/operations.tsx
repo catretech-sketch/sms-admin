@@ -36,6 +36,7 @@ import {
   useCreateHostelBlock, useCreateHostelRoom, useCreateHostelResident,
   useSportsSummary, useSportsTeams, useSportsEvents, useSportsMedals,
   useCreateSportsTeam, useCreateSportsEvent, useCreateSportsMedal,
+  useUpdateBusLocation,
 } from '@/api/hooks/useOperations'
 import type { FleetBus, TransportRoute, RouteStop, SportsMedal } from '@/api/operations'
 import type { Bus, Complaint } from '@/types'
@@ -1901,6 +1902,79 @@ function SportsManageModal({ open, onClose, teams }: {
 }
 
 /* ============================================================
+   DRIVER MODE PANEL
+   ============================================================ */
+function DriverModePanel({ fleet }: { fleet: FleetBus[] }) {
+  const toast = useToast()
+  const updateLocation = useUpdateBusLocation()
+  const [driverBusId, setDriverBusId] = useState('')
+  const [tracking, setTracking] = useState(false)
+  const [lastPush, setLastPush] = useState<string | null>(null)
+  const watchRef = useRef<number | null>(null)
+
+  const start = () => {
+    if (!driverBusId) { toast.danger('Select a bus', 'Pick your bus before starting.'); return }
+    if (!navigator.geolocation) { toast.danger('GPS unavailable', 'Your browser does not support geolocation.'); return }
+    setTracking(true)
+    watchRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        updateLocation.mutate({
+          busId: driverBusId,
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          speedKmh: pos.coords.speed != null ? Math.round(pos.coords.speed * 3.6) : undefined,
+          status: 'on_route',
+        })
+        setLastPush(new Date().toLocaleTimeString())
+      },
+      (err) => { toast.danger('GPS error', err.message); setTracking(false) },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 },
+    )
+  }
+
+  const stop = () => {
+    if (watchRef.current != null) { navigator.geolocation.clearWatch(watchRef.current); watchRef.current = null }
+    setTracking(false)
+    if (driverBusId) updateLocation.mutate({ busId: driverBusId, lat: 0, lng: 0, status: 'idle' })
+  }
+
+  useEffect(() => () => { if (watchRef.current != null) navigator.geolocation.clearWatch(watchRef.current) }, [])
+
+  return (
+    <Card>
+      <CardHead title="Driver mode" sub="Push your live GPS so the fleet map stays current" icon="pin" />
+      <div className="col gap14" style={{ marginTop: 14 }}>
+        <div className="row ai-end gap10 wrap">
+          <div style={{ flex: '0 0 240px' }}>
+            <Field label="Your bus">
+              <Select value={driverBusId} onChange={(e) => setDriverBusId(e.target.value)} disabled={tracking}
+                options={[
+                  { value: '', label: 'Select bus…' },
+                  ...fleet.map((b) => ({ value: b.busId, label: `Bus ${b.busNo}${b.routeName ? ` · ${b.routeName}` : ''}` })),
+                ]} />
+            </Field>
+          </div>
+          {!tracking
+            ? <Btn variant="primary" icon="zap" onClick={start}>Start tracking</Btn>
+            : <Btn variant="danger" icon="x" onClick={stop}>Stop tracking</Btn>}
+          {tracking && (
+            <div className="row ai-center gap8">
+              <span className="sm-dot-live" />
+              <span className="t-sm">{lastPush ? `Last push: ${lastPush}` : 'Waiting for GPS…'}</span>
+            </div>
+          )}
+        </div>
+        {tracking && (
+          <div className="t-xs muted3">
+            Location is being pushed automatically. Keep this tab open while driving.
+          </div>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+/* ============================================================
    LIVE GPS BUS TRACKING
    List is open on all plans; the live map is Platinum-gated.
    ============================================================ */
@@ -1928,6 +2002,8 @@ function GpsScreen() {
         </div>
 
         <Card pad={false}><BusFleet fleet={fleet} loading={fleetQ.isLoading} error={fleetQ.isError} /></Card>
+
+        <DriverModePanel fleet={fleet} />
 
         <TierGate feature="transport.gps" title="Live GPS bus tracking"
           blurb="Track every bus on a live map with real-time positions, speed and parent ETA sharing. Available on the Platinum plan.">
