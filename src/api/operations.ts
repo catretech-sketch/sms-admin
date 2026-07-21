@@ -122,6 +122,21 @@ export async function unassignStudentFromBus(busId: string, studentId: string): 
   await request<void>(`/transport/buses/${busId}/students/${studentId}`, { method: 'DELETE' })
 }
 
+export interface BusLocationInput {
+  lat: number
+  lng: number
+  speedKmh?: number
+  status?: BusStatus
+}
+
+export async function updateBusLocation(busId: string, input: BusLocationInput): Promise<void> {
+  if (!busId) throw new Error('Bus ID required')
+  await request<void>(`/transport/buses/${busId}/location`, {
+    method: 'PUT',
+    body: camelToSnake(input),
+  })
+}
+
 /* ---------- Hostel ---------- */
 export async function getHostelSummary(): Promise<HostelSummary> {
   return asObj<HostelSummary>(await request<Record<string, unknown>>('/hostel/summary'))

@@ -5,14 +5,14 @@ import {
 import { queryKeys } from '../queryKeys'
 import {
   getLibrarySummary, getTransportSummary, getTransportFleet,
-  listBusStudents, assignStudentToBus, unassignStudentFromBus,
+  listBusStudents, assignStudentToBus, unassignStudentFromBus, updateBusLocation,
   createBus, listTransportRoutes, createRoute, listRouteStops,
   getHostelSummary, listHostelBlocks, createHostelBlock, listHostelRooms, createHostelRoom,
   listHostelResidents, createHostelResident,
   getSportsSummary, listSportsTeams, createSportsTeam, listSportsEvents, createSportsEvent,
   listSportsMedals, createSportsMedal,
   type LibrarySummary, type TransportSummary, type FleetBus, type StudentBusAssignment,
-  type TransportRoute, type CreateBusInput, type CreateRouteInput, type RouteStop,
+  type TransportRoute, type CreateBusInput, type CreateRouteInput, type RouteStop, type BusLocationInput,
   type HostelSummary, type SportsSummary,
   type HostelBlock, type HostelRoom, type HostelResident,
   type SportsTeam, type SportsEvent, type SportsMedal,
@@ -70,6 +70,16 @@ export function useUnassignStudentFromBus(): UseMutationResult<void, Error, { bu
     onSuccess: (_r, { busId }) => {
       void qc.invalidateQueries({ queryKey: queryKeys.operations.busStudents(busId) })
       void qc.invalidateQueries({ queryKey: queryKeys.operations.transportSummary })
+    },
+  })
+}
+
+export function useUpdateBusLocation(): UseMutationResult<void, Error, { busId: string } & BusLocationInput> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ busId, ...input }) => updateBusLocation(busId, input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportFleet })
     },
   })
 }
