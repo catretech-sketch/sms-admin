@@ -64,6 +64,15 @@ The other two tabs are 100% mock, with no backend at all:
 - No `invitation.resent` / `invitation.revoked` audit entries in this pass —
   there is no `InvitationService` yet (that's the other plan's job). Added as
   a small follow-up once that plan lands.
+- No `user.created` / `user.deactivated` audit entries in this pass, despite
+  being named in the original Goals — there is no standalone
+  `CreateUserAsync`/deactivate-status service method to instrument (user
+  creation happens only via `InviteAsync`, which has no dedicated audit
+  action of its own yet either, and there is no admin-facing deactivate
+  endpoint at all today). Adding these requires building that functionality
+  first, which is out of scope here. Deferred alongside the `invitation.*`
+  events above — added as a small follow-up once an invite/deactivate audit
+  action is warranted.
 - No audit entries for read-only actions (list/view) — only mutating actions.
 - No UI to configure *which* actions get audited — the action list below is
   fixed in this pass.
