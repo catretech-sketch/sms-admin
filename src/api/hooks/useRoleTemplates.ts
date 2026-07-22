@@ -13,6 +13,6 @@ export function useSetRoleTemplate(): UseMutationResult<RoleTemplateOverride[], 
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (overrides: RoleTemplateOverride[]) => setRoleTemplate(overrides),
-    onSuccess: (data) => { qc.setQueryData(queryKeys.roleTemplate.all, data) },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.roleTemplate.all }) },
   })
 }
