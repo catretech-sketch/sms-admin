@@ -9,3 +9,6 @@ coverage
 
 # build info
 *.tsbuildinfo
+
+# worktrees
+.worktrees
