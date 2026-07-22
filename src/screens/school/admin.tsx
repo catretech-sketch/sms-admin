@@ -43,63 +43,345 @@ import {
   Field, Input, Textarea, Toggle, Icon, Empty, DataTable, Spinner,
   type Column, type BadgeTone,
 } from '@/components/ui'
-import { ROLES, ROLE_META, PERMS, TIER_META, teachers, staff } from '@/data/mockDb'
+import { ROLES, ROLE_META, PERMS, TIER_META } from '@/data/mockDb'
 import type { Role, GateRole, Cap, Tier, CellState, UserOverrides, RazorpayStatus } from '@/types'
+import { useStudents } from '@/api/hooks/useStudents'
+import { useTeachers } from '@/api/hooks/useTeachers'
+import { useStaff } from '@/api/hooks/useStaff'
+import { useFeeReportSummary } from '@/api/hooks/useFeeReports'
+import { useFeeInvoices } from '@/api/hooks/useFeeInvoices'
+import { usePayrollPreview } from '@/api/hooks/usePayroll'
+import { useTransportFleet } from '@/api/hooks/useOperations'
+import { useExams } from '@/api/hooks/useExams'
+import { useExamPapers } from '@/api/hooks/useExamPapers'
+import { useExamMarksMap } from '@/api/hooks/useGrades'
+import { markKey } from '@/lib/examData'
+import { currentPeriod, periodLabel } from '@/lib/payroll'
+import { fmtMoney } from '@/lib/format'
+import { downloadReportXls, openReportPdf, type ReportSpec, type ReportMeta } from '@/lib/reportExport'
+import { downloadReportXlsx } from '@/lib/reportXlsx'
+import type { Student, Teacher, Staff, FeeInvoice, FeeReportSummary, Exam } from '@/types'
+import type { PayrollRun } from '@/api/payroll'
+import type { ExamPaper } from '@/api/examPapers'
+import type { FleetBus } from '@/api/operations'
 
 /* ============================================================
    Reports
    ============================================================ */
-interface ReportDef { name: string; desc: string }
-const REPORT_CATEGORIES: { value: string; label: string; icon: string; reports: ReportDef[] }[] = [
-  {
-    value: 'academic', label: 'Academic', icon: 'cap',
-    reports: [
-      { name: 'Consolidated mark sheet', desc: 'Subject-wise marks & grades for every class & section.' },
-      { name: 'Class performance summary', desc: 'Pass %, averages and toppers across all classes.' },
-      { name: 'Weak-student tracker', desc: 'Students below 40% flagged for remedial action.' },
-      { name: 'Subject analysis', desc: 'Mean, median & distribution per subject and exam.' },
-    ],
-  },
-  {
-    value: 'attendance', label: 'Attendance', icon: 'check',
-    reports: [
-      { name: 'Daily attendance register', desc: 'Present / absent / late per class for the period.' },
-      { name: 'Monthly attendance summary', desc: 'Per-student attendance % rolled up by month.' },
-      { name: 'Chronic absentee list', desc: 'Students under 75% attendance for the term.' },
-      { name: 'Staff attendance report', desc: 'Teaching & non-teaching staff attendance log.' },
-    ],
-  },
-  {
-    value: 'finance', label: 'Finance', icon: 'rupee',
-    reports: [
-      { name: 'Fee collection summary', desc: 'Collected, pending & waived fees by grade.' },
-      { name: 'Outstanding dues register', desc: 'Student-wise pending balances with ageing.' },
-      { name: 'Daily collection report', desc: 'Receipts by mode (cash / online / cheque).' },
-      { name: 'Payroll register', desc: 'Gross, deductions & net pay for all staff.' },
-    ],
-  },
-  {
-    value: 'operations', label: 'Operations', icon: 'box',
-    reports: [
-      { name: 'Transport route manifest', desc: 'Buses, routes, stops & assigned students.' },
-      { name: 'Library circulation report', desc: 'Issued, returned & overdue titles.' },
-      { name: 'Inventory & assets', desc: 'Stock levels and asset allocation by department.' },
-      { name: 'Visitor & gate log', desc: 'Entry / exit records for visitors and vehicles.' },
-    ],
-  },
-]
+interface RptRow { name: string; desc: string; spec: ReportSpec | null }
+interface RptCat { value: string; label: string; icon: string; reports: RptRow[] }
 
 const PERIODS = ['Term 1 · 2026', 'Term 2 · 2026', 'Mid-Term · 2026', 'Full Year · 2025-26']
 
+const FLEET_STATUS: Record<string, string> = {
+  on_route: 'On route', at_stop: 'At stop', delayed: 'Delayed', idle: 'Idle', maintenance: 'Maintenance',
+}
+
+const avgOf = (ns: number[]): number => (ns.length ? Math.round(ns.reduce((a, b) => a + b, 0) / ns.length) : 0)
+
+function groupByClass(students: Student[]): [string, Student[]][] {
+  const m = new Map<string, Student[]>()
+  for (const s of students) {
+    const k = s.cls || s.grade || '—'
+    const arr = m.get(k)
+    if (arr) arr.push(s)
+    else m.set(k, [s])
+  }
+  return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
+}
+
+function pickExam(exams: Exam[]): Exam | undefined {
+  return exams.find((e) => e.marksEntered > 0) ?? exams.find((e) => e.published) ?? exams[0]
+}
+
+function academicReports(
+  students: Student[],
+  exam: Exam | undefined,
+  papers: ExamPaper[],
+  marksMap: Record<string, number>,
+): RptRow[] {
+  const classes = groupByClass(students)
+
+  /* ---- Marks-based reports (real exam grades) ---- */
+  const examId = exam?.id ?? ''
+  const subjects = [...new Set(papers.map((p) => p.subject).filter(Boolean))]
+  const maxBySubject = new Map<string, number>()
+  for (const p of papers) maxBySubject.set(p.subject, (maxBySubject.get(p.subject) || 0) + (p.maxMarks || 0))
+  const totalMax = [...maxBySubject.values()].reduce((a, b) => a + b, 0)
+  const markOf = (sid: string, subj: string): number | undefined => marksMap[markKey(examId, sid, subj)]
+  const scored = students.filter((s) => subjects.some((sub) => markOf(s.id, sub) != null))
+
+  let markSheet: ReportSpec | null = null
+  let subjAnalysis: ReportSpec | null = null
+  if (exam && subjects.length > 0 && scored.length > 0) {
+    markSheet = {
+      title: 'Consolidated mark sheet',
+      subtitle: `${exam.name} · subject-wise marks & totals.`,
+      columns: ['Admission', 'Student', 'Class', ...subjects, 'Total', '%'],
+      align: ['l', 'l', 'l', ...subjects.map(() => 'r' as const), 'r', 'r'],
+      summary: [
+        { label: 'Exam', value: exam.name },
+        { label: 'Students', value: String(scored.length) },
+        { label: 'Max marks', value: String(totalMax) },
+      ],
+      rows: scored.map((s) => {
+        const vals = subjects.map((sub) => markOf(s.id, sub) ?? 0)
+        const total = vals.reduce((a, b) => a + b, 0)
+        const pct = totalMax > 0 ? Math.round((total / totalMax) * 1000) / 10 : 0
+        return [s.adm, s.name, s.cls, ...vals, total, pct]
+      }),
+    }
+    subjAnalysis = {
+      title: 'Subject analysis',
+      subtitle: `${exam.name} · mean, highest & lowest per subject.`,
+      columns: ['Subject', 'Students', 'Mean', 'Highest', 'Lowest', 'Max marks'],
+      align: ['l', 'r', 'r', 'r', 'r', 'r'],
+      chartTitle: 'Mean marks by subject',
+      chart: subjects.map((sub) => {
+        const ms = scored.map((s) => markOf(s.id, sub)).filter((m): m is number => m != null)
+        return { label: sub, value: ms.length ? Math.round((ms.reduce((a, b) => a + b, 0) / ms.length) * 10) / 10 : 0 }
+      }),
+      rows: subjects.map((sub) => {
+        const ms = scored.map((s) => markOf(s.id, sub)).filter((m): m is number => m != null)
+        const n = ms.length
+        return [
+          sub, n,
+          n ? Math.round((ms.reduce((a, b) => a + b, 0) / n) * 10) / 10 : 0,
+          n ? Math.max(...ms) : 0,
+          n ? Math.min(...ms) : 0,
+          maxBySubject.get(sub) || 0,
+        ]
+      }),
+    }
+  }
+
+  const perf: ReportSpec = {
+    title: 'Class performance summary',
+    subtitle: 'Strength & average attendance per class & section.',
+    columns: ['Class', 'Students', 'Boys', 'Girls', 'Avg attendance %'],
+    align: ['l', 'r', 'r', 'r', 'r'],
+    summary: [
+      { label: 'Classes', value: String(classes.length) },
+      { label: 'Students', value: String(students.length) },
+    ],
+    chartTitle: 'Average attendance by class (%)',
+    chart: classes.map(([cls, list]) => ({ label: cls, value: avgOf(list.map((s) => s.attendance || 0)) })),
+    rows: classes.map(([cls, list]) => [
+      cls, list.length,
+      list.filter((s) => s.gender === 'M').length,
+      list.filter((s) => s.gender === 'F').length,
+      avgOf(list.map((s) => s.attendance || 0)),
+    ]),
+  }
+  const weak = students.filter((s) => (s.attendance ?? 100) < 75).sort((a, b) => a.attendance - b.attendance)
+  const weakSpec: ReportSpec = {
+    title: 'Weak-student tracker',
+    subtitle: 'Students below 75% attendance flagged for remedial follow-up.',
+    columns: ['Admission', 'Student', 'Class', 'Attendance %', 'Fee status'],
+    align: ['l', 'l', 'l', 'r', 'l'],
+    summary: [{ label: 'Flagged', value: String(weak.length) }],
+    rows: weak.map((s) => [s.adm, s.name, s.cls, s.attendance, s.feeStatus]),
+  }
+  return [
+    { name: 'Consolidated mark sheet', desc: markSheet ? markSheet.subtitle! : 'Subject-wise marks & grades — no exam marks entered yet.', spec: markSheet },
+    { name: 'Class performance summary', desc: perf.subtitle!, spec: perf },
+    { name: 'Weak-student tracker', desc: weakSpec.subtitle!, spec: weakSpec },
+    { name: 'Subject analysis', desc: subjAnalysis ? subjAnalysis.subtitle! : 'Mean, highest & lowest per subject — no exam marks entered yet.', spec: subjAnalysis },
+  ]
+}
+
+function attendanceReports(students: Student[], teacherRows: Teacher[], staffRows: Staff[]): RptRow[] {
+  const summarySpec: ReportSpec = {
+    title: 'Student attendance summary',
+    subtitle: 'Per-student attendance % for the period.',
+    columns: ['Admission', 'Student', 'Class', 'Attendance %', 'Status'],
+    align: ['l', 'l', 'l', 'r', 'l'],
+    rows: students.map((s) => [s.adm, s.name, s.cls, s.attendance, s.status]),
+  }
+  const classes = groupByClass(students)
+  const overview: ReportSpec = {
+    title: 'Class attendance overview',
+    subtitle: 'Average attendance rolled up per class.',
+    columns: ['Class', 'Students', 'Avg attendance %'],
+    align: ['l', 'r', 'r'],
+    chartTitle: 'Average attendance by class (%)',
+    chart: classes.map(([c, l]) => ({ label: c, value: avgOf(l.map((s) => s.attendance || 0)) })),
+    rows: classes.map(([c, l]) => [c, l.length, avgOf(l.map((s) => s.attendance || 0))]),
+  }
+  const chronic = students.filter((s) => (s.attendance ?? 100) < 75).sort((a, b) => a.attendance - b.attendance)
+  const chronicSpec: ReportSpec = {
+    title: 'Chronic absentee list',
+    subtitle: 'Students under 75% attendance — contact guardians.',
+    columns: ['Admission', 'Student', 'Class', 'Attendance %', 'Guardian', 'Phone'],
+    align: ['l', 'l', 'l', 'r', 'l', 'l'],
+    summary: [{ label: 'Students', value: String(chronic.length) }],
+    rows: chronic.map((s) => [s.adm, s.name, s.cls, s.attendance, s.guardian, s.phone]),
+  }
+  const staffSpec: ReportSpec = {
+    title: 'Staff attendance report',
+    subtitle: 'Teaching & non-teaching staff attendance.',
+    columns: ['Name', 'Type', 'Role / Dept', 'Attendance %', 'Status'],
+    align: ['l', 'l', 'l', 'r', 'l'],
+    summary: [{ label: 'Teachers', value: String(teacherRows.length) }, { label: 'Staff', value: String(staffRows.length) }],
+    rows: [
+      ...teacherRows.map((t) => [t.name, 'Teacher', t.desig || t.dept, t.attendance, t.status] as (string | number)[]),
+      ...staffRows.map((s) => [s.name, 'Staff', s.role || s.dept, s.attendance, s.status] as (string | number)[]),
+    ],
+  }
+  return [
+    { name: 'Student attendance summary', desc: summarySpec.subtitle!, spec: summarySpec },
+    { name: 'Class attendance overview', desc: overview.subtitle!, spec: overview },
+    { name: 'Chronic absentee list', desc: chronicSpec.subtitle!, spec: chronicSpec },
+    { name: 'Staff attendance report', desc: staffSpec.subtitle!, spec: staffSpec },
+  ]
+}
+
+function financeReports(summary: FeeReportSummary | undefined, invoices: FeeInvoice[], payroll: PayrollRun | undefined, cur: string): RptRow[] {
+  const collectionSpec: ReportSpec | null = summary ? {
+    title: 'Fee collection summary',
+    subtitle: 'Outstanding balance by class with term totals.',
+    columns: ['Class', 'Invoices', 'Outstanding'],
+    align: ['l', 'r', 'r'], money: [false, false, true],
+    summary: [
+      { label: 'Billed (term)', value: fmtMoney(summary.billedTerm, cur) },
+      { label: 'Collected', value: fmtMoney(summary.collectedTerm, cur) },
+      { label: 'Outstanding', value: fmtMoney(summary.outstanding, cur) },
+      { label: 'Collected %', value: `${summary.pct}%` },
+    ],
+    chartTitle: 'Outstanding by class',
+    chart: summary.byClass.map((c) => ({ label: c.label, value: c.value })),
+    chartMoney: true,
+    rows: summary.byClass.map((c) => [c.label, c.n, c.value]),
+  } : null
+  const due = invoices.filter((i) => (i.due || 0) > 0).sort((a, b) => b.due - a.due)
+  const dueSpec: ReportSpec = {
+    title: 'Outstanding dues register',
+    subtitle: 'Student-wise pending balances.',
+    columns: ['Admission', 'Student', 'Class', 'Term', 'Total', 'Paid', 'Due', 'Status'],
+    align: ['l', 'l', 'l', 'l', 'r', 'r', 'r', 'l'],
+    money: [false, false, false, false, true, true, true, false],
+    summary: [
+      { label: 'Defaulters', value: String(due.length) },
+      { label: 'Total due', value: fmtMoney(due.reduce((s, i) => s + (i.due || 0), 0), cur) },
+    ],
+    rows: due.map((i) => [i.studentAdm || '', i.studentName, i.cls, i.term, i.total, i.paid, i.due, i.status]),
+  }
+  const modeSpec: ReportSpec | null = summary ? {
+    title: 'Daily collection report',
+    subtitle: 'Collections grouped by payment mode.',
+    columns: ['Payment mode', 'Amount'],
+    align: ['l', 'r'], money: [false, true],
+    summary: [
+      { label: 'Collected today', value: fmtMoney(summary.collectedToday, cur) },
+      { label: 'Collected (term)', value: fmtMoney(summary.collectedTerm, cur) },
+    ],
+    chartTitle: 'Collection by payment mode',
+    chartKind: 'pie',
+    chart: summary.byMode.map((m) => ({ label: m.label, value: m.value })),
+    chartMoney: true,
+    rows: summary.byMode.map((m) => [m.label, m.value]),
+  } : null
+  const payrollSpec: ReportSpec | null = payroll ? {
+    title: 'Payroll register',
+    subtitle: `Gross, deductions & net pay · ${periodLabel(payroll.period)}.`,
+    columns: ['Name', 'Role', 'Department', 'Gross', 'Deductions', 'Net'],
+    align: ['l', 'l', 'l', 'r', 'r', 'r'], money: [false, false, false, true, true, true],
+    summary: [
+      { label: 'People', value: String(payroll.staffCount) },
+      { label: 'Gross', value: fmtMoney(payroll.gross, cur) },
+      { label: 'Net payable', value: fmtMoney(payroll.net, cur) },
+    ],
+    chartTitle: 'Net pay by person',
+    chart: payroll.lines.map((l) => ({ label: l.name, value: l.net })),
+    chartMoney: true,
+    rows: payroll.lines.map((l) => [
+      l.name,
+      l.role || (l.personType === 'leadership' ? 'Leadership' : l.personType),
+      l.dept || '', l.gross, l.deductions, l.net,
+    ]),
+  } : null
+  return [
+    { name: 'Fee collection summary', desc: 'Collected, pending & outstanding by class.', spec: collectionSpec },
+    { name: 'Outstanding dues register', desc: dueSpec.subtitle!, spec: dueSpec },
+    { name: 'Daily collection report', desc: 'Receipts by mode (cash / online / cheque).', spec: modeSpec },
+    { name: 'Payroll register', desc: 'Gross, deductions & net pay for all staff.', spec: payrollSpec },
+  ]
+}
+
+function operationsReports(fleet: FleetBus[]): RptRow[] {
+  const manifest: ReportSpec = {
+    title: 'Transport route manifest',
+    subtitle: 'Buses, routes, drivers, stops & students riding.',
+    columns: ['Bus', 'Route', 'Driver', 'Stops', 'Riding', 'Status'],
+    align: ['l', 'l', 'l', 'r', 'r', 'l'],
+    summary: [
+      { label: 'Vehicles', value: String(fleet.length) },
+      { label: 'Students riding', value: String(fleet.reduce((n, b) => n + b.studentsRiding, 0)) },
+    ],
+    chartTitle: 'Students riding by bus',
+    chart: fleet.map((b) => ({ label: b.busNo, value: b.studentsRiding })),
+    rows: fleet.map((b) => [b.busNo, b.routeName || '—', b.driver || '—', b.stopCount, b.studentsRiding, FLEET_STATUS[b.status] || b.status]),
+  }
+  return [
+    { name: 'Transport route manifest', desc: manifest.subtitle!, spec: manifest },
+    { name: 'Library circulation report', desc: 'Issued, returned & overdue titles — no data source yet.', spec: null },
+    { name: 'Inventory & assets', desc: 'Stock & asset allocation — no data source yet.', spec: null },
+    { name: 'Visitor & gate log', desc: 'Visitor entry / exit — no data source yet.', spec: null },
+  ]
+}
+
 function SchoolReports() {
+  const app = useApp()
   const toast = useToast()
   const [cat, setCat] = useState('academic')
   const [period, setPeriod] = useState(PERIODS[0])
+  const cur = app.school.currency
 
-  const active = REPORT_CATEGORIES.find((c) => c.value === cat) ?? REPORT_CATEGORIES[0]
+  const { data: students = [] } = useStudents()
+  const { data: teacherRows = [] } = useTeachers()
+  const { data: staffRows = [] } = useStaff()
+  const { data: feeSummary } = useFeeReportSummary()
+  const { data: invoices = [] } = useFeeInvoices()
+  const { data: payroll } = usePayrollPreview(currentPeriod(), cat === 'finance')
+  const { data: fleet = [] } = useTransportFleet(cat === 'operations')
+  const { data: exams = [] } = useExams()
+  const academicExam = useMemo(() => pickExam(exams), [exams])
+  const examId = cat === 'academic' ? (academicExam?.id ?? null) : null
+  const { data: papers = [] } = useExamPapers(examId)
+  const { data: marksMap = {} } = useExamMarksMap(examId)
 
-  const exportRow = (name: string) =>
-    toast.success('Exported .xlsx', `${name} (${period}) downloaded.`)
+  const meta: ReportMeta = useMemo(() => ({
+    schoolName: app.school.name,
+    schoolCity: app.school.city,
+    logoUrl: app.school.logoUrl,
+    logoInitials: app.school.logo,
+    brandColor: app.school.color,
+    currency: cur,
+    period,
+  }), [app.school, cur, period])
+
+  const categories: RptCat[] = useMemo(() => [
+    { value: 'academic', label: 'Academic', icon: 'cap', reports: academicReports(students, academicExam, papers, marksMap) },
+    { value: 'attendance', label: 'Attendance', icon: 'check', reports: attendanceReports(students, teacherRows, staffRows) },
+    { value: 'finance', label: 'Finance', icon: 'rupee', reports: financeReports(feeSummary, invoices, payroll, cur) },
+    { value: 'operations', label: 'Operations', icon: 'box', reports: operationsReports(fleet) },
+  ], [students, academicExam, papers, marksMap, teacherRows, staffRows, feeSummary, invoices, payroll, fleet, cur])
+
+  const active = categories.find((c) => c.value === cat) ?? categories[0]
+
+  const doExcel = async (r: RptRow) => {
+    if (!r.spec) return
+    try {
+      await downloadReportXlsx(r.spec, meta)
+      toast.success('Exported .xlsx', `${r.name} (${period}) downloaded with chart & logo.`)
+    } catch {
+      downloadReportXls(r.spec, meta)
+      toast.success('Exported .xls', `${r.name} (${period}) downloaded — opens in Excel.`)
+    }
+  }
+  const doPdf = (r: RptRow) => {
+    if (r.spec) openReportPdf(r.spec, meta)
+  }
 
   return (
     <div>
@@ -116,32 +398,34 @@ function SchoolReports() {
       />
       <Tabs
         value={cat} onChange={setCat}
-        tabs={REPORT_CATEGORIES.map((c) => ({ value: c.value, label: c.label, icon: c.icon, count: c.reports.length }))}
+        tabs={categories.map((c) => ({ value: c.value, label: c.label, icon: c.icon, count: c.reports.filter((r) => r.spec).length }))}
       />
       <div style={{ marginTop: 16 }}>
         <Card pad={false}>
           <CardHead
             title={`${active.label} reports`}
-            sub={`${active.reports.length} reports · ${period}`}
+            sub={`${active.reports.filter((r) => r.spec).length} of ${active.reports.length} ready · ${period}`}
             icon={active.icon}
           />
-          {active.reports.length === 0
-            ? <div style={{ padding: 8 }}><Empty icon="doc" title="No reports" body="No reports available for this category." /></div>
-            : (
-              <div className="col">
-                {active.reports.map((r) => (
-                  <div key={r.name} className="row ai-center gap12 wrap" style={{ padding: '14px 16px', borderTop: '1px solid var(--border)' }}>
-                    <span className="sm-card-ic"><Icon name="doc" size={16} /></span>
-                    <div style={{ flex: 1, minWidth: 220 }}>
-                      <div className="fw6">{r.name}</div>
-                      <div className="t-xs muted">{r.desc}</div>
-                    </div>
-                    <Badge tone="neutral" icon="calendar">{period}</Badge>
-                    <Btn variant="secondary" size="sm" icon="download" onClick={() => exportRow(r.name)}>Export Excel</Btn>
+          <div className="col">
+            {active.reports.map((r) => {
+              const count = r.spec ? r.spec.rows.length : null
+              return (
+                <div key={r.name} className="row ai-center gap12 wrap" style={{ padding: '14px 16px', borderTop: '1px solid var(--border)' }}>
+                  <span className="sm-card-ic"><Icon name="doc" size={16} /></span>
+                  <div style={{ flex: 1, minWidth: 220 }}>
+                    <div className="fw6">{r.name}</div>
+                    <div className="t-xs muted">{r.desc}</div>
                   </div>
-                ))}
-              </div>
-            )}
+                  {r.spec
+                    ? <Badge tone="neutral" icon="doc">{count} record{count === 1 ? '' : 's'}</Badge>
+                    : <Badge tone="warning" soft>No data source</Badge>}
+                  <Btn variant="secondary" size="sm" icon="download" disabled={!r.spec} onClick={() => doExcel(r)}>Excel</Btn>
+                  <Btn variant="secondary" size="sm" icon="doc" disabled={!r.spec} onClick={() => doPdf(r)}>PDF</Btn>
+                </div>
+              )
+            })}
+          </div>
         </Card>
       </div>
     </div>
@@ -564,7 +848,7 @@ const roleTone = (r: Role): BadgeTone =>
   r === 'principal' ? 'success' : r === 'vice_principal' ? 'brand'
     : r === 'admin' || r === 'owner' ? 'info' : 'neutral'
 
-/* ---------- Users (built from the teachers + staff sample) ---------- */
+/* ---------- Users ---------- */
 interface SchoolUser {
   id: string
   name: string
@@ -575,41 +859,18 @@ interface SchoolUser {
   last: string
 }
 
-const LAST_SEEN = ['Just now', '8m ago', '40m ago', '2h ago', 'Yesterday', '3d ago']
-const slug = (name: string) => name.toLowerCase().replace(/[^a-z]+/g, '.')
-
-const SCHOOL_USERS: SchoolUser[] = (() => {
-  const out: SchoolUser[] = []
-  /* leadership comes off the top of the (rating-sorted) teacher list */
-  const leaders: Role[] = ['admin', 'principal', 'vice_principal']
-  teachers.slice(0, 3).forEach((t, i) => {
-    out.push({ id: t.id, name: t.name, email: t.email, role: leaders[i], hue: t.avatarHue, status: 'active', last: LAST_SEEN[i] })
-  })
-  /* teaching staff */
-  teachers.slice(3, 9).forEach((t, i) => {
-    out.push({
-      id: t.id, name: t.name, email: t.email, role: 'teacher', hue: t.avatarHue,
-      status: t.status === 'inactive' ? 'suspended' : 'active', last: LAST_SEEN[i % LAST_SEEN.length],
-    })
-  })
-  /* office staff get admin-level data-entry access */
-  staff.slice(0, 3).forEach((s, i) => {
-    out.push({
-      id: s.id, name: s.name, email: `${slug(s.name)}@school.edu`, role: 'admin', hue: s.avatarHue,
-      status: i === 2 ? 'invited' : 'active', last: i === 2 ? 'Pending' : LAST_SEEN[(i + 2) % LAST_SEEN.length],
-    })
-  })
-  return out
-})()
-
 const userStatus: Record<SchoolUser['status'], { tone: BadgeTone; label: string }> = {
   active: { tone: 'success', label: 'Active' },
   invited: { tone: 'warning', label: 'Invited' },
   suspended: { tone: 'danger', label: 'Suspended' },
 }
 
+/** Highest-privilege first — an Owner who also holds admin should read as Owner. */
+const ROLE_RANK: Role[] = ['owner', 'admin', 'principal', 'vice_principal', 'teacher', 'staff']
+
 function mapDto(u: SchoolUserDto, i: number): SchoolUser {
-  const primary = u.roles[0] ? fromApiRole(u.roles[0]) : 'teacher'
+  const mapped = u.roles.map((r) => fromApiRole(r))
+  const primary = ROLE_RANK.find((r) => mapped.includes(r)) ?? mapped[0] ?? 'teacher'
   const email = u.email ?? '—'
   return {
     id: u.id,
@@ -1319,7 +1580,9 @@ function AuditTab() {
 function IdentityScreen() {
   const [tab, setTab] = useState('users')
   const [inviteCount, setInviteCount] = useState(0)
+  const [userCount, setUserCount] = useState(0)
   useEffect(() => { void listInvitations().then((rows) => setInviteCount(rows.filter((r) => r.status === 'pending' || r.status === 'expired').length)).catch(() => {}) }, [tab])
+  useEffect(() => { void listSchoolUsers().then((rows) => setUserCount(rows.length)).catch(() => {}) }, [tab])
   return (
     <div>
       <PageHead
@@ -1329,7 +1592,7 @@ function IdentityScreen() {
       <Tabs
         value={tab} onChange={setTab}
         tabs={[
-          { value: 'users', label: 'Users', icon: 'users', count: SCHOOL_USERS.length },
+          { value: 'users', label: 'Users', icon: 'users', count: userCount },
           { value: 'roles', label: 'Roles & permissions', icon: 'lock' },
           { value: 'invites', label: 'Invitations', icon: 'inbox', count: inviteCount },
           { value: 'audit', label: 'Audit log', icon: 'clock' },
