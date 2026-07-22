@@ -15,7 +15,7 @@ interface AuditEntryWire {
   actor_name: string | null
   action: string
   target: string | null
-  at: string
+  time: string
 }
 
 interface AuditEnvelope {
@@ -43,7 +43,7 @@ export async function listAuditLog(params: AuditParams = {}): Promise<{ data: Au
   })
   return {
     data: (env.data ?? []).map((r) => ({
-      id: r.id, actorId: r.actor_id, actorName: r.actor_name, action: r.action, target: r.target, at: r.at,
+      id: r.id, actorId: r.actor_id, actorName: r.actor_name, action: r.action, target: r.target, at: r.time,
     })),
     nextCursor: env.next_cursor,
   }

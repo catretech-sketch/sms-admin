@@ -10,7 +10,7 @@ beforeEach(() => { localStorage.clear(); vi.restoreAllMocks() })
 describe('listAuditLog', () => {
   it('GETs /school/audit and maps the envelope', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
-      data: [{ id: 'A-1', actor_id: 'U-1', actor_name: 'Ravi', action: 'user.role_changed', target: 'U-2', at: '2026-07-22T10:00:00Z' }],
+      data: [{ id: 'A-1', actor_id: 'U-1', actor_name: 'Ravi', action: 'user.role_changed', target: 'U-2', time: '2026-07-22T10:00:00Z' }],
       next_cursor: '2026-07-22T10:00:00Z',
     }))
     vi.stubGlobal('fetch', fetchMock)
