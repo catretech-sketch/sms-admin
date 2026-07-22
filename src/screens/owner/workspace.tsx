@@ -16,7 +16,7 @@ import {
 } from '@/components/ui'
 import { SchoolPhoto } from '@/components/SchoolMark'
 import { EditSchoolProfileModal } from '@/components/EditSchoolProfileModal'
-import { ROLES, ROLE_META, PERMS } from '@/data/mockDb'
+import { ROLE_META, PERMS } from '@/data/mockDb'
 import type { Role, GateRole, Cap, School } from '@/types'
 import { usePortfolioSchools, useSwitchSchool } from '@/api/hooks/useOwner'
 import { clientToSchool } from '@/api/ownerMap'
@@ -25,7 +25,8 @@ import {
   listSchoolUsers, setUserRoles, getUserPermissions, setUserPermissions,
   overridesFromApi, fromApiRole, type SchoolUserDto,
 } from '@/api/users'
-import { useRoleTemplate } from '@/api/hooks/useRoleTemplates'
+import { useRoleTemplate, useSetRoleTemplate } from '@/api/hooks/useRoleTemplates'
+import type { RoleTemplateOverride } from '@/api/roleTemplates'
 import { caps, effectiveCaps, cellState, overrideCount, NEXT_CELL_STATE } from '@/lib/gating'
 import type { UserOverrides, CellState } from '@/types'
 import { switchSchool } from '@/api/mySchools'
@@ -620,11 +621,41 @@ function Kard({ icon, label, value, tone }: { icon: string; label: string; value
    ============================================================ */
 type Matrix = Record<string, Record<GateRole, Cap[]>>
 
+const OWNER_CONSOLE_ROLES: GateRole[] = ['admin', 'principal', 'vice_principal', 'teacher']
+
 function clonePerms(): Matrix {
   const out: Matrix = {}
   for (const mod of Object.keys(PERMS)) {
     out[mod] = { admin: [], principal: [], vice_principal: [], teacher: [], staff: [] }
-    for (const r of ROLES) out[mod][r] = [...PERMS[mod][r]]
+    for (const r of OWNER_CONSOLE_ROLES) out[mod][r] = [...PERMS[mod][r]]
+  }
+  return out
+}
+
+function applyTenantOverrides(base: Matrix, tenantOv: RoleTemplateOverride[]): Matrix {
+  const out: Matrix = {}
+  for (const mod of Object.keys(base)) {
+    out[mod] = { admin: [...base[mod].admin], principal: [...base[mod].principal], vice_principal: [...base[mod].vice_principal], teacher: [...base[mod].teacher], staff: [] }
+  }
+  for (const t of tenantOv) {
+    if (t.role === 'staff') continue
+    const row = out[t.module]?.[t.role]
+    if (!row) continue
+    if (t.effect === 'grant' && !row.includes(t.cap)) row.push(t.cap)
+    if (t.effect === 'revoke') out[t.module][t.role] = row.filter((c) => c !== t.cap)
+  }
+  return out
+}
+
+function matrixToOverrides(matrix: Matrix): RoleTemplateOverride[] {
+  const out: RoleTemplateOverride[] = []
+  for (const mod of Object.keys(matrix)) {
+    for (const role of OWNER_CONSOLE_ROLES) {
+      for (const cap of matrix[mod][role]) out.push({ role, module: mod, cap, effect: 'grant' })
+      for (const cap of PERMS[mod][role]) {
+        if (!matrix[mod][role].includes(cap)) out.push({ role, module: mod, cap, effect: 'revoke' })
+      }
+    }
   }
   return out
 }
@@ -654,7 +685,18 @@ function CapChip({ cap, active, locked, onClick }: { cap: Cap; active: boolean; 
 
 function RolesTab({ schoolId }: { schoolId: string }) {
   const toast = useToast()
+  const templateQ = useRoleTemplate()
+  const setTemplate = useSetRoleTemplate()
   const [matrix, setMatrix] = useState<Matrix>(clonePerms)
+  const [loadedFromServer, setLoadedFromServer] = useState(false)
+
+  useEffect(() => { setLoadedFromServer(false) }, [schoolId])
+  useEffect(() => {
+    if (schoolId && templateQ.data && !loadedFromServer) {
+      setMatrix(applyTenantOverrides(clonePerms(), templateQ.data))
+      setLoadedFromServer(true)
+    }
+  }, [schoolId, templateQ.data, loadedFromServer])
 
   if (!schoolId) return <SelectSchoolPrompt />
 
@@ -666,8 +708,29 @@ function RolesTab({ schoolId }: { schoolId: string }) {
     })
   }
 
-  const reset = () => { setMatrix(clonePerms()); toast.info('Matrix reset', 'Reverted to the saved permission set.') }
-  const save = () => toast.success('Permissions saved', 'Role access updated across all schools.')
+  const reset = () => {
+    setMatrix(applyTenantOverrides(clonePerms(), templateQ.data ?? []))
+    toast.info('Matrix reset', 'Reverted to the saved permission set.')
+  }
+
+  const save = () => {
+    setTemplate.mutate(matrixToOverrides(matrix), {
+      onSuccess: () => toast.success('Permissions saved', 'Role access updated for this school.'),
+      onError: (e) => toast.danger('Could not save', e instanceof ApiError ? e.message : 'Try again.'),
+    })
+  }
+
+  if (templateQ.isLoading) return <Card><Spinner /></Card>
+  if (templateQ.isError) {
+    return (
+      <Card>
+        <Empty icon="alert" title="Could not load permissions" body="Try again." />
+        <div className="row jc-center" style={{ marginTop: 12 }}>
+          <Btn variant="secondary" onClick={() => templateQ.refetch()}>Retry</Btn>
+        </div>
+      </Card>
+    )
+  }
 
   return (
     <div className="col gap16">
@@ -677,8 +740,8 @@ function RolesTab({ schoolId }: { schoolId: string }) {
           <div style={{ flex: 1, minWidth: 200 }}>
             <div className="fw7">Owner is a super-role</div>
             <div className="t-sm muted">
-              Owner sits above every school and has full access to all modules. It grants the four
-              school roles their access below and <strong>cannot itself be restricted</strong>.
+              Owner sits above every school and has full access to all modules. It grants CRM
+              roles their access below and <strong>cannot itself be restricted</strong>.
             </div>
           </div>
           <div className="row gap6 wrap">
@@ -695,7 +758,9 @@ function RolesTab({ schoolId }: { schoolId: string }) {
           action={
             <div className="row gap8">
               <Btn variant="ghost" size="sm" icon="refresh" onClick={reset}>Reset</Btn>
-              <Btn variant="primary" size="sm" icon="check" onClick={save}>Save changes</Btn>
+              <Btn variant="primary" size="sm" icon="check" disabled={setTemplate.isPending} onClick={save}>
+                {setTemplate.isPending ? 'Saving…' : 'Save changes'}
+              </Btn>
             </div>
           }
         />
@@ -709,7 +774,7 @@ function RolesTab({ schoolId }: { schoolId: string }) {
                     <Icon name="shield" size={13} /> Owner
                   </span>
                 </th>
-                {ROLES.map((r) => <th key={r} className="ta-center">{ROLE_META[r].label}</th>)}
+                {OWNER_CONSOLE_ROLES.map((r) => <th key={r} className="ta-center">{ROLE_META[r].label}</th>)}
               </tr>
             </thead>
             <tbody>
@@ -725,7 +790,7 @@ function RolesTab({ schoolId }: { schoolId: string }) {
                       <span style={{ color: 'var(--text-2)', alignSelf: 'center', marginLeft: 2 }}><Icon name="lock" size={13} /></span>
                     </div>
                   </td>
-                  {ROLES.map((r) => (
+                  {OWNER_CONSOLE_ROLES.map((r) => (
                     <td key={r} className="ta-center">
                       <div className="row gap4" style={{ justifyContent: 'center' }}>
                         {CAPS.map((c) => (

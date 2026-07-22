@@ -42,6 +42,15 @@ vi.mock('@/api/mySchools', async (importOriginal) => {
   }
 })
 
+vi.mock('@/api/roleTemplates', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/roleTemplates')>()
+  return {
+    ...actual,
+    getRoleTemplate: vi.fn().mockResolvedValue([]),
+    setRoleTemplate: vi.fn().mockResolvedValue([{ role: 'teacher', module: 'fees', cap: 'E', effect: 'grant' }]),
+  }
+})
+
 const OwnerUsers = workspaceScreens['owner.users']
 
 afterEach(cleanup)
@@ -123,6 +132,19 @@ describe('TeamTab — real data', () => {
     // it read-only (Badge), never a <select> that would default to a CRM role like Admin.
     expect(rowScope.queryByRole('combobox')).toBeNull()
     expect(rowScope.getAllByText('Teacher').length).toBeGreaterThan(0)
+  })
+})
+
+describe('RolesTab — real data, staff dropped', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('does not render a Staff column', async () => {
+    const { container } = renderScreen()
+    const picker = await waitFor(() => within(container).getByLabelText(/select school/i))
+    fireEvent.change(picker, { target: { value: '11111111-1111-1111-1111-111111111111' } })
+    fireEvent.click(within(container).getByRole('button', { name: /roles & permissions/i }))
+    await waitFor(() => expect(within(container).getByText('Teacher')).toBeInTheDocument())
+    expect(within(container).queryByText('Staff')).toBeNull()
   })
 })
 
