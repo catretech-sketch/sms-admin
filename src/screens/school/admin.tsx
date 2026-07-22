@@ -31,6 +31,8 @@ import {
   type SchoolUserDto,
 } from '@/api/users'
 import { ApiError } from '@/api/client'
+import { listInvitations, type Invitation } from '@/api/invitations'
+import { useResendInvitation, useRevokeInvitation } from '@/api/hooks/useInvitationMutations'
 import { useRoleTemplate, useSetRoleTemplate } from '@/api/hooks/useRoleTemplates'
 import type { RoleTemplateOverride } from '@/api/roleTemplates'
 import { useAuditLog } from '@/api/hooks/useAudit'
@@ -1153,46 +1155,88 @@ function RolesTab() {
 }
 
 /* ---------- Invitations ---------- */
-interface Invite { id: string; email: string; role: Role; sent: string; expires: string }
-const INITIAL_INVITES: Invite[] = [
-  { id: 'INV-01', email: 'neha.joshi@school.edu', role: 'teacher', sent: '2 days ago', expires: 'in 5 days' },
-  { id: 'INV-02', email: 'sahil.verma@school.edu', role: 'admin', sent: '4 days ago', expires: 'in 3 days' },
-  { id: 'INV-03', email: 'priya.nair@school.edu', role: 'vice_principal', sent: '6 days ago', expires: 'in 1 day' },
-]
-
-function InvitationsTab() {
+export function InvitationsTab() {
   const toast = useToast()
-  const [invites, setInvites] = useState<Invite[]>(INITIAL_INVITES)
+  const [invites, setInvites] = useState<Invitation[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+  const resend = useResendInvitation()
+  const revoke = useRevokeInvitation()
 
-  const resend = (inv: Invite) => toast.success('Invitation resent', `A fresh link was emailed to ${inv.email}.`)
-  const revoke = (inv: Invite) => {
-    setInvites((list) => list.filter((i) => i.id !== inv.id))
-    toast.danger('Invitation revoked', `${inv.email} can no longer join.`)
+  const reload = async () => {
+    setLoading(true)
+    setError(false)
+    try {
+      setInvites(await listInvitations())
+    } catch (e) {
+      toast.danger('Could not load invitations', e instanceof ApiError ? e.message : 'Try again.')
+      setError(true)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { void reload() }, [])
+
+  const statusTone = (s: Invitation['status']): 'neutral' | 'success' | 'danger' =>
+    s === 'accepted' ? 'success' : s === 'revoked' || s === 'expired' ? 'danger' : 'neutral'
+
+  const doResend = (inv: Invitation) => {
+    resend.mutate(inv.id, {
+      onSuccess: () => {
+        toast.success('Invitation resent', `A fresh link was emailed to ${inv.email ?? inv.phone}.`)
+        void reload()
+      },
+      onError: (e) => toast.danger('Could not resend', e instanceof ApiError ? e.message : 'Try again.'),
+    })
+  }
+
+  const doRevoke = (inv: Invitation) => {
+    revoke.mutate(inv.id, {
+      onSuccess: () => {
+        toast.danger('Invitation revoked', `${inv.email ?? inv.phone} can no longer join.`)
+        void reload()
+      },
+      onError: (e) => toast.danger('Could not revoke', e instanceof ApiError ? e.message : 'Try again.'),
+    })
   }
 
   return (
     <Card pad={false}>
       <CardHead title="Pending invitations" sub={`${invites.length} awaiting acceptance`} icon="inbox" />
-      {invites.length === 0
-        ? <div style={{ padding: 8 }}><Empty icon="inbox" title="No pending invitations" body="Invite staff from the Users tab." /></div>
-        : (
-          <div className="col">
-            {invites.map((inv) => (
-              <div key={inv.id} className="row ai-center gap12 wrap" style={{ padding: '14px 16px', borderTop: '1px solid var(--border)' }}>
-                <Avatar name={inv.email} size={34} />
-                <div style={{ flex: 1, minWidth: 200 }}>
-                  <div className="fw6">{inv.email}</div>
-                  <div className="t-xs muted"><Badge tone={roleTone(inv.role)}>{ROLE_META[inv.role].label}</Badge></div>
-                </div>
-                <div className="t-xs muted" style={{ minWidth: 120 }}>Sent {inv.sent} · expires {inv.expires}</div>
-                <div className="row gap6">
-                  <Btn variant="secondary" size="sm" icon="refresh" onClick={() => resend(inv)}>Resend</Btn>
-                  <Btn variant="ghost" size="sm" icon="trash" onClick={() => revoke(inv)}>Revoke</Btn>
-                </div>
+      {loading
+        ? <div style={{ padding: 16 }} className="t-sm muted">Loading invitations…</div>
+        : error
+          ? <div style={{ padding: 16 }} className="t-sm muted">Could not load invitations.</div>
+          : invites.length === 0
+            ? <div style={{ padding: 8 }}><Empty icon="inbox" title="No pending invitations" body="Invite staff from the Users tab." /></div>
+            : (
+              <div className="col">
+                {invites.map((inv) => (
+                  <div key={inv.id} className="row ai-center gap12 wrap" style={{ padding: '14px 16px', borderTop: '1px solid var(--border)' }}>
+                    <Avatar name={inv.email ?? inv.phone ?? '?'} size={34} />
+                    <div style={{ flex: 1, minWidth: 200 }}>
+                      <div className="fw6">{inv.email ?? inv.phone}</div>
+                      <div className="t-xs muted row ai-center gap6">
+                        <Badge tone="neutral">{inv.roleLabel}</Badge>
+                        <Badge tone={statusTone(inv.status)}>{inv.status}</Badge>
+                      </div>
+                    </div>
+                    <div className="t-xs muted" style={{ minWidth: 160 }}>
+                      Sent {new Date(inv.invitedAt).toLocaleDateString()} · expires {new Date(inv.expiresAt).toLocaleDateString()}
+                    </div>
+                    <div className="row gap6">
+                      {inv.status !== 'accepted' && inv.status !== 'revoked' && (
+                        <Btn variant="secondary" size="sm" icon="refresh" onClick={() => doResend(inv)}>Resend</Btn>
+                      )}
+                      {inv.status === 'pending' && (
+                        <Btn variant="ghost" size="sm" icon="trash" onClick={() => doRevoke(inv)}>Revoke</Btn>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
+            )}
     </Card>
   )
 }
@@ -1265,6 +1309,8 @@ function AuditTab() {
 
 function IdentityScreen() {
   const [tab, setTab] = useState('users')
+  const [inviteCount, setInviteCount] = useState(0)
+  useEffect(() => { void listInvitations().then((rows) => setInviteCount(rows.length)).catch(() => {}) }, [tab])
   return (
     <div>
       <PageHead
@@ -1276,7 +1322,7 @@ function IdentityScreen() {
         tabs={[
           { value: 'users', label: 'Users', icon: 'users', count: SCHOOL_USERS.length },
           { value: 'roles', label: 'Roles & permissions', icon: 'lock' },
-          { value: 'invites', label: 'Invitations', icon: 'inbox', count: INITIAL_INVITES.length },
+          { value: 'invites', label: 'Invitations', icon: 'inbox', count: inviteCount },
           { value: 'audit', label: 'Audit log', icon: 'clock' },
         ]}
       />
