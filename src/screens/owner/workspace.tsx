@@ -515,22 +515,30 @@ function TeamTab({ schoolId, schools }: { schoolId: string; schools: School[] })
     { key: 'status', label: 'Status', align: 'center', sortValue: (u) => u.status, render: (u) => <Badge tone={u.status === 'active' ? 'success' : 'neutral'}>{u.status}</Badge> },
     {
       key: 'actions', label: '', align: 'right',
-      render: (u) => (
-        <div className="row gap6 jc-end">
-          <Btn variant="secondary" size="sm" icon="edit" onClick={() => { void openEditor(u) }}>Permissions</Btn>
-          <Select
-            options={assignableSchoolRoles(app.role).map((r) => ({ value: r, label: ROLE_META[r].label }))}
-            value={assignableSchoolRoles(app.role).includes(u.role) ? u.role : assignableSchoolRoles(app.role)[0]}
-            onChange={(e) => {
-              const role = e.target.value as Role
-              void setUserRoles(u.id, [role]).then(
-                () => { setRows((list) => list.map((x) => (x.id === u.id ? { ...x, role } : x))); toast.success('Role updated', `${ROLE_META[role].label} · ${u.name}`) },
-                (err) => toast.danger('Role update failed', err instanceof ApiError ? err.message : 'Try again.'),
-              )
-            }}
-          />
-        </div>
-      ),
+      render: (u) => {
+        const crmRoles = assignableSchoolRoles(app.role)
+        const isCrmRole = crmRoles.includes(u.role)
+        return (
+          <div className="row gap6 jc-end">
+            <Btn variant="secondary" size="sm" icon="edit" onClick={() => { void openEditor(u) }}>Permissions</Btn>
+            {isCrmRole ? (
+              <Select
+                options={crmRoles.map((r) => ({ value: r, label: ROLE_META[r].label }))}
+                value={u.role}
+                onChange={(e) => {
+                  const role = e.target.value as Role
+                  void setUserRoles(u.id, [role]).then(
+                    () => { setRows((list) => list.map((x) => (x.id === u.id ? { ...x, role } : x))); toast.success('Role updated', `${ROLE_META[role].label} · ${u.name}`) },
+                    (err) => toast.danger('Role update failed', err instanceof ApiError ? err.message : 'Try again.'),
+                  )
+                }}
+              />
+            ) : (
+              <Badge tone={roleTone(u.role)}>{ROLE_META[u.role].label}</Badge>
+            )}
+          </div>
+        )
+      },
     },
   ]
 

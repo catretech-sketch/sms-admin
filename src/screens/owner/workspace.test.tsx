@@ -111,6 +111,19 @@ describe('TeamTab — real data', () => {
     fireEvent.change(picker, { target: { value: '11111111-1111-1111-1111-111111111111' } })
     await waitFor(() => expect(within(container).getByText('neha@school.edu')).toBeInTheDocument())
   })
+
+  it('does not show an editable role select for a teacher row (non-CRM role)', async () => {
+    const { container } = renderScreen()
+    const picker = await waitFor(() => within(container).getByLabelText(/select school/i))
+    fireEvent.change(picker, { target: { value: '11111111-1111-1111-1111-111111111111' } })
+    const row = await waitFor(() => within(container).getByText('neha@school.edu').closest('tr'))
+    expect(row).not.toBeNull()
+    const rowScope = within(row as HTMLElement)
+    // The row's role is Teacher, which is not a CRM role — the actions cell must show
+    // it read-only (Badge), never a <select> that would default to a CRM role like Admin.
+    expect(rowScope.queryByRole('combobox')).toBeNull()
+    expect(rowScope.getAllByText('Teacher').length).toBeGreaterThan(0)
+  })
 })
 
 describe('scope helpers', () => {
