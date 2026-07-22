@@ -28,6 +28,9 @@ export const queryKeys = {
   roleTemplate: {
     all: ['roleTemplate'] as const,
   },
+  audit: {
+    list: (params: import('./audit').AuditParams = {}) => ['audit', 'list', params] as const,
+  },
   classes: {
     all: ['classes'] as const,
     subjects: (classId: string) => ['classes', 'subjects', classId] as const,
