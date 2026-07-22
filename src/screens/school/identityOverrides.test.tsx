@@ -63,6 +63,16 @@ vi.mock('@/api/audit', async (importOriginal) => {
   }
 })
 
+const listInvitationsMock = vi.fn(async () => [] as import('@/api/invitations').Invitation[])
+
+vi.mock('@/api/invitations', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/invitations')>()
+  return {
+    ...actual,
+    listInvitations: (...args: []) => listInvitationsMock(...args),
+  }
+})
+
 afterEach(cleanup)
 
 function renderScreen() {
