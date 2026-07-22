@@ -18,7 +18,7 @@ import { SchoolPhoto } from '@/components/SchoolMark'
 import { EditSchoolProfileModal } from '@/components/EditSchoolProfileModal'
 import { ROLES, ROLE_META, PERMS } from '@/data/mockDb'
 import type { Role, GateRole, Cap, School } from '@/types'
-import { usePortfolioSchools } from '@/api/hooks/useOwner'
+import { usePortfolioSchools, useSwitchSchool } from '@/api/hooks/useOwner'
 import { clientToSchool } from '@/api/ownerMap'
 import { inviteUser, assignableSchoolRoles } from '@/api/users'
 import { switchSchool } from '@/api/mySchools'
@@ -361,11 +361,10 @@ function OnboardPeopleModal({
   )
 }
 
-function TeamTab() {
+function TeamTab({ schoolId, schools }: { schoolId: string; schools: School[] }) {
   const app = useApp()
   const toast = useToast()
-  const { data: clients = [], isLoading, isError } = usePortfolioSchools(app.isPlatform)
-  const schools = useMemo(() => clients.map((c, i) => clientToSchool(c, i)), [clients])
+  const { isLoading, isError } = usePortfolioSchools(app.isPlatform)
   const [q, setQ] = useState('')
   const [roleF, setRoleF] = useState('all')
   const [inviteOpen, setInviteOpen] = useState(false)
@@ -464,6 +463,8 @@ function TeamTab() {
       ),
     },
   ]
+
+  if (!schoolId) return <SelectSchoolPrompt />
 
   if (isLoading) {
     return (
@@ -619,9 +620,11 @@ function CapChip({ cap, active, locked, onClick }: { cap: Cap; active: boolean; 
   )
 }
 
-function RolesTab() {
+function RolesTab({ schoolId }: { schoolId: string }) {
   const toast = useToast()
   const [matrix, setMatrix] = useState<Matrix>(clonePerms)
+
+  if (!schoolId) return <SelectSchoolPrompt />
 
   const toggle = (mod: string, role: GateRole, cap: Cap) => {
     setMatrix((m) => {
@@ -714,9 +717,11 @@ function RolesTab() {
    ============================================================ */
 interface Invite { id: string; email: string; role: Role; scope: string; sent: string; expires: string }
 
-function InvitationsTab() {
+function InvitationsTab({ schoolId }: { schoolId: string }) {
   const toast = useToast()
   const [invites, setInvites] = useState<Invite[]>([])
+
+  if (!schoolId) return <SelectSchoolPrompt />
 
   const resend = (inv: Invite) => toast.success('Invitation resent', `A fresh link was emailed to ${inv.email}.`)
   const revoke = (inv: Invite) => {
@@ -769,13 +774,15 @@ const AUDIT: AuditRow[] = [
   { id: 'A-8', who: 'Anil Mehta', hue: 250, action: 'Updated branding', target: 'Accent colour', module: 'settings', when: '3 days ago', tone: 'info' },
 ]
 
-function AuditTab() {
+function AuditTab({ schoolId }: { schoolId: string }) {
   const [q, setQ] = useState('')
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
     if (!needle) return AUDIT
     return AUDIT.filter((a) => (a.who + a.action + a.target + a.module).toLowerCase().includes(needle))
   }, [q])
+
+  if (!schoolId) return <SelectSchoolPrompt />
 
   return (
     <Card pad={false}>
@@ -809,14 +816,57 @@ function AuditTab() {
 /* ============================================================
    OwnerUsers — shell
    ============================================================ */
+function SelectSchoolPrompt() {
+  return (
+    <Card>
+      <Empty icon="building" title="Select a school" body="Pick one of your mapped schools above to manage its team, roles, invitations and activity." />
+    </Card>
+  )
+}
+
 function OwnerUsers() {
+  const toast = useToast()
+  const qc = useQueryClient()
+  const app = useApp()
+  const { data: clients = [] } = usePortfolioSchools(app.isPlatform)
+  const schools = useMemo(() => clients.map((c, i) => clientToSchool(c, i)), [clients])
   const [tab, setTab] = useState('team')
+  const [schoolId, setSchoolId] = useState('')
+  const [switching, setSwitching] = useState(false)
+  const switchSchoolMut = useSwitchSchool()
+
+  const selectSchool = (id: string) => {
+    if (!id || id === schoolId) { setSchoolId(id); return }
+    setSwitching(true)
+    switchSchoolMut.mutate(id, {
+      onSuccess: () => {
+        setSchoolId(id)
+        void qc.invalidateQueries({ queryKey: ['roleTemplate'] })
+        void qc.invalidateQueries({ queryKey: ['audit'] })
+      },
+      onError: () => toast.danger('Could not switch school', 'Try again.'),
+      onSettled: () => setSwitching(false),
+    })
+  }
+
   return (
     <div>
       <PageHead
         title="Users & roles"
         sub="Workspace team for your mapped schools only — other clients never appear"
       />
+      <div className="row ai-center gap12 wrap" style={{ marginBottom: 16 }}>
+        <Field label="School" hint="Pick a mapped school to manage its team, roles, invitations and audit log.">
+          <Select
+            aria-label="Select school"
+            options={[{ value: '', label: schools.length ? 'Select a school…' : 'No schools mapped' }, ...schools.map((s) => ({ value: s.id, label: s.name }))]}
+            value={schoolId}
+            onChange={(e) => selectSchool(e.target.value)}
+            disabled={switching}
+          />
+        </Field>
+        {switching && <Spinner size={18} />}
+      </div>
       <Tabs
         value={tab} onChange={setTab}
         tabs={[
@@ -827,10 +877,10 @@ function OwnerUsers() {
         ]}
       />
       <div style={{ marginTop: 16 }}>
-        {tab === 'team' && <TeamTab />}
-        {tab === 'roles' && <RolesTab />}
-        {tab === 'invites' && <InvitationsTab />}
-        {tab === 'audit' && <AuditTab />}
+        {tab === 'team' && <TeamTab schoolId={schoolId} schools={schools} />}
+        {tab === 'roles' && <RolesTab schoolId={schoolId} />}
+        {tab === 'invites' && <InvitationsTab schoolId={schoolId} />}
+        {tab === 'audit' && <AuditTab schoolId={schoolId} />}
       </div>
     </div>
   )

@@ -5,16 +5,20 @@ import { AppProvider } from '@/context/AppProvider'
 import { ToastProvider } from '@/context/ToastProvider'
 import { workspaceScreens, ALL_SCHOOLS, isAllSchools, scopeLabel, toggleScope } from './workspace'
 
-vi.mock('@/api/hooks/useOwner', () => ({
-  usePortfolioSchools: () => ({
-    data: [
-      { id: '11111111-1111-1111-1111-111111111111', name: 'Alpha Public School', country: 'Bengaluru', tier: 'gold', status: 'active', students_count: 10, staff_count: 2, mrr: 0, health_score: 80 },
-      { id: '22222222-2222-2222-2222-222222222222', name: 'Beta High School', country: 'Mumbai', tier: 'silver', status: 'active', students_count: 20, staff_count: 3, mrr: 0, health_score: 70 },
-    ],
-    isLoading: false,
-    isError: false,
-  }),
-}))
+vi.mock('@/api/hooks/useOwner', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/hooks/useOwner')>()
+  return {
+    ...actual,
+    usePortfolioSchools: () => ({
+      data: [
+        { id: '11111111-1111-1111-1111-111111111111', name: 'Alpha Public School', country: 'Bengaluru', tier: 'gold', status: 'active', students_count: 10, staff_count: 2, mrr: 0, health_score: 80 },
+        { id: '22222222-2222-2222-2222-222222222222', name: 'Beta High School', country: 'Mumbai', tier: 'silver', status: 'active', students_count: 20, staff_count: 3, mrr: 0, health_score: 70 },
+      ],
+      isLoading: false,
+      isError: false,
+    }),
+  }
+})
 
 vi.mock('@/api/users', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/users')>()
@@ -53,24 +57,38 @@ function renderScreen() {
 /** Seed a logged-in owner via AppProvider internals by mocking auth finish path is heavy —
  *  Team tab shows owner only when app.user is set. Drive Edit from invited row after invite,
  *  or assert empty owner when not logged in. */
-describe('owner Users & roles — mapped schools only', () => {
+describe('owner Users & roles — school picker', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('scope picker lists only portfolio schools — not other clients', async () => {
+  it('shows a school picker sourced from portfolio schools, not other clients', async () => {
     const { container } = renderScreen()
     await waitFor(() => {
-      expect(within(container).queryByText('Greenwood Valley School')).toBeNull()
-      expect(within(container).queryByText('Delhi Public Academy')).toBeNull()
+      expect(within(container).getByText('Alpha Public School')).toBeInTheDocument()
+      expect(within(container).getByText('Beta High School')).toBeInTheDocument()
     })
-    /* Without login the owner row is empty; invite opens scope with mapped schools. */
-    const inviteBtn = within(container).getByRole('button', { name: /invite user/i })
+    expect(within(container).queryByText('Greenwood Valley School')).toBeNull()
+  })
+
+  it('scope picker inside Send invite still lists only portfolio schools', async () => {
+    const { container } = renderScreen()
+    const picker = await waitFor(() => within(container).getByLabelText(/select school/i))
+    fireEvent.change(picker, { target: { value: '11111111-1111-1111-1111-111111111111' } })
+    const inviteBtn = await waitFor(() => within(container).getByRole('button', { name: /send invite/i }))
     fireEvent.click(inviteBtn)
     const dialog = within(container).getByRole('dialog')
     expect(within(dialog).getByText('Alpha Public School')).toBeInTheDocument()
     expect(within(dialog).getByText('Beta High School')).toBeInTheDocument()
     expect(within(dialog).queryByText('Greenwood Valley School')).toBeNull()
+  })
+
+  it('selecting a school calls switchSchool with that tenant id', async () => {
+    const { switchSchool } = await import('@/api/mySchools')
+    const { container } = renderScreen()
+    const picker = await waitFor(() => within(container).getByLabelText(/select school/i))
+    fireEvent.change(picker, { target: { value: '11111111-1111-1111-1111-111111111111' } })
+    await waitFor(() => expect(switchSchool).toHaveBeenCalledWith('11111111-1111-1111-1111-111111111111'))
   })
 })
 
