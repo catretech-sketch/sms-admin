@@ -1181,6 +1181,8 @@ export function InvitationsTab() {
   const statusTone = (s: Invitation['status']): 'neutral' | 'success' | 'danger' =>
     s === 'accepted' ? 'success' : s === 'revoked' || s === 'expired' ? 'danger' : 'neutral'
 
+  const pendingCount = invites.filter((i) => i.status === 'pending' || i.status === 'expired').length
+
   const doResend = (inv: Invitation) => {
     resend.mutate(inv.id, {
       onSuccess: () => {
@@ -1203,13 +1205,20 @@ export function InvitationsTab() {
 
   return (
     <Card pad={false}>
-      <CardHead title="Pending invitations" sub={`${invites.length} awaiting acceptance`} icon="inbox" />
+      <CardHead title="Invitations" sub={`${pendingCount} awaiting acceptance`} icon="inbox" />
       {loading
         ? <div style={{ padding: 16 }} className="t-sm muted">Loading invitations…</div>
         : error
-          ? <div style={{ padding: 16 }} className="t-sm muted">Could not load invitations.</div>
+          ? (
+            <div style={{ padding: 8 }}>
+              <Empty icon="alert" title="Could not load invitations" body="Try again." />
+              <div className="row jc-center" style={{ marginTop: 12 }}>
+                <Btn variant="secondary" onClick={() => void reload()}>Retry</Btn>
+              </div>
+            </div>
+          )
           : invites.length === 0
-            ? <div style={{ padding: 8 }}><Empty icon="inbox" title="No pending invitations" body="Invite staff from the Users tab." /></div>
+            ? <div style={{ padding: 8 }}><Empty icon="inbox" title="No invitations" body="Invite staff from the Users tab." /></div>
             : (
               <div className="col">
                 {invites.map((inv) => (
@@ -1310,7 +1319,7 @@ function AuditTab() {
 function IdentityScreen() {
   const [tab, setTab] = useState('users')
   const [inviteCount, setInviteCount] = useState(0)
-  useEffect(() => { void listInvitations().then((rows) => setInviteCount(rows.length)).catch(() => {}) }, [tab])
+  useEffect(() => { void listInvitations().then((rows) => setInviteCount(rows.filter((r) => r.status === 'pending' || r.status === 'expired').length)).catch(() => {}) }, [tab])
   return (
     <div>
       <PageHead

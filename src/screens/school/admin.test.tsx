@@ -35,14 +35,25 @@ describe('InvitationsTab', () => {
   it('shows an empty state when there are no invitations', async () => {
     vi.spyOn(invitationsApi, 'listInvitations').mockResolvedValue([])
     renderTab()
-    await waitFor(() => expect(screen.getByText(/no pending invitations/i)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/no invitations/i)).toBeInTheDocument())
   })
 
   it('shows an error state and can retry', async () => {
     const { ApiError } = await import('@/api/ApiError')
-    vi.spyOn(invitationsApi, 'listInvitations').mockRejectedValueOnce(new ApiError(500, 'internal_error', 'boom', null))
+    const listSpy = vi.spyOn(invitationsApi, 'listInvitations')
+      .mockRejectedValueOnce(new ApiError(500, 'internal_error', 'boom', null))
+      .mockResolvedValueOnce([
+        {
+          id: 'INV-01', email: 'neha.joshi@school.edu', phone: null, roleLabel: 'Teacher',
+          invitedAt: '2026-07-20T10:00:00Z', expiresAt: '2026-07-21T10:00:00Z', status: 'pending',
+        },
+      ])
     renderTab()
     await waitFor(() => expect(screen.getAllByText(/could not load invitations/i).length).toBeGreaterThan(0))
+    expect(listSpy).toHaveBeenCalledTimes(1)
+    await userEvent.click(screen.getByRole('button', { name: /retry/i }))
+    await waitFor(() => expect(screen.getByText('neha.joshi@school.edu')).toBeInTheDocument())
+    expect(listSpy).toHaveBeenCalledTimes(2)
   })
 
   it('resends an invitation and shows a success toast', async () => {
