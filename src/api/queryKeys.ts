@@ -25,6 +25,9 @@ export const queryKeys = {
   users: {
     all: ['users'] as const,
   },
+  invitations: {
+    all: ['invitations'] as const,
+  },
   roleTemplate: {
     all: ['roleTemplate'] as const,
   },
