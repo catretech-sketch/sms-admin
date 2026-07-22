@@ -4,6 +4,7 @@
    .NET API must enforce the same matrix server-side.
    ============================================================ */
 import type { Tier, Role, GateRole, Cap, UserOverrides, CellState } from '@/types'
+import type { RoleTemplateOverride } from '@/api/roleTemplates'
 import { TIERS, FEATURE_TIER, PERMS } from '@/data/mockDb'
 
 export function tierIncludes(plan: Tier, feature: string): boolean {
@@ -44,9 +45,21 @@ export function cellState(module: string, cap: Cap, overrides: UserOverrides): C
   return overrides[module]?.[cap] ?? 'inherit'
 }
 
-/** Effective caps for a user = role caps + grants − revokes, ordered V→E→A. */
-export function effectiveCaps(role: Role, module: string, overrides: UserOverrides): Cap[] {
+/** Effective caps for a user = role caps + tenant template overrides + per-user grants/revokes,
+ *  ordered V→E→A. `tenantOverrides` defaults to none — existing 3-arg callers are unaffected. */
+export function effectiveCaps(
+  role: Role,
+  module: string,
+  overrides: UserOverrides,
+  tenantOverrides: RoleTemplateOverride[] = [],
+): Cap[] {
   const set = new Set<Cap>(caps(role, module))
+  const gr = gateRole(role)
+  for (const t of tenantOverrides) {
+    if (t.role !== gr || t.module !== module) continue
+    if (t.effect === 'grant') set.add(t.cap)
+    else if (t.effect === 'revoke') set.delete(t.cap)
+  }
   const mod = overrides[module]
   if (mod) {
     for (const cap of CAP_ORDER) {
