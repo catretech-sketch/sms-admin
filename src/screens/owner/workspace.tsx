@@ -20,7 +20,14 @@ import { ROLES, ROLE_META, PERMS } from '@/data/mockDb'
 import type { Role, GateRole, Cap, School } from '@/types'
 import { usePortfolioSchools, useSwitchSchool } from '@/api/hooks/useOwner'
 import { clientToSchool } from '@/api/ownerMap'
-import { inviteUser, assignableSchoolRoles } from '@/api/users'
+import {
+  inviteUser, assignableSchoolRoles,
+  listSchoolUsers, setUserRoles, getUserPermissions, setUserPermissions,
+  overridesFromApi, fromApiRole, type SchoolUserDto,
+} from '@/api/users'
+import { useRoleTemplate } from '@/api/hooks/useRoleTemplates'
+import { caps, effectiveCaps, cellState, overrideCount, NEXT_CELL_STATE } from '@/lib/gating'
+import type { UserOverrides, CellState } from '@/types'
 import { switchSchool } from '@/api/mySchools'
 import { ApiError } from '@/api/client'
 
@@ -92,23 +99,6 @@ export function scopeLabelForSchools(scope: string[], schools: School[]): string
 /* ============================================================
    Team
    ============================================================ */
-interface TeamUser {
-  id: string
-  name: string
-  email: string
-  role: Role
-  scope: string[]
-  hue: number
-  status: 'active' | 'invited' | 'suspended'
-  last: string
-}
-
-const userStatus: Record<TeamUser['status'], { tone: BadgeTone; label: string }> = {
-  active: { tone: 'success', label: 'Active' },
-  invited: { tone: 'warning', label: 'Invited' },
-  suspended: { tone: 'danger', label: 'Suspended' },
-}
-
 /* Multi-school scope: only schools returned for this login (mapped tenants). */
 function ScopePicker({
   scope, onChange, schools,
@@ -157,7 +147,7 @@ function InviteModal({
   open: boolean
   onClose: () => void
   schools: School[]
-  onInvited: (user: TeamUser) => void
+  onInvited: () => void
   actorRole: Role
 }) {
   const toast = useToast()
@@ -192,16 +182,7 @@ function InviteModal({
         await inviteUser(email.trim(), role)
       }
       const where = scopeLabelForSchools(scope, schools)
-      onInvited({
-        id: `inv-${Date.now()}`,
-        name: email.trim().split('@')[0],
-        email: email.trim(),
-        role,
-        scope: isAllSchools(scope) ? [ALL_SCHOOLS] : resolveScopeIds(scope, schools),
-        hue: 200,
-        status: 'invited',
-        last: 'Pending',
-      })
+      onInvited()
       toast.success(
         'Invite sent',
         `${ROLE_META[role].label} · ${where}. ${email} got a 6-digit setup code by email (not a link). They open SchoolMate → set password with that code → then they can sign in.`,
@@ -246,53 +227,6 @@ function InviteModal({
           />
         </Field>
         <ScopePicker scope={scope} onChange={setScope} schools={schools} />
-      </div>
-    </Modal>
-  )
-}
-
-function EditUserModal({ user, onClose, onSave, schools, actorRole }: {
-  user: TeamUser
-  onClose: () => void
-  onSave: (id: string, role: Role, scope: string[]) => void
-  schools: School[]
-  actorRole: Role
-}) {
-  const roleOptions = assignableSchoolRoles(actorRole)
-  const [role, setRole] = useState<Role>(
-    user.role === 'owner' ? 'owner' : (roleOptions.includes(user.role) ? user.role : roleOptions[0] ?? 'teacher'),
-  )
-  const [scope, setScope] = useState<string[]>(user.scope)
-  const isOwnerRow = user.role === 'owner' && user.id === 'self'
-
-  return (
-    <Modal
-      open onClose={onClose} icon="user"
-      title={isOwnerRow ? 'Owner access' : 'Edit access'}
-      sub={isOwnerRow ? `${user.name} — mapped schools (read-only)` : `Adjust school role & scope for ${user.name}`}
-      footer={
-        <div className="row gap8 jc-end">
-          <Btn variant="ghost" onClick={onClose}>{isOwnerRow ? 'Close' : 'Cancel'}</Btn>
-          {!isOwnerRow && (
-            <Btn variant="primary" icon="check" onClick={() => onSave(user.id, role, scope)}>Save changes</Btn>
-          )}
-        </div>
-      }
-    >
-      <div className="col gap16">
-        {!isOwnerRow && (
-          <Field label="School role" required hint={ROLE_META[role].desc}>
-            <Select
-              options={roleOptions.map((r) => ({ value: r, label: `${ROLE_META[r].label} — ${ROLE_META[r].short}` }))}
-              value={role} onChange={(e) => setRole(e.target.value as Role)}
-            />
-          </Field>
-        )}
-        <ScopePicker
-          scope={isOwnerRow ? (schools.length ? [ALL_SCHOOLS] : []) : scope}
-          onChange={isOwnerRow ? () => undefined : setScope}
-          schools={schools}
-        />
       </div>
     </Modal>
   )
@@ -361,63 +295,215 @@ function OnboardPeopleModal({
   )
 }
 
+function OverrideChip({ cap, state, onClick }: { cap: Cap; state: CellState; onClick: () => void }) {
+  const granted = state === 'grant'
+  const revoked = state === 'revoke'
+  const color = CAP_COLOR[cap]
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={`${CAP_LABEL[cap]} — ${state}`}
+      aria-label={`${CAP_LABEL[cap]}: ${state}`}
+      style={{
+        width: 30, height: 26, borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+        border: `1px solid ${granted ? color : revoked ? 'var(--danger)' : 'var(--border)'}`,
+        background: granted ? color : 'transparent',
+        color: granted ? '#fff' : revoked ? 'var(--danger)' : 'var(--text-2)',
+        textDecoration: revoked ? 'line-through' : 'none',
+      }}
+    >
+      {cap}
+    </button>
+  )
+}
+
+interface TeamRow { id: string; name: string; email: string; role: Role; status: string; last: string }
+
+function mapTeamRow(u: SchoolUserDto): TeamRow {
+  const email = u.email ?? '—'
+  return {
+    id: u.id,
+    name: email.includes('@') ? email.split('@')[0] : email,
+    email,
+    role: fromApiRole(u.roles[0] ?? 'teacher'),
+    status: u.status,
+    last: u.created_at,
+  }
+}
+
+function UserAccessEditor({ user, initial, onSave, onCancel }: {
+  user: TeamRow
+  initial: UserOverrides
+  onSave: (ov: UserOverrides) => void
+  onCancel: () => void
+}) {
+  const toast = useToast()
+  const [ov, setOv] = useState<UserOverrides>(initial)
+  const templateQ = useRoleTemplate()
+  const tenantOverrides = templateQ.data ?? []
+
+  const cycle = (mod: string, cap: Cap) => {
+    setOv((prev) => {
+      const next = NEXT_CELL_STATE[cellState(mod, cap, prev)]
+      const modOv = { ...(prev[mod] ?? {}) }
+      if (next === 'inherit') delete modOv[cap]
+      else modOv[cap] = next
+      const out = { ...prev }
+      if (Object.keys(modOv).length === 0) delete out[mod]
+      else out[mod] = modOv
+      return out
+    })
+  }
+
+  const count = overrideCount(ov)
+  const reset = () => { setOv(initial); toast.info('Overrides reset', 'Reverted to the last saved overrides.') }
+  const save = () => { onSave(ov) }
+
+  return (
+    <div className="col gap16">
+      <Card>
+        <div className="row ai-center gap12 wrap">
+          <Avatar name={user.name} size={40} />
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div className="fw7">{user.name}</div>
+            <div className="t-sm muted">{user.email}</div>
+            <div className="t-xs muted" title={user.id}>User id · {user.id}</div>
+          </div>
+          <Badge tone={roleTone(user.role)}>{ROLE_META[user.role].label}</Badge>
+          <Btn variant="ghost" size="sm" icon="arrowLeft" onClick={onCancel}>Back</Btn>
+        </div>
+      </Card>
+
+      <Card pad={false}>
+        <CardHead
+          title="Per-user access (by id)"
+          sub="Tap V / E / A to cycle inherit → grant → revoke — saved against this user id"
+          icon="user"
+          action={
+            <div className="row ai-center gap8">
+              <Badge tone="neutral">{count} override{count === 1 ? '' : 's'}</Badge>
+              <Btn variant="ghost" size="sm" icon="refresh" onClick={reset}>Reset</Btn>
+              <Btn variant="primary" size="sm" icon="check" onClick={save}>Save changes</Btn>
+            </div>
+          }
+        />
+        <div style={{ overflowX: 'auto' }}>
+          <table className="sm-table">
+            <thead>
+              <tr>
+                <th style={{ minWidth: 180 }}>Module</th>
+                <th className="ta-center">Role default</th>
+                <th className="ta-center">This user</th>
+                <th className="ta-center">Effective</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.keys(PERMS).map((mod) => {
+                const roleCaps = caps(user.role, mod)
+                const eff = effectiveCaps(user.role, mod, ov, tenantOverrides)
+                return (
+                  <tr key={mod}>
+                    <td>
+                      <div className="fw6">{MODULE_LABEL[mod] ?? mod}</div>
+                      <div className="t-xs muted">{mod}</div>
+                    </td>
+                    <td className="ta-center">
+                      <span className="t-xs muted">{roleCaps.length ? roleCaps.join(' · ') : '—'}</span>
+                    </td>
+                    <td className="ta-center">
+                      <div className="row gap4" style={{ justifyContent: 'center' }}>
+                        {CAPS.map((c) => (
+                          <OverrideChip key={c} cap={c} state={cellState(mod, c, ov)} onClick={() => cycle(mod, c)} />
+                        ))}
+                      </div>
+                    </td>
+                    <td className="ta-center">
+                      <div className="row gap4" style={{ justifyContent: 'center' }}>
+                        {eff.length
+                          ? eff.map((c) => <Badge key={c} tone={CAP_TONE[c]}>{c}</Badge>)
+                          : <span className="t-xs muted">No access</span>}
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  )
+}
+
 function TeamTab({ schoolId, schools }: { schoolId: string; schools: School[] }) {
   const app = useApp()
   const toast = useToast()
-  const { isLoading, isError } = usePortfolioSchools(app.isPlatform)
   const [q, setQ] = useState('')
   const [roleF, setRoleF] = useState('all')
   const [inviteOpen, setInviteOpen] = useState(false)
   const [onboardKind, setOnboardKind] = useState<'teacher' | 'staff' | null>(null)
-  const [team, setTeam] = useState<TeamUser[]>([])
-  const [editing, setEditing] = useState<TeamUser | null>(null)
+  const [rows, setRows] = useState<TeamRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+  const [overrides, setOverrides] = useState<Record<string, UserOverrides>>({})
+  const [editing, setEditing] = useState<TeamRow | null>(null)
 
-  useEffect(() => {
-    if (!app.user) return
-    const ownerScope = schools.length > 0 ? [ALL_SCHOOLS] : []
-    setTeam((prev) => {
-      const others = prev.filter((u) => u.id !== 'self')
-      const owner: TeamUser = {
-        id: 'self',
-        name: app.user!.name,
-        email: app.user!.email,
-        role: 'owner',
-        scope: ownerScope,
-        hue: app.user!.hue,
-        status: 'active',
-        last: 'You',
-      }
-      return [owner, ...others]
-    })
-  }, [app.user, schools])
+  const reload = async () => {
+    if (!schoolId) return
+    setLoading(true); setError(false)
+    try {
+      setRows((await listSchoolUsers()).map(mapTeamRow))
+    } catch {
+      setError(true)
+    } finally {
+      setLoading(false)
+    }
+  }
 
-  const kpis = useMemo(() => ({
-    total: team.length,
-    admins: team.filter((u) => u.role === 'admin' || u.role === 'owner').length,
-    active: team.filter((u) => u.status === 'active').length,
-    schools: schools.length,
-  }), [team, schools.length])
+  useEffect(() => { void reload() }, [schoolId])
 
-  const rows = useMemo(() => {
+  if (!schoolId) return <SelectSchoolPrompt />
+
+  const filtered = rows.filter((u) => {
     const needle = q.trim().toLowerCase()
-    return team.filter((u) => {
-      if (needle && !(
-        u.name.toLowerCase().includes(needle) ||
-        u.email.toLowerCase().includes(needle) ||
-        u.scope.some((s) => s.toLowerCase().includes(needle)) ||
-        schools.some((s) => s.name.toLowerCase().includes(needle) && (isAllSchools(u.scope) || u.scope.includes(s.name)))
-      )) return false
-      if (roleF !== 'all' && u.role !== roleF) return false
-      return true
-    })
-  }, [q, roleF, team, schools])
+    if (needle && !(u.name.toLowerCase().includes(needle) || u.email.toLowerCase().includes(needle))) return false
+    if (roleF !== 'all' && u.role !== roleF) return false
+    return true
+  })
 
-  const columns: Column<TeamUser>[] = [
+  const openEditor = async (u: TeamRow) => {
+    try {
+      const perms = await getUserPermissions(u.id)
+      setOverrides((m) => ({ ...m, [u.id]: overridesFromApi(perms) }))
+    } catch {
+      setOverrides((m) => ({ ...m, [u.id]: m[u.id] ?? {} }))
+    }
+    setEditing(u)
+  }
+
+  if (editing) {
+    return (
+      <UserAccessEditor
+        user={editing}
+        initial={overrides[editing.id] ?? {}}
+        onCancel={() => setEditing(null)}
+        onSave={(ov) => {
+          void setUserPermissions(editing.id, ov).then(
+            () => { setOverrides((m) => ({ ...m, [editing.id]: ov })); toast.success('Access saved', `Updated overrides for ${editing.name}.`); setEditing(null) },
+            (e) => toast.danger('Could not save', e instanceof ApiError ? e.message : 'Try again.'),
+          )
+        }}
+      />
+    )
+  }
+
+  const columns: Column<TeamRow>[] = [
     {
       key: 'name', label: 'User', sortValue: (u) => u.name,
       render: (u) => (
         <div className="row ai-center gap10">
-          <Avatar name={u.name} hue={u.hue} size={34} />
+          <Avatar name={u.name} size={34} />
           <div>
             <div className="fw6">{u.name}</div>
             <div className="t-xs muted">{u.email}</div>
@@ -425,113 +511,70 @@ function TeamTab({ schoolId, schools }: { schoolId: string; schools: School[] })
         </div>
       ),
     },
-    {
-      key: 'role', label: 'Role', sortValue: (u) => u.role,
-      render: (u) => <Badge tone={u.role === 'owner' ? 'brand' : roleTone(u.role)}>{ROLE_META[u.role].label}</Badge>,
-    },
-    {
-      key: 'scope', label: 'Schools', sortValue: (u) => scopeLabelForSchools(u.scope, schools),
-      render: (u) => (
-        <span
-          className="row ai-center gap6 t-sm"
-          title={isAllSchools(u.scope) ? schools.map((s) => `${s.name} (${s.id})`).join(', ') : u.scope.join(', ')}
-        >
-          <Icon name={isAllSchools(u.scope) ? 'globe' : 'building'} size={14} />
-          {scopeLabelForSchools(u.scope, schools)}
-        </span>
-      ),
-    },
-    {
-      key: 'status', label: 'Status', align: 'center', sortValue: (u) => u.status,
-      render: (u) => <Badge tone={userStatus[u.status].tone}>{userStatus[u.status].label}</Badge>,
-    },
-    {
-      key: 'last', label: 'Last active', align: 'right', sortValue: (u) => u.last,
-      render: (u) => <span className="t-sm muted">{u.last}</span>,
-    },
+    { key: 'role', label: 'Role', sortValue: (u) => u.role, render: (u) => <Badge tone={roleTone(u.role)}>{ROLE_META[u.role].label}</Badge> },
+    { key: 'status', label: 'Status', align: 'center', sortValue: (u) => u.status, render: (u) => <Badge tone={u.status === 'active' ? 'success' : 'neutral'}>{u.status}</Badge> },
     {
       key: 'actions', label: '', align: 'right',
       render: (u) => (
         <div className="row gap6 jc-end">
-          <Btn variant="secondary" size="sm" icon="edit" onClick={() => setEditing(u)}>
-            {u.role === 'owner' ? 'View' : 'Edit'}
-          </Btn>
-          {u.role !== 'owner' && (u.status === 'suspended'
-            ? <Btn variant="secondary" size="sm" icon="refresh" onClick={() => toast.success('User reactivated', `${u.name} can sign in again.`)}>Restore</Btn>
-            : <Btn variant="ghost" size="sm" icon="lock" onClick={() => toast.danger('User suspended', `${u.name} can no longer sign in.`)}>Suspend</Btn>)}
+          <Btn variant="secondary" size="sm" icon="edit" onClick={() => { void openEditor(u) }}>Permissions</Btn>
+          <Select
+            options={assignableSchoolRoles(app.role).map((r) => ({ value: r, label: ROLE_META[r].label }))}
+            value={assignableSchoolRoles(app.role).includes(u.role) ? u.role : assignableSchoolRoles(app.role)[0]}
+            onChange={(e) => {
+              const role = e.target.value as Role
+              void setUserRoles(u.id, [role]).then(
+                () => { setRows((list) => list.map((x) => (x.id === u.id ? { ...x, role } : x))); toast.success('Role updated', `${ROLE_META[role].label} · ${u.name}`) },
+                (err) => toast.danger('Role update failed', err instanceof ApiError ? err.message : 'Try again.'),
+              )
+            }}
+          />
         </div>
       ),
     },
   ]
 
-  if (!schoolId) return <SelectSchoolPrompt />
-
-  if (isLoading) {
-    return (
-      <div className="col ai-center jc-center gap12" style={{ minHeight: 200 }}>
-        <Spinner size={28} />
-        <div className="t-sm muted">Loading your schools…</div>
-      </div>
-    )
-  }
-
-  if (isError) {
-    return (
-      <Empty
-        icon="alert"
-        title="Could not load schools"
-        body="Your mapped schools could not be loaded. Refresh and try again."
-      />
-    )
-  }
-
   return (
     <div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 16 }}>
-        <Kard icon="users" label="Workspace users" value={kpis.total} tone="brand" />
-        <Kard icon="building" label="Your schools" value={kpis.schools} tone="info" />
-        <Kard icon="checkCircle" label="Active" value={kpis.active} tone="success" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16, marginBottom: 16 }}>
+        <Kard icon="users" label="Workspace users" value={rows.length} tone="brand" />
+        <Kard icon="checkCircle" label="Active" value={rows.filter((u) => u.status === 'active').length} tone="success" />
       </div>
-
-      {schools.length === 0 && (
-        <div style={{ marginBottom: 16 }}>
-          <Empty
-            icon="building"
-            title="No schools mapped"
-            body="When Catre (or you) create a client school for this owner email, it appears here. Login only opens schools mapped to your account — never other clients."
-          />
-        </div>
-      )}
 
       <Card pad={false}>
         <div className="row ai-center gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
-          <Search value={q} onChange={setQ} placeholder="Search name, email, school…" style={{ flex: 1, minWidth: 220 }} />
+          <Search value={q} onChange={setQ} placeholder="Search name, email…" style={{ flex: 1, minWidth: 220 }} />
           <Select
-            options={[{ value: 'all', label: 'All roles' }, { value: 'owner', label: 'Owner' }, ...ROLES.map((r) => ({ value: r, label: ROLE_META[r].label }))]}
+            options={[{ value: 'all', label: 'All roles' }, ...assignableSchoolRoles('owner').map((r) => ({ value: r, label: ROLE_META[r].label }))]}
             value={roleF} onChange={(e) => setRoleF(e.target.value)}
           />
-          <Btn variant="primary" icon="plus" onClick={() => setInviteOpen(true)} disabled={schools.length === 0}>
-            Send invite
-          </Btn>
-          <Btn variant="secondary" icon="cap" onClick={() => setOnboardKind('teacher')} disabled={schools.length === 0}>
-            Onboard teacher
-          </Btn>
-          <Btn variant="secondary" icon="briefcase" onClick={() => setOnboardKind('staff')} disabled={schools.length === 0}>
-            Onboard staff
-          </Btn>
+          <Btn variant="primary" icon="plus" onClick={() => setInviteOpen(true)}>Send invite</Btn>
+          <Btn variant="secondary" icon="cap" onClick={() => setOnboardKind('teacher')}>Onboard teacher</Btn>
+          <Btn variant="secondary" icon="briefcase" onClick={() => setOnboardKind('staff')}>Onboard staff</Btn>
         </div>
         <div className="t-xs muted" style={{ padding: '0 16px 12px' }}>
           Send invite = CRM users (Admin / Principal / Vice-Principal). Teachers &amp; staff = onboard form with name, address &amp; documents.
         </div>
 
-        <DataTable<TeamUser>
-          columns={columns}
-          rows={rows}
-          pageSize={10}
-          rowKey={(u) => u.id}
-          initialSort={{ key: 'name', dir: 'asc' }}
-          empty={<Empty icon="users" title="No users match" body="Try a different search or role filter." />}
-        />
+        {loading ? (
+          <div style={{ padding: 24 }}><Spinner /></div>
+        ) : error ? (
+          <div style={{ padding: 8 }}>
+            <Empty icon="alert" title="Could not load users" body="Try again." />
+            <div className="row jc-center" style={{ marginTop: 12 }}>
+              <Btn variant="secondary" onClick={() => void reload()}>Retry</Btn>
+            </div>
+          </div>
+        ) : (
+          <DataTable<TeamRow>
+            columns={columns}
+            rows={filtered}
+            pageSize={10}
+            rowKey={(u) => u.id}
+            initialSort={{ key: 'name', dir: 'asc' }}
+            empty={<Empty icon="users" title="No users match" body="Try a different search or role filter." />}
+          />
+        )}
       </Card>
 
       <InviteModal
@@ -539,29 +582,10 @@ function TeamTab({ schoolId, schools }: { schoolId: string; schools: School[] })
         onClose={() => setInviteOpen(false)}
         schools={schools}
         actorRole={app.role === 'owner' || app.user?.role === 'owner' ? 'owner' : app.role}
-        onInvited={(u) => setTeam((list) => [...list, u])}
+        onInvited={() => void reload()}
       />
       {onboardKind && (
-        <OnboardPeopleModal
-          open
-          kind={onboardKind}
-          schools={schools}
-          onClose={() => setOnboardKind(null)}
-        />
-      )}
-      {editing && (
-        <EditUserModal
-          key={editing.id}
-          user={editing}
-          schools={schools}
-          actorRole={app.role === 'owner' || app.user?.role === 'owner' ? 'owner' : app.role}
-          onClose={() => setEditing(null)}
-          onSave={(id, role, scope) => {
-            setTeam((list) => list.map((x) => (x.id === id ? { ...x, role, scope } : x)))
-            toast.success('Access updated', `${editing.name} is now ${ROLE_META[role].label} · ${scopeLabel(scope)}.`)
-            setEditing(null)
-          }}
-        />
+        <OnboardPeopleModal open kind={onboardKind} schools={schools} onClose={() => setOnboardKind(null)} />
       )}
     </div>
   )

@@ -25,6 +25,11 @@ vi.mock('@/api/users', async (importOriginal) => {
   return {
     ...actual,
     inviteUser: vi.fn().mockResolvedValue(undefined),
+    listSchoolUsers: vi.fn().mockResolvedValue([
+      { id: 'U-1', email: 'neha@school.edu', phone: null, status: 'active', created_at: '2026-07-01T00:00:00Z', roles: ['school.teacher'] },
+    ]),
+    setUserRoles: vi.fn().mockResolvedValue({ id: 'U-1', email: 'neha@school.edu', phone: null, status: 'active', created_at: '2026-07-01T00:00:00Z', roles: ['school.admin'] }),
+    getUserPermissions: vi.fn().mockResolvedValue([]),
   }
 })
 
@@ -89,6 +94,22 @@ describe('owner Users & roles — school picker', () => {
     const picker = await waitFor(() => within(container).getByLabelText(/select school/i))
     fireEvent.change(picker, { target: { value: '11111111-1111-1111-1111-111111111111' } })
     await waitFor(() => expect(switchSchool).toHaveBeenCalledWith('11111111-1111-1111-1111-111111111111'))
+  })
+})
+
+describe('TeamTab — real data', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('shows the select-school prompt before a school is chosen', () => {
+    const { container } = renderScreen()
+    expect(within(container).getByText('Select a school')).toBeInTheDocument()
+  })
+
+  it('loads real users once a school is selected', async () => {
+    const { container } = renderScreen()
+    const picker = await waitFor(() => within(container).getByLabelText(/select school/i))
+    fireEvent.change(picker, { target: { value: '11111111-1111-1111-1111-111111111111' } })
+    await waitFor(() => expect(within(container).getByText('neha@school.edu')).toBeInTheDocument())
   })
 })
 
