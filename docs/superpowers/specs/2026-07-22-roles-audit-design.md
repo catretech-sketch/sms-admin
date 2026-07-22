@@ -67,6 +67,16 @@ The other two tabs are 100% mock, with no backend at all:
 - No audit entries for read-only actions (list/view) — only mutating actions.
 - No UI to configure *which* actions get audited — the action list below is
   fixed in this pass.
+- No app-wide enforcement of the tenant template through `can()`/`caps()` —
+  those are called directly against `useApp().role` from 8+ screen files
+  (sidebar visibility, route gates, feature gates) with no overrides object
+  threaded through anywhere today. Wiring the template into all of those
+  would mean loading template data into `AppProvider` and touching every call
+  site — a much larger, separate change. This pass applies the tenant
+  template only where `effectiveCaps()` is already used (the Users tab's
+  per-user permission editor, its only real caller today besides tests).
+  Server-side enforcement of the template (not just UI display) is the
+  backend's job regardless, via the same DAO the editor reads from.
 
 ## Decisions (from brainstorming)
 
