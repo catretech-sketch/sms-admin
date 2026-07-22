@@ -12,3 +12,6 @@ coverage
 
 # worktrees
 .worktrees
+
+# subagent-driven-development scratch state
+.superpowers
