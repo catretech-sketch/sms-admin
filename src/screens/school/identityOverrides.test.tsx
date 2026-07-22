@@ -118,6 +118,30 @@ describe('per-user access editor (by user id)', () => {
     fireEvent.click(within(row).getByTitle('Edit — revoke'))
     expect(within(row).getByTitle('Edit — inherit')).toBeInTheDocument()
   })
+
+  it('reflects a tenant-level role-template grant/revoke in the Effective column, with no per-user override', async () => {
+    // admin's default caps for fees are ['E'] only (see mockDb PERMS). A tenant template
+    // grant of 'V' plus a revoke of 'E' should change the Effective column even though
+    // this user has zero per-user overrides on this cell.
+    getRoleTemplateMock.mockResolvedValue([
+      { role: 'admin', module: 'fees', cap: 'V', effect: 'grant' },
+      { role: 'admin', module: 'fees', cap: 'E', effect: 'revoke' },
+    ])
+    const { container } = renderScreen()
+    await waitFor(() => expect(within(container).getByText(/admin@school\.edu/i)).toBeInTheDocument())
+
+    fireEvent.click(within(container).getAllByRole('button', { name: /^permissions$/i })[0])
+    await waitFor(() => expect(within(container).getByText(/Per-user access/i)).toBeInTheDocument())
+
+    const row = moduleRow(container, 'Fees & finance')
+    const cells = within(row).getAllByRole('cell')
+    const effectiveCell = cells[cells.length - 1]
+
+    // Granted by the tenant template even though the user has no per-user override.
+    await waitFor(() => expect(within(effectiveCell).getByText('V')).toBeInTheDocument())
+    // Revoked by the tenant template, so it must not appear in Effective anymore.
+    expect(within(effectiveCell).queryByText('E')).not.toBeInTheDocument()
+  })
 })
 
 describe('role template matrix (Roles & permissions tab)', () => {

@@ -931,6 +931,8 @@ function UserAccessEditor({ user, initial, onSave, onCancel }: {
 }) {
   const toast = useToast()
   const [ov, setOv] = useState<UserOverrides>(initial)
+  const templateQ = useRoleTemplate()
+  const tenantOverrides = templateQ.data ?? []
 
   const cycle = (mod: string, cap: Cap) => {
     setOv((prev) => {
@@ -990,7 +992,7 @@ function UserAccessEditor({ user, initial, onSave, onCancel }: {
             <tbody>
               {Object.keys(PERMS).map((mod) => {
                 const roleCaps = caps(user.role, mod)
-                const eff = effectiveCaps(user.role, mod, ov)
+                const eff = effectiveCaps(user.role, mod, ov, tenantOverrides)
                 return (
                   <tr key={mod}>
                     <td>
