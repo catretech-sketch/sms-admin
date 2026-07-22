@@ -50,6 +50,19 @@ vi.mock('@/api/roleTemplates', async (importOriginal) => {
   }
 })
 
+const listAuditLogMock = vi.fn(async (_params?: import('@/api/audit').AuditParams) => ({
+  data: [] as import('@/api/audit').AuditEntry[],
+  nextCursor: null as string | null,
+}))
+
+vi.mock('@/api/audit', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/audit')>()
+  return {
+    ...actual,
+    listAuditLog: (...args: [import('@/api/audit').AuditParams?]) => listAuditLogMock(...args),
+  }
+})
+
 afterEach(cleanup)
 
 function renderScreen() {
@@ -142,5 +155,53 @@ describe('role template matrix (Roles & permissions tab)', () => {
 
     fireEvent.click(within(container).getByText('Save changes'))
     await waitFor(() => expect(within(container).getByText(/Could not save/i)).toBeInTheDocument())
+  })
+})
+
+describe('AuditTab (Audit log tab)', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  async function openAuditTab() {
+    const { container } = renderScreen()
+    await waitFor(() => expect(within(container).getByText(/admin@school\.edu/i)).toBeInTheDocument())
+    fireEvent.click(within(container).getByRole('button', { name: /audit log/i }))
+    return container
+  }
+
+  it('renders a spinner while the audit log is loading', async () => {
+    listAuditLogMock.mockImplementation(() => new Promise(() => {})) // never resolves
+    const container = await openAuditTab()
+    await waitFor(() => expect(container.querySelector('.sm-spin')).toBeTruthy())
+  })
+
+  it('shows a retry button on error, which refetches', async () => {
+    listAuditLogMock.mockRejectedValueOnce(new Error('boom'))
+    const container = await openAuditTab()
+    await waitFor(() => expect(within(container).getByText(/Could not load activity/i)).toBeInTheDocument())
+
+    listAuditLogMock.mockResolvedValueOnce({
+      data: [{ id: 'A-1', actorId: 'U-1', actorName: 'Ravi Menon', action: 'user.role_changed', target: 'U-2', at: '2026-07-22T10:00:00Z' }],
+      nextCursor: null,
+    })
+    fireEvent.click(within(container).getByRole('button', { name: /retry/i }))
+    await waitFor(() => expect(within(container).getByText('Ravi Menon')).toBeInTheDocument())
+    expect(listAuditLogMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows "No activity yet" when the audit log is empty', async () => {
+    listAuditLogMock.mockResolvedValue({ data: [], nextCursor: null })
+    const container = await openAuditTab()
+    await waitFor(() => expect(within(container).getByText('No activity yet')).toBeInTheDocument())
+  })
+
+  it('re-queries with the typed text as the action filter', async () => {
+    listAuditLogMock.mockResolvedValue({ data: [], nextCursor: null })
+    const container = await openAuditTab()
+    await waitFor(() => expect(listAuditLogMock).toHaveBeenCalledWith({ action: undefined, cursor: undefined }))
+
+    const search = within(container).getByPlaceholderText(/Filter by action/i)
+    fireEvent.change(search, { target: { value: 'user.role_changed' } })
+
+    await waitFor(() => expect(listAuditLogMock).toHaveBeenCalledWith({ action: 'user.role_changed', cursor: undefined }))
   })
 })
