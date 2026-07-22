@@ -38,6 +38,18 @@ vi.mock('@/api/users', async (importOriginal) => {
   }
 })
 
+const getRoleTemplateMock = vi.fn(async () => [] as import('@/api/roleTemplates').RoleTemplateOverride[])
+const setRoleTemplateMock = vi.fn(async (overrides: import('@/api/roleTemplates').RoleTemplateOverride[]) => overrides)
+
+vi.mock('@/api/roleTemplates', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/roleTemplates')>()
+  return {
+    ...actual,
+    getRoleTemplate: (...args: []) => getRoleTemplateMock(...args),
+    setRoleTemplate: (...args: [import('@/api/roleTemplates').RoleTemplateOverride[]]) => setRoleTemplateMock(...args),
+  }
+})
+
 afterEach(cleanup)
 
 function renderScreen() {
@@ -92,5 +104,43 @@ describe('per-user access editor (by user id)', () => {
     expect(within(row).getByTitle('Edit — revoke')).toBeInTheDocument()
     fireEvent.click(within(row).getByTitle('Edit — revoke'))
     expect(within(row).getByTitle('Edit — inherit')).toBeInTheDocument()
+  })
+})
+
+describe('role template matrix (Roles & permissions tab)', () => {
+  beforeEach(() => { vi.clearAllMocks(); getRoleTemplateMock.mockResolvedValue([]) })
+
+  it('loads the saved template, toggles a cap, and PUTs the overrides on save', async () => {
+    const { container } = renderScreen()
+    await waitFor(() => expect(within(container).getByText(/admin@school\.edu/i)).toBeInTheDocument())
+
+    fireEvent.click(within(container).getByRole('button', { name: /roles & permissions/i }))
+    await waitFor(() => expect(within(container).getByText('Permission matrix')).toBeInTheDocument())
+    await waitFor(() => expect(getRoleTemplateMock).toHaveBeenCalled())
+
+    // dashboard row: teacher starts with only 'V' granted — toggle 'E' on.
+    const row = moduleRow(container, 'Dashboard')
+    const cells = within(row).getAllByRole('cell')
+    const teacherCell = cells[5] // module, owner, admin, principal, vice_principal, teacher, staff
+    fireEvent.click(within(teacherCell).getByText('E'))
+
+    fireEvent.click(within(container).getByText('Save changes'))
+    await waitFor(() => expect(within(container).getByText(/Permissions saved/i)).toBeInTheDocument())
+
+    expect(setRoleTemplateMock).toHaveBeenCalledTimes(1)
+    const overrides = setRoleTemplateMock.mock.calls[0][0]
+    expect(overrides).toContainEqual({ role: 'teacher', module: 'dashboard', cap: 'E', effect: 'grant' })
+  })
+
+  it('shows an error toast when saving fails', async () => {
+    setRoleTemplateMock.mockRejectedValueOnce(new Error('boom'))
+    const { container } = renderScreen()
+    await waitFor(() => expect(within(container).getByText(/admin@school\.edu/i)).toBeInTheDocument())
+
+    fireEvent.click(within(container).getByRole('button', { name: /roles & permissions/i }))
+    await waitFor(() => expect(within(container).getByText('Permission matrix')).toBeInTheDocument())
+
+    fireEvent.click(within(container).getByText('Save changes'))
+    await waitFor(() => expect(within(container).getByText(/Could not save/i)).toBeInTheDocument())
   })
 })

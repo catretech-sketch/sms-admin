@@ -31,6 +31,8 @@ import {
   type SchoolUserDto,
 } from '@/api/users'
 import { ApiError } from '@/api/client'
+import { useRoleTemplate, useSetRoleTemplate } from '@/api/hooks/useRoleTemplates'
+import type { RoleTemplateOverride } from '@/api/roleTemplates'
 import { tierIncludes, caps, effectiveCaps, cellState, overrideCount, NEXT_CELL_STATE } from '@/lib/gating'
 import {
   PageHead, Tabs, Card, CardHead, Btn, Badge, TierPill, Avatar, Search, Select,
@@ -845,6 +847,33 @@ function clonePerms(): Matrix {
   return out
 }
 
+function applyTenantOverrides(base: Matrix, tenantOv: RoleTemplateOverride[]): Matrix {
+  const out: Matrix = {}
+  for (const mod of Object.keys(base)) {
+    out[mod] = { admin: [...base[mod].admin], principal: [...base[mod].principal], vice_principal: [...base[mod].vice_principal], teacher: [...base[mod].teacher], staff: [...base[mod].staff] }
+  }
+  for (const t of tenantOv) {
+    const row = out[t.module]?.[t.role]
+    if (!row) continue
+    if (t.effect === 'grant' && !row.includes(t.cap)) row.push(t.cap)
+    if (t.effect === 'revoke') out[t.module][t.role] = row.filter((c) => c !== t.cap)
+  }
+  return out
+}
+
+function matrixToOverrides(matrix: Matrix): RoleTemplateOverride[] {
+  const out: RoleTemplateOverride[] = []
+  for (const mod of Object.keys(matrix)) {
+    for (const role of ROLES) {
+      for (const cap of matrix[mod][role]) out.push({ role, module: mod, cap, effect: 'grant' })
+      for (const cap of PERMS[mod][role]) {
+        if (!matrix[mod][role].includes(cap)) out.push({ role, module: mod, cap, effect: 'revoke' })
+      }
+    }
+  }
+  return out
+}
+
 function CapChip({ cap, active, locked, onClick }: { cap: Cap; active: boolean; locked?: boolean; onClick?: () => void }) {
   const color = CAP_COLOR[cap]
   return (
@@ -996,7 +1025,17 @@ function UserAccessEditor({ user, initial, onSave, onCancel }: {
 
 function RolesTab() {
   const toast = useToast()
+  const templateQ = useRoleTemplate()
+  const setTemplate = useSetRoleTemplate()
   const [matrix, setMatrix] = useState<Matrix>(clonePerms)
+  const [loadedFromServer, setLoadedFromServer] = useState(false)
+
+  useEffect(() => {
+    if (templateQ.data && !loadedFromServer) {
+      setMatrix(applyTenantOverrides(clonePerms(), templateQ.data))
+      setLoadedFromServer(true)
+    }
+  }, [templateQ.data, loadedFromServer])
 
   const toggle = (mod: string, role: GateRole, cap: Cap) => {
     setMatrix((m) => {
@@ -1006,8 +1045,31 @@ function RolesTab() {
     })
   }
 
-  const reset = () => { setMatrix(clonePerms()); toast.info('Matrix reset', 'Reverted to the saved permission set.') }
-  const save = () => toast.success('Permissions saved', 'Role access updated for this school.')
+  const reset = () => {
+    setMatrix(applyTenantOverrides(clonePerms(), templateQ.data ?? []))
+    toast.info('Matrix reset', 'Reverted to the saved permission set.')
+  }
+
+  const save = () => {
+    setTemplate.mutate(matrixToOverrides(matrix), {
+      onSuccess: () => toast.success('Permissions saved', 'Role access updated for this school.'),
+      onError: (e) => toast.danger('Could not save', e instanceof ApiError ? e.message : 'Try again.'),
+    })
+  }
+
+  if (templateQ.isLoading) {
+    return <Card><Spinner /></Card>
+  }
+  if (templateQ.isError) {
+    return (
+      <Card>
+        <Empty icon="alert" title="Could not load permissions" body="Try again." />
+        <div className="row jc-center" style={{ marginTop: 12 }}>
+          <Btn variant="secondary" onClick={() => templateQ.refetch()}>Retry</Btn>
+        </div>
+      </Card>
+    )
+  }
 
   return (
     <div className="col gap16">
@@ -1035,7 +1097,9 @@ function RolesTab() {
           action={
             <div className="row gap8">
               <Btn variant="ghost" size="sm" icon="refresh" onClick={reset}>Reset</Btn>
-              <Btn variant="primary" size="sm" icon="check" onClick={save}>Save changes</Btn>
+              <Btn variant="primary" size="sm" icon="check" disabled={setTemplate.isPending} onClick={save}>
+                {setTemplate.isPending ? 'Saving…' : 'Save changes'}
+              </Btn>
             </div>
           }
         />
