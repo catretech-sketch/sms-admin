@@ -147,13 +147,15 @@ function ScopePicker({
 }
 
 function InviteModal({
-  open, onClose, schools, onInvited, actorRole,
+  open, onClose, schools, onInvited, actorRole, schoolId,
 }: {
   open: boolean
   onClose: () => void
   schools: School[]
   onInvited: () => void
   actorRole: Role
+  /** Currently-selected school in the Owner Console — restored as the ambient tenant after inviting. */
+  schoolId: string
 }) {
   const toast = useToast()
   const roleOptions = assignableSchoolRoles(actorRole)
@@ -185,6 +187,13 @@ function InviteModal({
       for (const tenantId of tenantIds) {
         await switchSchool(tenantId)
         await inviteUser(email.trim(), role)
+      }
+      // Restore the ambient tenant to the school currently selected in the picker —
+      // otherwise it's left pointed at the last-invited school, desyncing every
+      // subsequent ambient-tenant fetch (Team/Roles/Audit) from the visible schoolId.
+      const lastInvited = tenantIds[tenantIds.length - 1]
+      if (schoolId && schoolId !== lastInvited) {
+        await switchSchool(schoolId)
       }
       const where = scopeLabelForSchools(scope, schools)
       onInvited()
@@ -594,6 +603,7 @@ function TeamTab({ schoolId, schools }: { schoolId: string; schools: School[] })
         open={inviteOpen}
         onClose={() => setInviteOpen(false)}
         schools={schools}
+        schoolId={schoolId}
         actorRole={app.role === 'owner' || app.user?.role === 'owner' ? 'owner' : app.role}
         onInvited={() => void reload()}
       />
@@ -696,11 +706,15 @@ function RolesTab({ schoolId }: { schoolId: string }) {
 
   useEffect(() => { setLoadedFromServer(false) }, [schoolId])
   useEffect(() => {
-    if (schoolId && templateQ.data && !loadedFromServer) {
+    // Wait for the query to settle on this schoolId before hydrating — while a
+    // switch-school invalidation refetch is in flight, templateQ.data still
+    // holds the PREVIOUS school's cached value, and hydrating from it here
+    // would lock in the wrong tenant's permission matrix (and let it be saved).
+    if (schoolId && templateQ.data && !templateQ.isFetching && !loadedFromServer) {
       setMatrix(applyTenantOverrides(clonePerms(), templateQ.data))
       setLoadedFromServer(true)
     }
-  }, [schoolId, templateQ.data, loadedFromServer])
+  }, [schoolId, templateQ.data, templateQ.isFetching, loadedFromServer])
 
   if (!schoolId) return <SelectSchoolPrompt />
 

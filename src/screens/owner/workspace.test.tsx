@@ -135,6 +135,39 @@ describe('TeamTab — real data', () => {
   })
 })
 
+describe('InviteModal — ambient tenant restore (regression)', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('restores the ambient tenant to the selected school after inviting across other schools', async () => {
+    // Whole-branch review finding 2: switchSchool mutates the GLOBAL token store. Inviting
+    // across multiple tenants (default scope = "All my schools") leaves the ambient JWT
+    // pointed at the LAST invited school, not the one still selected in the picker — desyncing
+    // every subsequent ambient-tenant fetch (Team/Roles/Audit) from the visible schoolId.
+    const { switchSchool } = await import('@/api/mySchools')
+    const { container } = renderScreen()
+    const picker = await waitFor(() => within(container).getByLabelText(/select school/i))
+
+    const alphaId = '11111111-1111-1111-1111-111111111111'
+    fireEvent.change(picker, { target: { value: alphaId } })
+
+    const inviteBtn = await waitFor(() => within(container).getByRole('button', { name: /send invite/i }))
+    fireEvent.click(inviteBtn)
+
+    const dialog = within(container).getByRole('dialog')
+    fireEvent.change(within(dialog).getByPlaceholderText('admin@school.edu'), { target: { value: 'new.admin@school.edu' } })
+
+    // Default scope is "All my schools" — invites Alpha then Beta (Beta invited last).
+    fireEvent.click(within(dialog).getByRole('button', { name: /send invite/i }))
+
+    await waitFor(() => expect(within(container).queryByRole('dialog')).toBeNull())
+
+    // The FINAL switchSchool call must restore the ambient tenant to Alpha — the school still
+    // selected in the picker — not leave it on Beta (the last-invited tenant).
+    const calls = vi.mocked(switchSchool).mock.calls.map((c) => c[0])
+    expect(calls.at(-1)).toBe(alphaId)
+  })
+})
+
 describe('RolesTab — real data, staff dropped', () => {
   beforeEach(() => { vi.clearAllMocks() })
 
@@ -145,6 +178,39 @@ describe('RolesTab — real data, staff dropped', () => {
     fireEvent.click(within(container).getByRole('button', { name: /roles & permissions/i }))
     await waitFor(() => expect(within(container).getByText('Teacher')).toBeInTheDocument())
     expect(within(container).queryByText('Staff')).toBeNull()
+  })
+
+  it('shows School B\'s permissions after switching, never School A\'s stale cached matrix (regression: cross-tenant race)', async () => {
+    // Whole-branch review finding 1: switching schools invalidates the (ambient, shared)
+    // roleTemplate query key and triggers a background refetch — while that refetch is in
+    // flight, templateQ.data still holds School A's cached value. RolesTab must wait for the
+    // fresh fetch to settle before hydrating (and locking) the matrix, otherwise it silently
+    // shows — and can SAVE — School A's permissions under School B's header.
+    const { getRoleTemplate, setRoleTemplate } = await import('@/api/roleTemplates')
+    vi.mocked(getRoleTemplate)
+      .mockResolvedValueOnce([{ role: 'admin', module: 'fees', cap: 'V', effect: 'grant' }]) // School A
+      .mockResolvedValueOnce([{ role: 'admin', module: 'fees', cap: 'A', effect: 'grant' }]) // School B
+
+    const { container } = renderScreen()
+    const picker = await waitFor(() => within(container).getByLabelText(/select school/i))
+
+    // Select School A and open Roles tab — hydrates from School A's template (fetch #1).
+    fireEvent.change(picker, { target: { value: '11111111-1111-1111-1111-111111111111' } })
+    fireEvent.click(within(container).getByRole('button', { name: /roles & permissions/i }))
+    await waitFor(() => expect(getRoleTemplate).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(within(container).getByRole('button', { name: /save changes/i })).toBeInTheDocument())
+
+    // Switch to School B — invalidates the shared roleTemplate query key and triggers fetch #2.
+    fireEvent.change(picker, { target: { value: '22222222-2222-2222-2222-222222222222' } })
+    await waitFor(() => expect(getRoleTemplate).toHaveBeenCalledTimes(2))
+
+    // Assert the FINAL settled state reflects School B's override, never School A's — including
+    // on Save, which is what would otherwise corrupt School B's real role template.
+    fireEvent.click(within(container).getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(setRoleTemplate).toHaveBeenCalled())
+    const sent = vi.mocked(setRoleTemplate).mock.calls.at(-1)![0]
+    expect(sent).toContainEqual({ role: 'admin', module: 'fees', cap: 'A', effect: 'grant' })
+    expect(sent).not.toContainEqual({ role: 'admin', module: 'fees', cap: 'V', effect: 'grant' })
   })
 })
 
