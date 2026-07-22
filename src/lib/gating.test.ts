@@ -5,6 +5,7 @@ import {
   gateRole,
 } from './gating'
 import type { UserOverrides } from '@/types'
+import type { RoleTemplateOverride } from '@/api/roleTemplates'
 
 describe('gateRole (exported)', () => {
   it('maps owner to admin', () => {
@@ -90,5 +91,24 @@ describe('per-user overrides', () => {
     expect(NEXT_CELL_STATE.inherit).toBe('grant')
     expect(NEXT_CELL_STATE.grant).toBe('revoke')
     expect(NEXT_CELL_STATE.revoke).toBe('inherit')
+  })
+})
+
+describe('tenant role-template overrides', () => {
+  it('a tenant grant adds a capability the static default lacks', () => {
+    const tenantOv: RoleTemplateOverride[] = [{ role: 'teacher', module: 'fees', cap: 'E', effect: 'grant' }]
+    expect(effectiveCaps('teacher', 'fees', {}, tenantOv)).toEqual(['E'])
+  })
+  it('a tenant revoke removes a capability the static default has', () => {
+    const tenantOv: RoleTemplateOverride[] = [{ role: 'admin', module: 'sis', cap: 'E', effect: 'revoke' }]
+    expect(effectiveCaps('admin', 'sis', {}, tenantOv)).toEqual([])
+  })
+  it('a per-user override still wins over a tenant override on the same cell', () => {
+    const tenantOv: RoleTemplateOverride[] = [{ role: 'teacher', module: 'fees', cap: 'E', effect: 'grant' }]
+    const userOv: UserOverrides = { fees: { E: 'revoke' } }
+    expect(effectiveCaps('teacher', 'fees', userOv, tenantOv)).toEqual([])
+  })
+  it('defaults to no tenant overrides when the 4th arg is omitted', () => {
+    expect(effectiveCaps('admin', 'sis', {})).toEqual(['E'])
   })
 })
