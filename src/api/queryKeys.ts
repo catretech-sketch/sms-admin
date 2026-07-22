@@ -25,6 +25,9 @@ export const queryKeys = {
   users: {
     all: ['users'] as const,
   },
+  roleTemplate: {
+    all: ['roleTemplate'] as const,
+  },
   classes: {
     all: ['classes'] as const,
     subjects: (classId: string) => ['classes', 'subjects', classId] as const,
