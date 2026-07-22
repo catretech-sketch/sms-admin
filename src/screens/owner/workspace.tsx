@@ -33,6 +33,8 @@ import { caps, effectiveCaps, cellState, overrideCount, NEXT_CELL_STATE } from '
 import type { UserOverrides, CellState } from '@/types'
 import { switchSchool } from '@/api/mySchools'
 import { ApiError } from '@/api/client'
+import { useAuditLog } from '@/api/hooks/useAudit'
+import type { AuditEntry } from '@/api/audit'
 
 /* ---------- shared helpers ---------- */
 const CAPS: Cap[] = ['V', 'E', 'A']
@@ -905,53 +907,69 @@ function InvitationsTab({ schoolId }: { schoolId: string }) {
 /* ============================================================
    Audit log
    ============================================================ */
-interface AuditRow { id: string; who: string; hue: number; action: string; target: string; module: string; when: string; tone: BadgeTone }
-const AUDIT: AuditRow[] = [
-  { id: 'A-1', who: 'Anil Mehta', hue: 250, action: 'Granted Approve', target: 'Principal · Fees', module: 'fees', when: 'Just now', tone: 'success' },
-  { id: 'A-2', who: 'Anil Mehta', hue: 250, action: 'Invited user', target: 'diya.nair@schoolmate.io', module: 'identity', when: '12m ago', tone: 'info' },
-  { id: 'A-3', who: 'Ravi Menon', hue: 200, action: 'Changed plan', target: 'Sunrise International → Gold', module: 'settings', when: '1h ago', tone: 'brand' },
-  { id: 'A-4', who: 'Anil Mehta', hue: 250, action: 'Suspended user', target: 'Rohan Das', module: 'identity', when: '3h ago', tone: 'danger' },
-  { id: 'A-5', who: 'Sunita Rao', hue: 330, action: 'Published results', target: 'Term 1 · Grade X', module: 'exams', when: 'Yesterday', tone: 'success' },
-  { id: 'A-6', who: 'Anil Mehta', hue: 250, action: 'Revoked Edit', target: 'Teacher · Attendance', module: 'attendance', when: 'Yesterday', tone: 'warning' },
-  { id: 'A-7', who: 'Kabir Sharma', hue: 40, action: 'Regenerated API key', target: 'Production key', module: 'settings', when: '2 days ago', tone: 'neutral' },
-  { id: 'A-8', who: 'Anil Mehta', hue: 250, action: 'Updated branding', target: 'Accent colour', module: 'settings', when: '3 days ago', tone: 'info' },
-]
+const AUDIT_ACTION_LABEL: Record<string, string> = {
+  'user.role_changed': 'Changed role',
+  'user.permissions_changed': 'Changed permissions',
+  'role_template.updated': 'Updated role template',
+}
 
 function AuditTab({ schoolId }: { schoolId: string }) {
   const [q, setQ] = useState('')
-  const rows = useMemo(() => {
-    const needle = q.trim().toLowerCase()
-    if (!needle) return AUDIT
-    return AUDIT.filter((a) => (a.who + a.action + a.target + a.module).toLowerCase().includes(needle))
-  }, [q])
+  const [cursor, setCursor] = useState<string | undefined>(undefined)
+  const [rows, setRows] = useState<AuditEntry[]>([])
+  const action = q.trim() || undefined
+  const auditQ = useAuditLog({ action, cursor })
+
+  useEffect(() => { setCursor(undefined); setRows([]) }, [action, schoolId])
+  useEffect(() => {
+    if (!schoolId || !auditQ.data) return
+    setRows((prev) => (cursor ? [...prev, ...auditQ.data.data] : auditQ.data.data))
+  }, [schoolId, auditQ.data, cursor])
 
   if (!schoolId) return <SelectSchoolPrompt />
 
   return (
     <Card pad={false}>
       <div className="row ai-center gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
-        <Search value={q} onChange={setQ} placeholder="Search activity…" style={{ flex: 1, minWidth: 220 }} />
-        <Badge tone="neutral" icon="clock">Last 7 days</Badge>
+        <Search value={q} onChange={setQ} placeholder="Filter by action, e.g. user.role_changed…" style={{ flex: 1, minWidth: 220 }} />
+        <Badge tone="neutral" icon="clock">Recent activity</Badge>
       </div>
-      {rows.length === 0
-        ? <div style={{ padding: 8 }}><Empty icon="doc" title="No activity" body="Nothing matches that search." /></div>
-        : (
-          <div className="col">
-            {rows.map((a) => (
-              <div key={a.id} className="row ai-center gap12 wrap" style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
-                <Avatar name={a.who} hue={a.hue} size={32} />
-                <div style={{ flex: 1, minWidth: 200 }}>
-                  <div className="t-sm">
-                    <span className="fw6">{a.who}</span> <span className="muted">{a.action.toLowerCase()}</span> <span className="fw6">{a.target}</span>
-                  </div>
-                  <div className="t-xs muted">{a.module}</div>
-                </div>
-                <Badge tone={a.tone}>{a.action}</Badge>
-                <div className="t-xs muted" style={{ minWidth: 90, textAlign: 'right' }}>{a.when}</div>
-              </div>
-            ))}
+      {auditQ.isLoading && rows.length === 0 ? (
+        <div style={{ padding: 24 }}><Spinner /></div>
+      ) : auditQ.isError ? (
+        <div style={{ padding: 8 }}>
+          <Empty icon="alert" title="Could not load activity" body="Try again." />
+          <div className="row jc-center" style={{ marginTop: 12 }}>
+            <Btn variant="secondary" onClick={() => auditQ.refetch()}>Retry</Btn>
           </div>
-        )}
+        </div>
+      ) : rows.length === 0 ? (
+        <div style={{ padding: 8 }}><Empty icon="doc" title="No activity yet" body="Nothing matches that search." /></div>
+      ) : (
+        <div className="col">
+          {rows.map((a) => (
+            <div key={a.id} className="row ai-center gap12 wrap" style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
+              <Avatar name={a.actorName ?? 'System'} size={32} />
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <div className="t-sm">
+                  <span className="fw6">{a.actorName ?? 'System'}</span>{' '}
+                  <span className="muted">{(AUDIT_ACTION_LABEL[a.action] ?? a.action).toLowerCase()}</span>{' '}
+                  {a.target && <span className="fw6">{a.target}</span>}
+                </div>
+              </div>
+              <Badge tone="info">{AUDIT_ACTION_LABEL[a.action] ?? a.action}</Badge>
+              <div className="t-xs muted" style={{ minWidth: 140, textAlign: 'right' }}>{new Date(a.at).toLocaleString()}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {auditQ.data?.nextCursor && (
+        <div className="row jc-center" style={{ padding: 16 }}>
+          <Btn variant="ghost" size="sm" disabled={auditQ.isFetching} onClick={() => setCursor(auditQ.data!.nextCursor!)}>
+            {auditQ.isFetching ? 'Loading…' : 'Load more'}
+          </Btn>
+        </div>
+      )}
     </Card>
   )
 }

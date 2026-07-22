@@ -168,6 +168,29 @@ describe('InvitationsTab — real data', () => {
   })
 })
 
+vi.mock('@/api/audit', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/audit')>()
+  return {
+    ...actual,
+    listAuditLog: vi.fn().mockResolvedValue({
+      data: [{ id: 'A-1', actorId: 'U-1', actorName: 'Anita Rao', action: 'user.role_changed', target: 'U-2', at: '2026-07-22T10:00:00Z' }],
+      nextCursor: null,
+    }),
+  }
+})
+
+describe('AuditTab — real data', () => {
+  it('loads real audit entries and never shows the old fake names', async () => {
+    const { container } = renderScreen()
+    const picker = await waitFor(() => within(container).getByLabelText(/select school/i))
+    fireEvent.change(picker, { target: { value: '11111111-1111-1111-1111-111111111111' } })
+    fireEvent.click(within(container).getByRole('button', { name: /audit log/i }))
+    await waitFor(() => expect(within(container).getByText('Anita Rao')).toBeInTheDocument())
+    expect(within(container).queryByText('Anil Mehta')).toBeNull()
+    expect(within(container).queryByText('Ravi Menon')).toBeNull()
+  })
+})
+
 describe('scope helpers', () => {
   it('isAllSchools detects the All sentinel', () => {
     expect(isAllSchools([ALL_SCHOOLS])).toBe(true)
