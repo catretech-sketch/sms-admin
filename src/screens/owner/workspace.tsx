@@ -27,6 +27,8 @@ import {
 } from '@/api/users'
 import { useRoleTemplate, useSetRoleTemplate } from '@/api/hooks/useRoleTemplates'
 import type { RoleTemplateOverride } from '@/api/roleTemplates'
+import { listInvitations, type Invitation } from '@/api/invitations'
+import { useResendInvitation, useRevokeInvitation } from '@/api/hooks/useInvitationMutations'
 import { caps, effectiveCaps, cellState, overrideCount, NEXT_CELL_STATE } from '@/lib/gating'
 import type { UserOverrides, CellState } from '@/types'
 import { switchSchool } from '@/api/mySchools'
@@ -812,46 +814,90 @@ function RolesTab({ schoolId }: { schoolId: string }) {
 /* ============================================================
    Invitations
    ============================================================ */
-interface Invite { id: string; email: string; role: Role; scope: string; sent: string; expires: string }
-
 function InvitationsTab({ schoolId }: { schoolId: string }) {
   const toast = useToast()
-  const [invites, setInvites] = useState<Invite[]>([])
+  const [invites, setInvites] = useState<Invitation[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+  const resend = useResendInvitation()
+  const revoke = useRevokeInvitation()
+
+  const reload = async () => {
+    if (!schoolId) return
+    setLoading(true); setError(false)
+    try {
+      setInvites(await listInvitations())
+    } catch {
+      setError(true)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { void reload() }, [schoolId])
 
   if (!schoolId) return <SelectSchoolPrompt />
 
-  const resend = (inv: Invite) => toast.success('Invitation resent', `A fresh link was emailed to ${inv.email}.`)
-  const revoke = (inv: Invite) => {
-    setInvites((list) => list.filter((i) => i.id !== inv.id))
-    toast.danger('Invitation revoked', `${inv.email} can no longer join.`)
+  const statusTone = (s: Invitation['status']): 'neutral' | 'success' | 'danger' =>
+    s === 'accepted' ? 'success' : s === 'revoked' || s === 'expired' ? 'danger' : 'neutral'
+
+  const pendingCount = invites.filter((i) => i.status === 'pending' || i.status === 'expired').length
+
+  const doResend = (inv: Invitation) => {
+    resend.mutate(inv.id, {
+      onSuccess: () => { toast.success('Invitation resent', `A fresh link was emailed to ${inv.email ?? inv.phone}.`); void reload() },
+      onError: (e) => toast.danger('Could not resend', e instanceof ApiError ? e.message : 'Try again.'),
+    })
+  }
+
+  const doRevoke = (inv: Invitation) => {
+    revoke.mutate(inv.id, {
+      onSuccess: () => { toast.danger('Invitation revoked', `${inv.email ?? inv.phone} can no longer join.`); void reload() },
+      onError: (e) => toast.danger('Could not revoke', e instanceof ApiError ? e.message : 'Try again.'),
+    })
   }
 
   return (
     <Card pad={false}>
-      <CardHead title="Pending invitations" sub={`${invites.length} awaiting acceptance`} icon="inbox" />
-      {invites.length === 0
-        ? <div style={{ padding: 8 }}><Empty icon="inbox" title="No pending invitations" body="Invite teammates from the Team tab." /></div>
-        : (
-          <div className="col">
-            {invites.map((inv) => (
-              <div key={inv.id} className="row ai-center gap12 wrap" style={{ padding: '14px 16px', borderTop: '1px solid var(--border)' }}>
-                <Avatar name={inv.email} size={34} />
-                <div style={{ flex: 1, minWidth: 200 }}>
-                  <div className="fw6">{inv.email}</div>
-                  <div className="t-xs muted row ai-center gap6">
-                    <Badge tone={roleTone(inv.role)}>{ROLE_META[inv.role].label}</Badge>
-                    <span><Icon name="building" size={12} /> {inv.scope}</span>
-                  </div>
-                </div>
-                <div className="t-xs muted" style={{ minWidth: 120 }}>Sent {inv.sent} · expires {inv.expires}</div>
-                <div className="row gap6">
-                  <Btn variant="secondary" size="sm" icon="refresh" onClick={() => resend(inv)}>Resend</Btn>
-                  <Btn variant="ghost" size="sm" icon="trash" onClick={() => revoke(inv)}>Revoke</Btn>
+      <CardHead title="Invitations" sub={`${pendingCount} awaiting acceptance`} icon="inbox" />
+      {loading ? (
+        <div style={{ padding: 16 }} className="t-sm muted">Loading invitations…</div>
+      ) : error ? (
+        <div style={{ padding: 8 }}>
+          <Empty icon="alert" title="Could not load invitations" body="Try again." />
+          <div className="row jc-center" style={{ marginTop: 12 }}>
+            <Btn variant="secondary" onClick={() => void reload()}>Retry</Btn>
+          </div>
+        </div>
+      ) : invites.length === 0 ? (
+        <div style={{ padding: 8 }}><Empty icon="inbox" title="No invitations" body="Invite teammates from the Team tab." /></div>
+      ) : (
+        <div className="col">
+          {invites.map((inv) => (
+            <div key={inv.id} className="row ai-center gap12 wrap" style={{ padding: '14px 16px', borderTop: '1px solid var(--border)' }}>
+              <Avatar name={inv.email ?? inv.phone ?? '?'} size={34} />
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <div className="fw6">{inv.email ?? inv.phone}</div>
+                <div className="t-xs muted row ai-center gap6">
+                  <Badge tone="neutral">{inv.roleLabel}</Badge>
+                  <Badge tone={statusTone(inv.status)}>{inv.status}</Badge>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
+              <div className="t-xs muted" style={{ minWidth: 160 }}>
+                Sent {new Date(inv.invitedAt).toLocaleDateString()} · expires {new Date(inv.expiresAt).toLocaleDateString()}
+              </div>
+              <div className="row gap6">
+                {inv.status !== 'accepted' && inv.status !== 'revoked' && (
+                  <Btn variant="secondary" size="sm" icon="refresh" onClick={() => doResend(inv)}>Resend</Btn>
+                )}
+                {inv.status === 'pending' && (
+                  <Btn variant="ghost" size="sm" icon="trash" onClick={() => doRevoke(inv)}>Revoke</Btn>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </Card>
   )
 }

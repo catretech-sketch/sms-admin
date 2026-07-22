@@ -148,6 +148,26 @@ describe('RolesTab — real data, staff dropped', () => {
   })
 })
 
+vi.mock('@/api/invitations', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/invitations')>()
+  return {
+    ...actual,
+    listInvitations: vi.fn().mockResolvedValue([
+      { id: 'INV-1', email: 'priya@school.edu', phone: null, roleLabel: 'Principal', invitedAt: '2026-07-20T00:00:00Z', expiresAt: '2026-07-21T00:00:00Z', status: 'pending' },
+    ]),
+  }
+})
+
+describe('InvitationsTab — real data', () => {
+  it('loads real invitations once a school is selected', async () => {
+    const { container } = renderScreen()
+    const picker = await waitFor(() => within(container).getByLabelText(/select school/i))
+    fireEvent.change(picker, { target: { value: '11111111-1111-1111-1111-111111111111' } })
+    fireEvent.click(within(container).getByRole('button', { name: /invitations/i }))
+    await waitFor(() => expect(within(container).getByText('priya@school.edu')).toBeInTheDocument())
+  })
+})
+
 describe('scope helpers', () => {
   it('isAllSchools detects the All sentinel', () => {
     expect(isAllSchools([ALL_SCHOOLS])).toBe(true)
