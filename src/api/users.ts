@@ -66,17 +66,35 @@ export async function listSchoolUsers(): Promise<SchoolUserDto[]> {
   return data ?? []
 }
 
-export async function inviteUser(email: string, role: string): Promise<{ id: string }> {
-  const created = await request<{ id: string }>('/users', {
+export interface InviteUserOptions {
+  phone?: string
+  /** Which identifier receives the welcome message when both email and phone are set. */
+  channel?: 'email' | 'phone'
+  /** "code" (default): 6-digit OTP. "link": one-click magic login link, no code shown. */
+  method?: 'code' | 'link'
+  /** False suppresses the welcome email/SMS for this call — used when inviting the
+   *  same person into several schools in one batch, so only one message goes out. */
+  sendWelcome?: boolean
+  /** All school names in the batch — shown (comma-joined) in that one welcome message. */
+  schoolNames?: string[]
+  /** Optional personal note from the inviter, shown in the welcome email above the link/code. */
+  message?: string
+}
+
+export async function inviteUser(email: string, role: string, opts: InviteUserOptions = {}): Promise<{ id: string }> {
+  return request<{ id: string }>('/users', {
     method: 'POST',
-    body: { email, roles: [toApiRole(role)] },
+    body: {
+      email,
+      phone: opts.phone || undefined,
+      roles: [toApiRole(role)],
+      sendWelcome: opts.sendWelcome ?? true,
+      method: opts.method ?? 'code',
+      channel: opts.channel,
+      schoolNames: opts.schoolNames,
+      message: opts.message || undefined,
+    },
   })
-  /* passwordForgot: welcome + setup OTP (API may already send; this covers older APIs). */
-  try {
-    const { passwordForgot } = await import('./auth')
-    await passwordForgot(email)
-  } catch { /* best-effort */ }
-  return created
 }
 
 /** Replace roles for a user id within the current school (JWT tenant). */
@@ -84,6 +102,21 @@ export async function setUserRoles(userId: string, roles: string[]): Promise<Sch
   return request<SchoolUserDto>(`/users/${userId}/roles`, {
     method: 'PUT',
     body: { roles: roles.map(toApiRole) },
+  })
+}
+
+/** Removes a person's access to the current school (JWT tenant) only — any other
+ *  school they belong to is untouched (each school membership is its own row). */
+export async function removeUserAccess(userId: string): Promise<void> {
+  await request<void>(`/users/${userId}`, { method: 'DELETE' })
+}
+
+/** Reversible pause/resume for an already-accepted member — unlike removeUserAccess,
+ *  this can be flipped back later without re-inviting them. */
+export async function setUserActive(userId: string, active: boolean): Promise<SchoolUserDto> {
+  return request<SchoolUserDto>(`/users/${userId}/status`, {
+    method: 'PUT',
+    body: { active },
   })
 }
 

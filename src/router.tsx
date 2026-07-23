@@ -33,7 +33,11 @@ const VIEWS: Record<string, ViewMeta> = {
 
   // People (Phase 3)
   'school.teachers': { title: 'Teachers', phase: 3 },
+  'school.teachers.add': { title: 'Onboard teacher', phase: 3 },
+  'school.teachers.edit': { title: 'Edit teacher', phase: 3 },
   'school.staff': { title: 'Staff & support', phase: 3 },
+  'school.staff.add': { title: 'Onboard staff', phase: 3 },
+  'school.staff.edit': { title: 'Edit staff', phase: 3 },
   'school.parents': { title: 'Parents', phase: 3 },
 
   // Academics & Exams (Phase 2)
@@ -46,7 +50,7 @@ const VIEWS: Record<string, ViewMeta> = {
   'school.fees': { title: 'Fees', phase: 3 },
   'school.hr': { title: 'HR & Payroll', phase: 3 },
   'school.comm': { title: 'Communication', phase: 3 },
-  'school.ops': { title: 'Operations', sub: 'Library · Transport · Hostel · Sports', phase: 3 },
+  'school.ops': { title: 'Operations', sub: 'Transport · Hostel · Sports', phase: 3 },
   'school.gps': { title: 'Live bus tracking', phase: 3 },
 
   // Administration (Phase 5)
@@ -58,6 +62,12 @@ const VIEWS: Record<string, ViewMeta> = {
 export function Router() {
   const app = useApp()
   const meta = VIEWS[app.view] ?? VIEWS['school.dashboard']
+
+  // Owner console is Owner/platform-only — Admin, Principal, Vice-Principal, Teacher
+  // and Staff only ever get the School console, regardless of view/consoleKind state.
+  if (app.view.startsWith('owner.') && !app.isPlatform && app.role !== 'owner') {
+    return <RestrictedScreen title="Owner console" note="This workspace is limited to your school console." />
+  }
 
   // Identity & access is Admin-only (owner inherits admin powers via gateRole)
   if (app.view === 'school.identity' && gateRole(app.role) !== 'admin') {

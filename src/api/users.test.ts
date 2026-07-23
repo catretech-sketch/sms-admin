@@ -38,6 +38,8 @@ describe('inviteUser', () => {
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({
       email: 'a@b.edu',
       roles: ['school.teacher'],
+      sendWelcome: true,
+      method: 'code',
     })
   })
 })

@@ -48,7 +48,7 @@ export function RestrictedScreen({ title = 'Access restricted', note }: { title?
       <PageHead title={title} />
       <Empty icon="lock" title="You don't have access to this area"
         body={note || 'This section is limited to specific roles. Contact your administrator if you need access.'}
-        action={<Btn variant="secondary" icon="arrowLeft" onClick={() => app.go(app.consoleKind === 'owner' ? 'owner.dashboard' : 'school.dashboard')}>Back to dashboard</Btn>} />
+        action={<Btn variant="secondary" icon="arrowLeft" onClick={() => app.go(app.isPlatform || app.role === 'owner' ? 'owner.dashboard' : 'school.dashboard')}>Back to dashboard</Btn>} />
     </div>
   )
 }

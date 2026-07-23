@@ -10,7 +10,7 @@ import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from
 import { useQueryClient } from '@tanstack/react-query'
 import { useApp, useToast } from '@/lib/hooks'
 import {
-  PageHead, Tabs, Card, CardHead, Btn, Badge, Avatar, Search, Select, Field, Input,
+  PageHead, Tabs, Card, CardHead, Btn, Badge, Avatar, Search, Select, Field, Input, Textarea,
   Modal, Toggle, Icon, Empty, DataTable, Spinner,
   type Column, type BadgeTone,
 } from '@/components/ui'
@@ -22,7 +22,7 @@ import { usePortfolioSchools, useSwitchSchool } from '@/api/hooks/useOwner'
 import { clientToSchool } from '@/api/ownerMap'
 import {
   inviteUser, assignableSchoolRoles,
-  listSchoolUsers, setUserRoles, getUserPermissions, setUserPermissions,
+  listSchoolUsers, setUserRoles, getUserPermissions, setUserPermissions, removeUserAccess, setUserActive,
   overridesFromApi, fromApiRole, type SchoolUserDto,
 } from '@/api/users'
 import { useRoleTemplate, useSetRoleTemplate } from '@/api/hooks/useRoleTemplates'
@@ -35,6 +35,7 @@ import { switchSchool } from '@/api/mySchools'
 import { ApiError } from '@/api/client'
 import { useAuditLog } from '@/api/hooks/useAudit'
 import type { AuditEntry } from '@/api/audit'
+import { tokenStore } from '@/api/auth/tokenStore'
 
 /* ---------- shared helpers ---------- */
 const CAPS: Cap[] = ['V', 'E', 'A']
@@ -62,6 +63,9 @@ const roleTone = (r: Role): BadgeTone =>
 
 /* ---------- scope (owner's mapped schools only) ---------- */
 export const ALL_SCHOOLS = 'All my schools'
+
+/** Sentinel schoolId for the "All schools" option in the Users & roles school picker. */
+export const ALL_SCHOOLS_ID = '__all_schools__'
 
 /** True when the scope grants every school in this owner's portfolio. */
 export function isAllSchools(scope: string[]): boolean {
@@ -161,12 +165,14 @@ function InviteModal({
   const roleOptions = assignableSchoolRoles(actorRole)
   const defaultRole: Role = roleOptions.includes('admin') ? 'admin' : roleOptions[0] ?? 'teacher'
   const [email, setEmail] = useState('')
+  const [message, setMessage] = useState('')
   const [role, setRole] = useState<Role>(defaultRole)
   const [scope, setScope] = useState<string[]>([ALL_SCHOOLS])
   const [busy, setBusy] = useState(false)
 
   const reset = () => {
     setEmail('')
+    setMessage('')
     setRole(defaultRole)
     setScope([ALL_SCHOOLS])
     setBusy(false)
@@ -182,11 +188,23 @@ function InviteModal({
       toast.danger('No school selected', 'Pick at least one of your schools.')
       return
     }
+    const schoolNames = tenantIds
+      .map((id) => schools.find((s) => s.id === id)?.name)
+      .filter((n): n is string => !!n)
+
     setBusy(true)
     try {
-      for (const tenantId of tenantIds) {
-        await switchSchool(tenantId)
-        await inviteUser(email.trim(), role)
+      for (let i = 0; i < tenantIds.length; i++) {
+        await switchSchool(tenantIds[i])
+        await inviteUser(email.trim(), role, {
+          channel: 'email',
+          method: 'link',
+          // Only the LAST call in the batch actually sends — one welcome message
+          // for the whole person, listing every school, not one email per school.
+          sendWelcome: i === tenantIds.length - 1,
+          schoolNames,
+          message: message.trim() || undefined,
+        })
       }
       // Restore the ambient tenant to the school currently selected in the picker —
       // otherwise it's left pointed at the last-invited school, desyncing every
@@ -199,12 +217,16 @@ function InviteModal({
       onInvited()
       toast.success(
         'Invite sent',
-        `${ROLE_META[role].label} · ${where}. ${email} got a 6-digit setup code by email (not a link). They open SchoolMate → set password with that code → then they can sign in.`,
+        `${ROLE_META[role].label} · ${where}. ${email} got a one-click login link by email (one message, covers ${schoolNames.length > 1 ? `all ${schoolNames.length} schools` : where}). They open the link → create their password → then they can sign in.`,
       )
       reset()
       onClose()
     } catch (e) {
-      toast.danger('Send invite failed', e instanceof ApiError ? e.message : 'Could not invite for that school.')
+      if (e instanceof ApiError && e.code === 'conflict') {
+        toast.danger('This email already has access', 'They\'re already a member of that school — use Resend from the Invitations tab instead of inviting again.')
+      } else {
+        toast.danger('Send invite failed', e instanceof ApiError ? e.message : 'Could not invite for that school.')
+      }
       setBusy(false)
     }
   }
@@ -224,8 +246,11 @@ function InviteModal({
       }
     >
       <div className="col gap16">
-        <Field label="Work email" required>
+        <Field label="Work email" required hint="Sends one onboard/welcome email with a one-click login link — covers every school picked below.">
           <Input icon="message" type="email" value={email} placeholder="admin@school.edu" onChange={(e) => setEmail(e.target.value)} />
+        </Field>
+        <Field label="Personal note" hint="Optional — shown in the welcome email above the login link.">
+          <Textarea rows={3} value={message} placeholder="e.g. Welcome aboard! Reach out if you need anything setting up." onChange={(e) => setMessage(e.target.value)} />
         </Field>
         <Field
           label="CRM role"
@@ -332,9 +357,10 @@ function OverrideChip({ cap, state, onClick }: { cap: Cap; state: CellState; onC
   )
 }
 
-interface TeamRow { id: string; name: string; email: string; role: Role; status: string; last: string }
+interface TeamSchoolMembership { school: string; role: Role; status: string }
+interface TeamRow { id: string; name: string; email: string; role: Role; status: string; last: string; school?: string; schools?: TeamSchoolMembership[] }
 
-function mapTeamRow(u: SchoolUserDto): TeamRow {
+function mapTeamRow(u: SchoolUserDto, school?: string): TeamRow {
   const email = u.email ?? '—'
   return {
     id: u.id,
@@ -343,7 +369,22 @@ function mapTeamRow(u: SchoolUserDto): TeamRow {
     role: fromApiRole(u.roles[0] ?? 'teacher'),
     status: u.status,
     last: u.created_at,
+    school,
   }
+}
+
+/** "All schools" mode: fold one row per (person, school) into one row per person,
+ *  listing every school they belong to — so the same person doesn't read as N
+ *  visually-identical duplicate rows. */
+function groupByPerson(rows: TeamRow[]): TeamRow[] {
+  const byEmail = new Map<string, TeamRow>()
+  for (const r of rows) {
+    const membership: TeamSchoolMembership = { school: r.school ?? '—', role: r.role, status: r.status }
+    const existing = byEmail.get(r.email)
+    if (existing) existing.schools!.push(membership)
+    else byEmail.set(r.email, { ...r, schools: [membership] })
+  }
+  return [...byEmail.values()]
 }
 
 function UserAccessEditor({ user, initial, onSave, onCancel }: {
@@ -462,12 +503,29 @@ function TeamTab({ schoolId, schools }: { schoolId: string; schools: School[] })
   const [error, setError] = useState(false)
   const [overrides, setOverrides] = useState<Record<string, UserOverrides>>({})
   const [editing, setEditing] = useState<TeamRow | null>(null)
+  const [removing, setRemoving] = useState<TeamRow | null>(null)
+  const [removeBusy, setRemoveBusy] = useState(false)
+  const [roleChange, setRoleChange] = useState<{ user: TeamRow; role: Role } | null>(null)
+  const [roleChangeBusy, setRoleChangeBusy] = useState(false)
+
+  const isAll = schoolId === ALL_SCHOOLS_ID
 
   const reload = async () => {
     if (!schoolId) return
     setLoading(true); setError(false)
     try {
-      setRows((await listSchoolUsers()).map(mapTeamRow))
+      if (isAll) {
+        const restoreTenant = tokenStore.getTenantId()
+        const collected: TeamRow[] = []
+        for (const s of schools) {
+          await switchSchool(s.id)
+          collected.push(...(await listSchoolUsers()).map((u) => mapTeamRow(u, s.name)))
+        }
+        if (restoreTenant) await switchSchool(restoreTenant)
+        setRows(groupByPerson(collected))
+      } else {
+        setRows((await listSchoolUsers()).map((u) => mapTeamRow(u)))
+      }
     } catch {
       setError(true)
     } finally {
@@ -482,7 +540,10 @@ function TeamTab({ schoolId, schools }: { schoolId: string; schools: School[] })
   const filtered = rows.filter((u) => {
     const needle = q.trim().toLowerCase()
     if (needle && !(u.name.toLowerCase().includes(needle) || u.email.toLowerCase().includes(needle))) return false
-    if (roleF !== 'all' && u.role !== roleF) return false
+    if (roleF !== 'all') {
+      const hasRole = isAll ? (u.schools ?? []).some((s) => s.role === roleF) : u.role === roleF
+      if (!hasRole) return false
+    }
     return true
   })
 
@@ -494,6 +555,37 @@ function TeamTab({ schoolId, schools }: { schoolId: string; schools: School[] })
       setOverrides((m) => ({ ...m, [u.id]: m[u.id] ?? {} }))
     }
     setEditing(u)
+  }
+
+  const confirmRemove = async () => {
+    if (!removing) return
+    setRemoveBusy(true)
+    try {
+      await removeUserAccess(removing.id)
+      setRows((list) => list.filter((x) => x.id !== removing.id))
+      toast.danger('Access removed', `${removing.name} can no longer sign in to this school.`)
+      setRemoving(null)
+    } catch (e) {
+      toast.danger('Could not remove access', e instanceof ApiError ? e.message : 'Try again.')
+    } finally {
+      setRemoveBusy(false)
+    }
+  }
+
+  const confirmRoleChange = async () => {
+    if (!roleChange) return
+    const { user, role } = roleChange
+    setRoleChangeBusy(true)
+    try {
+      await setUserRoles(user.id, [role])
+      setRows((list) => list.map((x) => (x.id === user.id ? { ...x, role } : x)))
+      toast.success('Role updated', `${ROLE_META[role].label} · ${user.name}`)
+      setRoleChange(null)
+    } catch (e) {
+      toast.danger('Role update failed', e instanceof ApiError ? e.message : 'Try again.')
+    } finally {
+      setRoleChangeBusy(false)
+    }
   }
 
   if (editing) {
@@ -525,13 +617,56 @@ function TeamTab({ schoolId, schools }: { schoolId: string; schools: School[] })
         </div>
       ),
     },
-    { key: 'role', label: 'Role', sortValue: (u) => u.role, render: (u) => <Badge tone={roleTone(u.role)}>{ROLE_META[u.role].label}</Badge> },
-    { key: 'status', label: 'Status', align: 'center', sortValue: (u) => u.status, render: (u) => <Badge tone={u.status === 'active' ? 'success' : 'neutral'}>{u.status}</Badge> },
+    ...(isAll
+      ? [{
+          key: 'schools', label: 'Schools',
+          sortValue: (u: TeamRow) => u.schools?.length ?? 0,
+          render: (u: TeamRow) => (
+            <div className="row gap6 wrap" style={{ maxWidth: 420 }}>
+              {(u.schools ?? []).map((m, i) => (
+                <span
+                  key={i}
+                  className="row ai-center gap6"
+                  title={`${m.school} — ${ROLE_META[m.role].label} · ${m.status}`}
+                  style={{
+                    padding: '3px 9px', borderRadius: 999, whiteSpace: 'nowrap',
+                    background: 'var(--surface-3)', fontSize: 11.5, lineHeight: 1.5,
+                  }}
+                >
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: 6, height: 6, borderRadius: '50%', flex: '0 0 auto',
+                      background: m.status === 'active' ? 'var(--success)' : 'var(--text-3)',
+                    }}
+                  />
+                  <span className="fw6">{m.school}</span>
+                  <span className="muted">{ROLE_META[m.role].label}</span>
+                </span>
+              ))}
+            </div>
+          ),
+        } as Column<TeamRow>]
+      : [
+          { key: 'role', label: 'Role', sortValue: (u: TeamRow) => u.role, render: (u: TeamRow) => <Badge tone={roleTone(u.role)}>{ROLE_META[u.role].label}</Badge> } as Column<TeamRow>,
+          {
+            key: 'status', label: 'Status', align: 'center', sortValue: (u: TeamRow) => u.status,
+            render: (u: TeamRow) => (
+              <Badge tone={u.status === 'active' ? 'success' : u.status === 'inactive' ? 'warning' : 'neutral'}>{u.status}</Badge>
+            ),
+          } as Column<TeamRow>,
+        ]),
     {
       key: 'actions', label: '', align: 'right',
       render: (u) => {
+        if (isAll) {
+          const count = u.schools?.length ?? 0
+          return <Badge tone="neutral">{count} school{count === 1 ? '' : 's'}</Badge>
+        }
         const crmRoles = assignableSchoolRoles(app.role)
-        const isCrmRole = crmRoles.includes(u.role)
+        // An Owner's role is never editable from this dropdown — moving them to
+        // Admin/Principal here would silently demote the school's owner.
+        const isCrmRole = crmRoles.includes(u.role) && u.role !== 'owner'
         return (
           <div className="row gap6 jc-end">
             <Btn variant="secondary" size="sm" icon="edit" onClick={() => { void openEditor(u) }}>Permissions</Btn>
@@ -541,14 +676,34 @@ function TeamTab({ schoolId, schools }: { schoolId: string; schools: School[] })
                 value={u.role}
                 onChange={(e) => {
                   const role = e.target.value as Role
-                  void setUserRoles(u.id, [role]).then(
-                    () => { setRows((list) => list.map((x) => (x.id === u.id ? { ...x, role } : x))); toast.success('Role updated', `${ROLE_META[role].label} · ${u.name}`) },
-                    (err) => toast.danger('Role update failed', err instanceof ApiError ? err.message : 'Try again.'),
-                  )
+                  if (role !== u.role) setRoleChange({ user: u, role })
                 }}
               />
             ) : (
               <Badge tone={roleTone(u.role)}>{ROLE_META[u.role].label}</Badge>
+            )}
+            {/* An owner's access is never pausable/removable from here — not even by
+                another owner — mirroring the backend guard in Deactivate/SetActiveAsync. */}
+            {u.role !== 'owner' && (u.status === 'active' || u.status === 'inactive') && (
+              <Btn
+                variant="secondary" size="sm"
+                icon={u.status === 'active' ? 'lock' : 'checkCircle'}
+                onClick={() => {
+                  const nextActive = u.status !== 'active'
+                  void setUserActive(u.id, nextActive).then(
+                    () => {
+                      setRows((list) => list.map((x) => (x.id === u.id ? { ...x, status: nextActive ? 'active' : 'inactive' } : x)))
+                      toast.success(nextActive ? 'Access resumed' : 'Access paused', `${u.name} · ${nextActive ? 'can sign in again' : 'can no longer sign in'}.`)
+                    },
+                    (err) => toast.danger('Could not update status', err instanceof ApiError ? err.message : 'Try again.'),
+                  )
+                }}
+              >
+                {u.status === 'active' ? 'Deactivate' : 'Activate'}
+              </Btn>
+            )}
+            {u.role !== 'owner' && (
+              <Btn variant="danger" size="sm" icon="trash" onClick={() => setRemoving(u)}>Remove</Btn>
             )}
           </div>
         )
@@ -559,8 +714,12 @@ function TeamTab({ schoolId, schools }: { schoolId: string; schools: School[] })
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16, marginBottom: 16 }}>
-        <Kard icon="users" label="Workspace users" value={rows.length} tone="brand" />
-        <Kard icon="checkCircle" label="Active" value={rows.filter((u) => u.status === 'active').length} tone="success" />
+        <Kard icon="users" label={isAll ? 'People' : 'Workspace users'} value={rows.length} tone="brand" />
+        <Kard
+          icon="checkCircle" label="Active"
+          value={rows.filter((u) => (isAll ? (u.schools ?? []).some((s) => s.status === 'active') : u.status === 'active')).length}
+          tone="success"
+        />
       </div>
 
       <Card pad={false}>
@@ -575,7 +734,9 @@ function TeamTab({ schoolId, schools }: { schoolId: string; schools: School[] })
           <Btn variant="secondary" icon="briefcase" onClick={() => setOnboardKind('staff')}>Onboard staff</Btn>
         </div>
         <div className="t-xs muted" style={{ padding: '0 16px 12px' }}>
-          Send invite = CRM users (Admin / Principal / Vice-Principal). Teachers &amp; staff = onboard form with name, address &amp; documents.
+          {isAll
+            ? 'This list is read-only here — but Send invite / Onboard work across any of your schools (pick them inside). Roles & permissions and Audit still need one school selected above.'
+            : 'Send invite = CRM users (Admin / Principal / Vice-Principal). Teachers & staff = onboard form with name, address & documents.'}
         </div>
 
         {loading ? (
@@ -604,11 +765,45 @@ function TeamTab({ schoolId, schools }: { schoolId: string; schools: School[] })
         onClose={() => setInviteOpen(false)}
         schools={schools}
         schoolId={schoolId}
-        actorRole={app.role === 'owner' || app.user?.role === 'owner' ? 'owner' : app.role}
+        actorRole={app.role}
         onInvited={() => void reload()}
       />
       {onboardKind && (
         <OnboardPeopleModal open kind={onboardKind} schools={schools} onClose={() => setOnboardKind(null)} />
+      )}
+      {removing && (
+        <Modal
+          open icon="alert" title="Remove access"
+          sub={`${removing.name} will no longer be able to sign in to this school. This doesn't affect any of their other schools.`}
+          onClose={() => { if (!removeBusy) setRemoving(null) }}
+          footer={
+            <div className="row gap8 jc-end">
+              <Btn variant="ghost" onClick={() => setRemoving(null)} disabled={removeBusy}>Cancel</Btn>
+              <Btn variant="danger" icon="trash" onClick={() => { void confirmRemove() }} disabled={removeBusy}>
+                {removeBusy ? 'Removing…' : 'Remove access'}
+              </Btn>
+            </div>
+          }
+        >
+          <div className="t-sm muted">{removing.email}</div>
+        </Modal>
+      )}
+      {roleChange && (
+        <Modal
+          open icon="shield" title="Change role"
+          sub={`Change ${roleChange.user.name}'s role to ${ROLE_META[roleChange.role].label}? This updates their permissions in this school immediately.`}
+          onClose={() => { if (!roleChangeBusy) setRoleChange(null) }}
+          footer={
+            <div className="row gap8 jc-end">
+              <Btn variant="ghost" onClick={() => setRoleChange(null)} disabled={roleChangeBusy}>Cancel</Btn>
+              <Btn variant="primary" icon="check" onClick={() => { void confirmRoleChange() }} disabled={roleChangeBusy}>
+                {roleChangeBusy ? 'Saving…' : 'Save changes'}
+              </Btn>
+            </div>
+          }
+        >
+          <div className="t-sm muted">{roleChange.user.email}</div>
+        </Modal>
       )}
     </div>
   )
@@ -697,7 +892,7 @@ function CapChip({ cap, active, locked, onClick }: { cap: Cap; active: boolean; 
   )
 }
 
-function RolesTab({ schoolId }: { schoolId: string }) {
+function RolesTab({ schoolId, schools, onPickSchool }: { schoolId: string; schools: School[]; onPickSchool: (id: string) => void }) {
   const toast = useToast()
   const templateQ = useRoleTemplate()
   const setTemplate = useSetRoleTemplate()
@@ -710,13 +905,15 @@ function RolesTab({ schoolId }: { schoolId: string }) {
     // switch-school invalidation refetch is in flight, templateQ.data still
     // holds the PREVIOUS school's cached value, and hydrating from it here
     // would lock in the wrong tenant's permission matrix (and let it be saved).
-    if (schoolId && templateQ.data && !templateQ.isFetching && !loadedFromServer) {
+    if (schoolId && schoolId !== ALL_SCHOOLS_ID && templateQ.data && !templateQ.isFetching && !loadedFromServer) {
       setMatrix(applyTenantOverrides(clonePerms(), templateQ.data))
       setLoadedFromServer(true)
     }
   }, [schoolId, templateQ.data, templateQ.isFetching, loadedFromServer])
 
-  if (!schoolId) return <SelectSchoolPrompt />
+  if (!schoolId || schoolId === ALL_SCHOOLS_ID) {
+    return <SelectSchoolPrompt allSchools={schoolId === ALL_SCHOOLS_ID} schools={schools} onPick={onPickSchool} />
+  }
 
   const toggle = (mod: string, role: GateRole, cap: Cap) => {
     setMatrix((m) => {
@@ -830,7 +1027,7 @@ function RolesTab({ schoolId }: { schoolId: string }) {
 /* ============================================================
    Invitations
    ============================================================ */
-function InvitationsTab({ schoolId }: { schoolId: string }) {
+function InvitationsTab({ schoolId, schools, onPickSchool }: { schoolId: string; schools: School[]; onPickSchool: (id: string) => void }) {
   const toast = useToast()
   const [invites, setInvites] = useState<Invitation[]>([])
   const [loading, setLoading] = useState(true)
@@ -839,7 +1036,7 @@ function InvitationsTab({ schoolId }: { schoolId: string }) {
   const revoke = useRevokeInvitation()
 
   const reload = async () => {
-    if (!schoolId) return
+    if (!schoolId || schoolId === ALL_SCHOOLS_ID) return
     setLoading(true); setError(false)
     try {
       setInvites(await listInvitations())
@@ -852,7 +1049,9 @@ function InvitationsTab({ schoolId }: { schoolId: string }) {
 
   useEffect(() => { void reload() }, [schoolId])
 
-  if (!schoolId) return <SelectSchoolPrompt />
+  if (!schoolId || schoolId === ALL_SCHOOLS_ID) {
+    return <SelectSchoolPrompt allSchools={schoolId === ALL_SCHOOLS_ID} schools={schools} onPick={onPickSchool} />
+  }
 
   const statusTone = (s: Invitation['status']): 'neutral' | 'success' | 'danger' =>
     s === 'accepted' ? 'success' : s === 'revoked' || s === 'expired' ? 'danger' : 'neutral'
@@ -927,7 +1126,7 @@ const AUDIT_ACTION_LABEL: Record<string, string> = {
   'role_template.updated': 'Updated role template',
 }
 
-function AuditTab({ schoolId }: { schoolId: string }) {
+function AuditTab({ schoolId, schools, onPickSchool }: { schoolId: string; schools: School[]; onPickSchool: (id: string) => void }) {
   const [q, setQ] = useState('')
   const [cursor, setCursor] = useState<string | undefined>(undefined)
   const [rows, setRows] = useState<AuditEntry[]>([])
@@ -936,11 +1135,13 @@ function AuditTab({ schoolId }: { schoolId: string }) {
 
   useEffect(() => { setCursor(undefined); setRows([]) }, [action, schoolId])
   useEffect(() => {
-    if (!schoolId || !auditQ.data) return
+    if (!schoolId || schoolId === ALL_SCHOOLS_ID || !auditQ.data) return
     setRows((prev) => (cursor ? [...prev, ...auditQ.data.data] : auditQ.data.data))
   }, [schoolId, auditQ.data, cursor])
 
-  if (!schoolId) return <SelectSchoolPrompt />
+  if (!schoolId || schoolId === ALL_SCHOOLS_ID) {
+    return <SelectSchoolPrompt allSchools={schoolId === ALL_SCHOOLS_ID} schools={schools} onPick={onPickSchool} />
+  }
 
   return (
     <Card pad={false}>
@@ -991,10 +1192,32 @@ function AuditTab({ schoolId }: { schoolId: string }) {
 /* ============================================================
    OwnerUsers — shell
    ============================================================ */
-function SelectSchoolPrompt() {
+function SelectSchoolPrompt({ allSchools, schools, onPick }: {
+  allSchools?: boolean
+  /** Lets the empty state jump straight to a school instead of being a dead end. */
+  schools?: School[]
+  onPick?: (id: string) => void
+} = {}) {
   return (
     <Card>
-      <Empty icon="building" title="Select a school" body="Pick one of your mapped schools above to manage its team, roles, invitations and activity." />
+      <Empty
+        icon={allSchools ? 'layers' : 'building'}
+        title={allSchools ? 'This tab edits one school at a time' : 'Select a school'}
+        body={
+          allSchools
+            ? 'Permissions, invitations and audit history belong to a single school — pick one below to open it here. Team stays available across all schools.'
+            : 'Pick one of your mapped schools above to manage its team, roles, invitations and activity.'
+        }
+        action={
+          allSchools && schools && schools.length > 0 && onPick ? (
+            <div className="row gap8 wrap jc-center">
+              {schools.map((s) => (
+                <Btn key={s.id} variant="secondary" size="sm" icon="building" onClick={() => onPick(s.id)}>{s.name}</Btn>
+              ))}
+            </div>
+          ) : undefined
+        }
+      />
     </Card>
   )
 }
@@ -1011,7 +1234,7 @@ function OwnerUsers() {
   const switchSchoolMut = useSwitchSchool()
 
   const selectSchool = (id: string) => {
-    if (!id || id === schoolId) { setSchoolId(id); return }
+    if (!id || id === schoolId || id === ALL_SCHOOLS_ID) { setSchoolId(id); return }
     setSwitching(true)
     switchSchoolMut.mutate(id, {
       onSuccess: () => {
@@ -1034,7 +1257,11 @@ function OwnerUsers() {
         <Field label="School" hint="Pick a mapped school to manage its team, roles, invitations and audit log.">
           <Select
             aria-label="Select school"
-            options={[{ value: '', label: schools.length ? 'Select a school…' : 'No schools mapped' }, ...schools.map((s) => ({ value: s.id, label: s.name }))]}
+            options={[
+              { value: '', label: schools.length ? 'Select a school…' : 'No schools mapped' },
+              ...(schools.length ? [{ value: ALL_SCHOOLS_ID, label: 'All schools' }] : []),
+              ...schools.map((s) => ({ value: s.id, label: s.name })),
+            ]}
             value={schoolId}
             onChange={(e) => selectSchool(e.target.value)}
             disabled={switching}
@@ -1053,9 +1280,9 @@ function OwnerUsers() {
       />
       <div style={{ marginTop: 16 }}>
         {tab === 'team' && <TeamTab schoolId={schoolId} schools={schools} />}
-        {tab === 'roles' && <RolesTab schoolId={schoolId} />}
-        {tab === 'invites' && <InvitationsTab schoolId={schoolId} />}
-        {tab === 'audit' && <AuditTab schoolId={schoolId} />}
+        {tab === 'roles' && <RolesTab schoolId={schoolId} schools={schools} onPickSchool={selectSchool} />}
+        {tab === 'invites' && <InvitationsTab schoolId={schoolId} schools={schools} onPickSchool={selectSchool} />}
+        {tab === 'audit' && <AuditTab schoolId={schoolId} schools={schools} onPickSchool={selectSchool} />}
       </div>
     </div>
   )

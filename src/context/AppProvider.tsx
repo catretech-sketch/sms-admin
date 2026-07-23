@@ -9,7 +9,7 @@ import { listMySchools, switchSchool } from '@/api/mySchools'
 import { clientToSchool } from '@/api/ownerMap'
 import { tokenStore } from '@/api/auth/tokenStore'
 import type { ConsoleKind, Exam, FeePayment, PaperSlot, Role, School, Staff, Student, Teacher, Tier } from '@/types'
-import { schools as mockSchools, students as seedStudents, teachers as seedTeachers, staff as seedStaff, exams as seedExams } from '@/data/mockDb'
+import { students as seedStudents, exams as seedExams } from '@/data/mockDb'
 
 const isTenantGuid = (id: string) => /^[0-9a-f-]{36}$/i.test(id)
 
@@ -127,9 +127,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   /* roster: seeded data plus students enrolled this session (newest first) */
   const [students, setStudents] = useState<Student[]>(seedStudents)
   const addStudent = (student: Student) => setStudents((list) => [student, ...list])
-  const [teachers, setTeachers] = useState<Teacher[]>(seedTeachers)
+  /* Do not seed mock teachers — People / Academics use live GET /teachers. */
+  const [teachers, setTeachers] = useState<Teacher[]>([])
   const addTeacher = (teacher: Teacher) => setTeachers((list) => [teacher, ...list])
-  const [staff, setStaff] = useState<Staff[]>(seedStaff)
+  /* Do not seed mock staff — People uses live GET /staff. */
+  const [staff, setStaff] = useState<Staff[]>([])
   const addStaff = (s: Staff) => setStaff((list) => [s, ...list])
   const [exams, setExams] = useState<Exam[]>(seedExams)
   const addExam = (exam: Exam) => setExams((list) => [exam, ...list])
@@ -249,9 +251,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setRole(role)
     setLoggedIn(true)
 
-    if (saved?.view) {
-      setConsoleKind(saved.consoleKind ?? (ownerConsole ? 'owner' : 'school'))
-      setOwnerViewing(!!saved.ownerViewingSchool)
+    // Never trust a persisted owner-console view/consoleKind for a non-owner role —
+    // sessionStorage can go stale (or be tampered with) independently of the freshly
+    // fetched role, and that's the one thing gating the Owner Console.
+    if (saved?.view && (ownerConsole || !saved.view.startsWith('owner.'))) {
+      setConsoleKind(ownerConsole ? (saved.consoleKind ?? 'owner') : 'school')
+      setOwnerViewing(ownerConsole && !!saved.ownerViewingSchool)
       setView(saved.view)
       if (saved.schoolId) setSchoolId(saved.schoolId)
     } else {
@@ -272,9 +277,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     vice_principal: 'vice_principal', teacher: 'teacher',
   }
 
+  /* When an account holds several roles (e.g. an Owner who is also admin), resolve to the
+     highest-privilege one — Owner must win over admin so the founder lands on Owner Console. */
+  const ROLE_PRIORITY: Role[] = ['owner', 'admin', 'principal', 'vice_principal', 'teacher', 'staff']
+
   const finishLogin = async (email: string, opts?: { restoreUi?: boolean }) => {
     const profile = await fetchMe()
-    const role = ROLE_MAP[profile.roles[0]] ?? 'admin'
+    const mapped = (profile.roles ?? []).map((r) => ROLE_MAP[r]).filter(Boolean) as Role[]
+    const role = ROLE_PRIORITY.find((r) => mapped.includes(r)) ?? 'admin'
     const platform = profile.is_platform === true
     applySession(email, role, platform, opts)
     // Load real tenant plan so school console gates match silver/gold/platinum.

@@ -62,19 +62,49 @@ const POINTS = [
   { icon: 'sparkle', t: 'Open a school console for day-to-day ops' },
 ]
 
+/** Browser-local “Remember me” for login id + password (this device only). */
+const REMEMBER_KEY = 'sm.login.remember'
+
+function loadRemembered(): { id: string; pw: string } | null {
+  try {
+    const raw = localStorage.getItem(REMEMBER_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { id?: unknown; pw?: unknown }
+    const id = typeof parsed.id === 'string' ? parsed.id : ''
+    if (!id.trim()) return null
+    return { id, pw: typeof parsed.pw === 'string' ? parsed.pw : '' }
+  } catch {
+    return null
+  }
+}
+
+function saveRemembered(id: string, pw: string) {
+  localStorage.setItem(REMEMBER_KEY, JSON.stringify({ id, pw }))
+}
+
+function clearRemembered() {
+  localStorage.removeItem(REMEMBER_KEY)
+}
+
 export function LoginScreen() {
   const app = useApp()
   const toast = useToast()
-  const [email, setEmail] = useState('')
-  const [pw, setPw] = useState('')
+  const [email, setEmail] = useState(() => loadRemembered()?.id ?? '')
+  const [pw, setPw] = useState(() => loadRemembered()?.pw ?? '')
   const [showPw, setShowPw] = useState(false)
-  const [remember, setRemember] = useState(true)
+  const [remember, setRemember] = useState(() => !!loadRemembered())
   const busy = app.authBusy
 
   /* Login is product-branded only — never show a sticky school logo (e.g. ssc). */
   useEffect(() => { tokenStore.setSchoolBrand(null) }, [])
 
-  const signIn = (e: string) => { void app.loginWithPassword(e.trim(), pw.trim()) }
+  const signIn = (e: string) => {
+    const id = e.trim()
+    const password = pw.trim()
+    if (remember) saveRemembered(id, password)
+    else clearRemembered()
+    void app.loginWithPassword(id, password)
+  }
 
   /* Password reset/create: prove the identifier via a one-time code, then set a new
      password in a single /auth/password/reset call. On success, return to sign in. */
@@ -88,13 +118,33 @@ export function LoginScreen() {
   const [resetBusy, setResetBusy] = useState(false)
   const [resetDone, setResetDone] = useState(false)
   const [showResetPw, setShowResetPw] = useState(false)
+  /* Arrived via a magic login link (?identifier=&code=) — the code is a long opaque
+     token carried silently, not something the person types, so the code field and
+     its 6-digit shape are skipped for this path. */
+  const [viaLink, setViaLink] = useState(false)
 
   const openReset = () => {
     setResetOpen(true); setResetStep('id'); setResetDone(false); setShowResetPw(false)
-    setResetId(''); setResetCode(''); setResetPw(''); setResetPw2('')
+    setResetId(''); setResetCode(''); setResetPw(''); setResetPw2(''); setViaLink(false)
     setResetErr(null)
   }
   const closeReset = () => { setResetOpen(false); app.clearAuthError() }
+
+  /* Magic link: prefill identifier + token and jump straight to "set password",
+     then scrub the token from the URL/history so it doesn't linger visibly. */
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const linkIdentifier = params.get('identifier')
+    const linkCode = params.get('code')
+    if (linkIdentifier && linkCode) {
+      setResetId(linkIdentifier)
+      setResetCode(linkCode)
+      setResetStep('reset')
+      setResetOpen(true)
+      setViaLink(true)
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [])
 
   /* Step 1 — send the code via /auth/password/forgot. */
   const resetRequest = async () => {
@@ -138,7 +188,8 @@ export function LoginScreen() {
   const resetSubmit = async () => {
     if (resetBusy) return
     const code = resetCode.trim()
-    if (code.length !== 6) { setResetErr('Enter the 6-digit code we sent you.'); return }
+    if (!viaLink && code.length !== 6) { setResetErr('Enter the 6-digit code we sent you.'); return }
+    if (viaLink && !code) { setResetErr('This link is missing its code — request a new one.'); return }
     const pwErr = required(resetPw) ?? validatePassword(resetPw)
     if (pwErr) { setResetErr(pwErr); return }
     const matchErr = passwordsMatch(resetPw, resetPw2)
@@ -156,7 +207,7 @@ export function LoginScreen() {
     // Success: return to sign in with a banner; prefill the email if it's email-shaped.
     const id = resetId.trim()
     setResetOpen(false); setResetStep('id')
-    setResetCode(''); setResetPw(''); setResetPw2(''); setResetErr(null)
+    setResetCode(''); setResetPw(''); setResetPw2(''); setResetErr(null); setViaLink(false)
     if (validateEmail(id) === null) setEmail(id)
     setResetDone(true)
   }
@@ -210,19 +261,25 @@ export function LoginScreen() {
 
               {resetStep === 'reset' && (
                 <form className="col gap10" onSubmit={(e) => { e.preventDefault(); void resetSubmit() }}>
-                  <h2>Choose a new password</h2>
-                  <p className="lead">Enter the 6-digit code we sent to {resetId.trim()}, then set a new password (at least 8 characters).</p>
+                  <h2>{viaLink ? 'Create new password' : 'Choose a new password'}</h2>
+                  <p className="lead">
+                    {viaLink
+                      ? 'You\'re verified via your login link — create new password (at least 8 characters) and you\'re in.'
+                      : `Enter the 6-digit code we sent to ${resetId.trim()}, then set a new password (at least 8 characters).`}
+                  </p>
+                  {!viaLink && (
+                    <Field
+                      label="6-digit code"
+                      error={resetCode.length > 0 && resetCode.length < 6 ? 'Enter all 6 digits of the code.' : undefined}
+                      hint={resetCode.length > 0 && resetCode.length < 6 ? undefined : 'Enter all 6 digits of the code.'}
+                    >
+                      <Input icon="key" inputMode="numeric" maxLength={6} value={resetCode}
+                        onChange={(e) => { setResetCode(e.target.value.replace(/\D/g, '').slice(0, 6)); setResetErr(null) }}
+                        placeholder="••••••" style={{ letterSpacing: '4px' }} />
+                    </Field>
+                  )}
                   <Field
-                    label="6-digit code"
-                    error={resetCode.length > 0 && resetCode.length < 6 ? 'Enter all 6 digits of the code.' : undefined}
-                    hint={resetCode.length > 0 && resetCode.length < 6 ? undefined : 'Enter all 6 digits of the code.'}
-                  >
-                    <Input icon="key" inputMode="numeric" maxLength={6} value={resetCode}
-                      onChange={(e) => { setResetCode(e.target.value.replace(/\D/g, '').slice(0, 6)); setResetErr(null) }}
-                      placeholder="••••••" style={{ letterSpacing: '4px' }} />
-                  </Field>
-                  <Field
-                    label="New password"
+                    label={viaLink ? 'Create new password' : 'New password'}
                     error={resetPw.length > 0 && resetPw.length < 8 ? 'Must be at least 8 characters.' : undefined}
                     hint={resetPw.length > 0 && resetPw.length < 8 ? undefined : 'Must be at least 8 characters.'}
                   >
@@ -243,12 +300,16 @@ export function LoginScreen() {
                   </Field>
                   {resetErr && <span className="sm-err"><Icon name="alert" size={12} /> {resetErr}</span>}
                   <Btn type="submit" variant="primary" size="lg" style={{ width: '100%' }} disabled={busy || resetBusy}>
-                    {(busy || resetBusy) ? <><Spinner size={16} /> Saving…</> : <>Set password <Icon name="arrowRight" size={16} /></>}
+                    {(busy || resetBusy)
+                      ? <><Spinner size={16} /> Saving…</>
+                      : <>{viaLink ? 'Create new password' : 'Set password'} <Icon name="arrowRight" size={16} /></>}
                   </Btn>
-                  <button type="button" className="sm-login-link" onClick={() => { void resendCode() }}>
-                    Resend code
-                  </button>
-                  <button type="button" className="sm-login-link" onClick={() => { setResetStep('id'); setResetErr(null) }}>
+                  {!viaLink && (
+                    <button type="button" className="sm-login-link" onClick={() => { void resendCode() }}>
+                      Resend code
+                    </button>
+                  )}
+                  <button type="button" className="sm-login-link" onClick={() => { setResetStep('id'); setResetErr(null); setViaLink(false) }}>
                     <Icon name="arrowLeft" size={13} /> Use a different email/mobile
                   </button>
                 </form>
@@ -283,7 +344,14 @@ export function LoginScreen() {
                 </Field>
 
                 <div className="sm-login-row">
-                  <Checkbox checked={remember} onChange={setRemember} label="Remember me" />
+                  <Checkbox
+                    checked={remember}
+                    onChange={(v) => {
+                      setRemember(v)
+                      if (!v) clearRemembered()
+                    }}
+                    label="Remember me"
+                  />
                   <button type="button" className="sm-login-link" onClick={openReset}>Forgot password?</button>
                 </div>
 

@@ -28,6 +28,8 @@ import {
   overridesFromApi,
   setUserPermissions,
   setUserRoles,
+  removeUserAccess,
+  setUserActive,
   type SchoolUserDto,
 } from '@/api/users'
 import { ApiError } from '@/api/client'
@@ -40,7 +42,7 @@ import type { AuditEntry } from '@/api/audit'
 import { tierIncludes, caps, effectiveCaps, cellState, overrideCount, NEXT_CELL_STATE } from '@/lib/gating'
 import {
   PageHead, Tabs, Card, CardHead, Btn, Badge, TierPill, Avatar, Search, Select,
-  Field, Input, Textarea, Toggle, Icon, Empty, DataTable, Spinner,
+  Field, Input, Textarea, Toggle, Icon, Empty, DataTable, Spinner, Modal,
   type Column, type BadgeTone,
 } from '@/components/ui'
 import { ROLES, ROLE_META, PERMS, TIER_META } from '@/data/mockDb'
@@ -855,14 +857,14 @@ interface SchoolUser {
   email: string
   role: Role
   hue: number
-  status: 'active' | 'invited' | 'suspended'
+  status: 'active' | 'pending' | 'inactive'
   last: string
 }
 
 const userStatus: Record<SchoolUser['status'], { tone: BadgeTone; label: string }> = {
   active: { tone: 'success', label: 'Active' },
-  invited: { tone: 'warning', label: 'Invited' },
-  suspended: { tone: 'danger', label: 'Suspended' },
+  pending: { tone: 'neutral', label: 'Pending' },
+  inactive: { tone: 'warning', label: 'Inactive' },
 }
 
 /** Highest-privilege first — an Owner who also holds admin should read as Owner. */
@@ -878,7 +880,7 @@ function mapDto(u: SchoolUserDto, i: number): SchoolUser {
     email,
     role: primary,
     hue: (i * 37) % 360,
-    status: u.status === 'suspended' ? 'suspended' : u.status === 'invited' ? 'invited' : 'active',
+    status: u.status === 'inactive' ? 'inactive' : u.status === 'pending' ? 'pending' : 'active',
     last: u.created_at ? new Date(u.created_at).toLocaleDateString() : '—',
   }
 }
@@ -951,6 +953,10 @@ function UsersTab() {
   const [inviting, setInviting] = useState(false)
   const [overrides, setOverrides] = useState<Record<string, UserOverrides>>({})
   const [editing, setEditing] = useState<SchoolUser | null>(null)
+  const [removing, setRemoving] = useState<SchoolUser | null>(null)
+  const [removeBusy, setRemoveBusy] = useState(false)
+  const [roleChange, setRoleChange] = useState<{ user: SchoolUser; role: Role } | null>(null)
+  const [roleChangeBusy, setRoleChangeBusy] = useState(false)
   const [users, setUsers] = useState<SchoolUser[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -992,6 +998,37 @@ function UsersTab() {
     setEditing(u)
   }
 
+  const confirmRemove = async () => {
+    if (!removing) return
+    setRemoveBusy(true)
+    try {
+      await removeUserAccess(removing.id)
+      setUsers((list) => list.filter((x) => x.id !== removing.id))
+      toast.danger('Access removed', `${removing.name} can no longer sign in to this school.`)
+      setRemoving(null)
+    } catch (e) {
+      toast.danger('Could not remove access', e instanceof ApiError ? e.message : 'Try again.')
+    } finally {
+      setRemoveBusy(false)
+    }
+  }
+
+  const confirmRoleChange = async () => {
+    if (!roleChange) return
+    const { user, role } = roleChange
+    setRoleChangeBusy(true)
+    try {
+      await setUserRoles(user.id, [role])
+      setUsers((list) => list.map((x) => (x.id === user.id ? { ...x, role } : x)))
+      toast.success('Role updated', `${ROLE_META[role].label} · ${user.name}`)
+      setRoleChange(null)
+    } catch (e) {
+      toast.danger('Role update failed', e instanceof ApiError ? e.message : 'Try again.')
+    } finally {
+      setRoleChangeBusy(false)
+    }
+  }
+
   const columns: Column<SchoolUser>[] = [
     {
       key: 'name', label: 'User', sortValue: (u) => u.name,
@@ -1031,21 +1068,44 @@ function UsersTab() {
       render: (u) => (
         <div className="row gap6 jc-end wrap">
           <Btn variant="secondary" size="sm" icon="edit" onClick={() => { void openEditor(u) }}>Permissions</Btn>
-          <Select
-            options={assignableSchoolRoles(app.role).map((r) => ({ value: r, label: ROLE_META[r].label }))}
-            value={assignableSchoolRoles(app.role).includes(u.role) ? u.role : assignableSchoolRoles(app.role)[0]}
-            onChange={(e) => {
-              const role = e.target.value as Role
-              void setUserRoles(u.id, [role]).then(
-                () => {
-                  setUsers((list) => list.map((x) => (x.id === u.id ? { ...x, role } : x)))
-                  toast.success('Role updated', `${ROLE_META[role].label} · user ${u.id.slice(0, 8)}…`)
-                },
-                (err) => toast.danger('Role update failed', err instanceof ApiError ? err.message : 'Try again.'),
-              )
-            }}
-            style={{ maxWidth: 130 }}
-          />
+          {/* An Owner's role is never editable from this dropdown — moving them to
+              Admin/Principal here would silently demote the school's owner. */}
+          {u.role === 'owner' ? (
+            <Badge tone={roleTone(u.role)}>{ROLE_META[u.role].label}</Badge>
+          ) : (
+            <Select
+              options={assignableSchoolRoles(app.role).map((r) => ({ value: r, label: ROLE_META[r].label }))}
+              value={assignableSchoolRoles(app.role).includes(u.role) ? u.role : assignableSchoolRoles(app.role)[0]}
+              onChange={(e) => {
+                const role = e.target.value as Role
+                if (role !== u.role) setRoleChange({ user: u, role })
+              }}
+              style={{ maxWidth: 130 }}
+            />
+          )}
+          {/* An owner's access is never pausable/removable from here — not even by
+              another owner — mirroring the backend guard in Deactivate/SetActiveAsync. */}
+          {u.role !== 'owner' && (u.status === 'active' || u.status === 'inactive') && (
+            <Btn
+              variant="secondary" size="sm"
+              icon={u.status === 'active' ? 'lock' : 'checkCircle'}
+              onClick={() => {
+                const nextActive = u.status !== 'active'
+                void setUserActive(u.id, nextActive).then(
+                  () => {
+                    setUsers((list) => list.map((x) => (x.id === u.id ? { ...x, status: nextActive ? 'active' : 'inactive' } : x)))
+                    toast.success(nextActive ? 'Access resumed' : 'Access paused', `${u.name} · ${nextActive ? 'can sign in again' : 'can no longer sign in'}.`)
+                  },
+                  (err) => toast.danger('Could not update status', err instanceof ApiError ? err.message : 'Try again.'),
+                )
+              }}
+            >
+              {u.status === 'active' ? 'Deactivate' : 'Activate'}
+            </Btn>
+          )}
+          {u.role !== 'owner' && (
+            <Btn variant="danger" size="sm" icon="trash" onClick={() => setRemoving(u)}>Remove</Btn>
+          )}
         </div>
       ),
     },
@@ -1096,6 +1156,40 @@ function UsersTab() {
             empty={<Empty icon="users" title="No users in this school" body="Invite staff — roles & permissions are stored by user id for this school only." />}
           />
         )}
+      {removing && (
+        <Modal
+          open icon="alert" title="Remove access"
+          sub={`${removing.name} will no longer be able to sign in to this school. This doesn't affect any of their other schools.`}
+          onClose={() => { if (!removeBusy) setRemoving(null) }}
+          footer={
+            <div className="row gap8 jc-end">
+              <Btn variant="ghost" onClick={() => setRemoving(null)} disabled={removeBusy}>Cancel</Btn>
+              <Btn variant="danger" icon="trash" onClick={() => { void confirmRemove() }} disabled={removeBusy}>
+                {removeBusy ? 'Removing…' : 'Remove access'}
+              </Btn>
+            </div>
+          }
+        >
+          <div className="t-sm muted">{removing.email}</div>
+        </Modal>
+      )}
+      {roleChange && (
+        <Modal
+          open icon="shield" title="Change role"
+          sub={`Change ${roleChange.user.name}'s role to ${ROLE_META[roleChange.role].label}? This updates their permissions in this school immediately.`}
+          onClose={() => { if (!roleChangeBusy) setRoleChange(null) }}
+          footer={
+            <div className="row gap8 jc-end">
+              <Btn variant="ghost" onClick={() => setRoleChange(null)} disabled={roleChangeBusy}>Cancel</Btn>
+              <Btn variant="primary" icon="check" onClick={() => { void confirmRoleChange() }} disabled={roleChangeBusy}>
+                {roleChangeBusy ? 'Saving…' : 'Save changes'}
+              </Btn>
+            </div>
+          }
+        >
+          <div className="t-sm muted">{roleChange.user.email}</div>
+        </Modal>
+      )}
     </Card>
   )
 }
