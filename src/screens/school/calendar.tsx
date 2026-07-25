@@ -1,24 +1,32 @@
 /* ============================================================
    SchoolMate — Academic Calendar
-   Month grid + agenda of holidays, exams, fee due dates, PTMs
-   and events. Frontend-only: deterministic seeded events per
-   month + a local "Add event". Admin-editable, others view-only.
+   Month grid + agenda. Events persist per school (local until
+   Calendar API). No seeded dummy events. Email notify uses
+   announcements API; direct person mail uses mailto.
    ============================================================ */
-import { useMemo, useState, type ComponentType } from 'react'
+import { useMemo, useState, useCallback, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import { can } from '@/lib/gating'
 import {
-  PageHead, Card, CardHead, Btn, Badge, Select, Field, Input, Textarea, Checkbox, Modal, Icon, Empty, Segmented, DemoBadge,
+  PageHead, Card, CardHead, Btn, Badge, Select, Field, Input, Textarea, Checkbox, Modal, Icon, Empty, Segmented, FileUpload,
 } from '@/components/ui'
+import {
+  listCalendarEvents,
+  addCalendarEvent,
+  removeCalendarEvent,
+  type CalendarEvent,
+  type CalendarEventType,
+} from '@/api/calendarEvents'
+import { createAnnouncement } from '@/api/announcements'
+import { collectAudienceContacts } from '@/lib/collectAudienceEmails'
 
-type EvType = 'holiday' | 'exam' | 'fee' | 'ptm' | 'event'
-interface Ev { date: string; type: EvType; title: string; desc?: string }
+type EvType = CalendarEventType
+type Channel = 'email' | 'sms' | 'app'
 
-type Channel = 'app' | 'push' | 'email'
-const CHANNELS: { key: Channel; label: string }[] = [
-  { key: 'app', label: 'In-app' },
-  { key: 'push', label: 'Push' },
-  { key: 'email', label: 'Email' },
+const CHANNELS: { key: Channel; label: string; hint: string }[] = [
+  { key: 'email', label: 'Email', hint: 'Parents & teachers mail ids' },
+  { key: 'sms', label: 'SMS', hint: 'Guardian & teacher mobile numbers' },
+  { key: 'app', label: 'App', hint: 'In-app notification (bell)' },
 ]
 
 const EVENT_META: Record<EvType, { label: string; color: string; icon: string }> = {
@@ -31,26 +39,23 @@ const EVENT_META: Record<EvType, { label: string; color: string; icon: string }>
 const TYPES = Object.keys(EVENT_META) as EvType[]
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-function hash(s: string): number { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h }
 const iso = (y: number, m: number, d: number) => `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
 const daysInMonth = (y: number, m: number) => new Date(y, m + 1, 0).getDate()
 
-/* deterministic seeded events for a given month */
-function seededEvents(y: number, m: number): Ev[] {
-  const dim = daysInMonth(y, m)
-  const h = hash(`${y}-${m}`)
-  const pick = (salt: string, lo: number, hi: number) => lo + (hash(salt + h) % (hi - lo + 1))
-  let sat = 0, count = 0
-  for (let d = 1; d <= dim; d++) { if (new Date(y, m, d).getDay() === 6) { count++; if (count === 2) { sat = d; break } } }
-  return [
-    { date: iso(y, m, 10), type: 'fee', title: 'Term fee due' },
-    { date: iso(y, m, sat || 13), type: 'ptm', title: 'Parent–teacher meeting' },
-    { date: iso(y, m, pick('hol', 1, 28)), type: 'holiday', title: 'Public holiday' },
-    { date: iso(y, m, pick('exam', 5, 24)), type: 'exam', title: 'Unit test · Grade X' },
-    { date: iso(y, m, pick('exam2', 5, 24)), type: 'exam', title: 'Periodic test · Grade IX' },
-    { date: iso(y, m, pick('ev', 1, 28)), type: 'event', title: 'Annual sports day' },
-    { date: iso(y, m, pick('ev2', 1, 28)), type: 'event', title: 'Science exhibition' },
-  ]
+function fileToBase64(file: File): Promise<{ base64: string; contentType: string }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const raw = String(reader.result || '')
+      const comma = raw.indexOf(',')
+      resolve({
+        base64: comma >= 0 ? raw.slice(comma + 1) : raw,
+        contentType: file.type || 'application/octet-stream',
+      })
+    }
+    reader.onerror = () => reject(new Error('Could not read attachment'))
+    reader.readAsDataURL(file)
+  })
 }
 
 function CalendarScreen() {
@@ -62,23 +67,41 @@ function CalendarScreen() {
   const [cursor, setCursor] = useState({ y: today.getFullYear(), m: today.getMonth() })
   const [enabled, setEnabled] = useState<Set<EvType>>(new Set(TYPES))
   const [view, setView] = useState<'month' | 'agenda'>('month')
-  const [extra, setExtra] = useState<Ev[]>([])
+  const [tick, setTick] = useState(0)
   const [selDay, setSelDay] = useState<string | null>(null)
   const [addOpen, setAddOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [attachment, setAttachment] = useState<File | null>(null)
   const [form, setForm] = useState<{ date: string; type: EvType; title: string; desc: string; channels: Channel[] }>({
-    date: iso(today.getFullYear(), today.getMonth(), today.getDate()), type: 'event', title: '', desc: '', channels: ['app'],
+    date: iso(today.getFullYear(), today.getMonth(), today.getDate()),
+    type: 'event',
+    title: '',
+    desc: '',
+    channels: ['email', 'sms', 'app'],
   })
+
+  const refresh = useCallback(() => setTick((n) => n + 1), [])
+  const allEvents = useMemo(() => {
+    void tick
+    return listCalendarEvents()
+  }, [tick])
 
   const monthLabel = new Date(cursor.y, cursor.m, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
 
   const events = useMemo(() => {
-    const monthExtra = extra.filter((e) => { const [yy, mm] = e.date.split('-').map(Number); return yy === cursor.y && mm === cursor.m + 1 })
-    return [...seededEvents(cursor.y, cursor.m), ...monthExtra].filter((e) => enabled.has(e.type))
-  }, [cursor, extra, enabled])
+    return allEvents.filter((e) => {
+      const [yy, mm] = e.date.split('-').map(Number)
+      if (yy !== cursor.y || mm !== cursor.m + 1) return false
+      return enabled.has(e.type)
+    })
+  }, [allEvents, cursor, enabled])
 
   const byDay = useMemo(() => {
-    const map: Record<number, Ev[]> = {}
-    events.forEach((e) => { const d = Number(e.date.split('-')[2]); (map[d] ??= []).push(e) })
+    const map: Record<number, CalendarEvent[]> = {}
+    events.forEach((e) => {
+      const d = Number(e.date.split('-')[2])
+      ;(map[d] ??= []).push(e)
+    })
     return map
   }, [events])
 
@@ -94,14 +117,115 @@ function CalendarScreen() {
     if (m > 11) { m = 0; y++ }
     return { y, m }
   })
-  const toggleType = (t: EvType) => setEnabled((s) => { const n = new Set(s); if (n.has(t)) n.delete(t); else n.add(t); return n })
-  const toggleChannel = (c: Channel) => setForm((f) => ({ ...f, channels: f.channels.includes(c) ? f.channels.filter((x) => x !== c) : [...f.channels, c] }))
-  const addEvent = () => {
-    if (!form.title.trim()) { toast.danger('Title required', 'Enter an event title.'); return }
-    setExtra((x) => [...x, { date: form.date, type: form.type, title: form.title.trim(), desc: form.desc.trim() || undefined }])
-    const chs = form.channels.map((c) => CHANNELS.find((x) => x.key === c)!.label)
-    toast.success('Event added', `${EVENT_META[form.type].label}: ${form.title.trim()}${chs.length ? ` · notified via ${chs.join(', ')}` : ''}`)
-    setAddOpen(false); setForm((f) => ({ ...f, title: '', desc: '' }))
+  const toggleType = (t: EvType) => setEnabled((s) => {
+    const n = new Set(s)
+    if (n.has(t)) n.delete(t)
+    else n.add(t)
+    return n
+  })
+  const toggleChannel = (c: Channel) => setForm((f) => ({
+    ...f,
+    channels: f.channels.includes(c) ? f.channels.filter((x) => x !== c) : [...f.channels, c],
+  }))
+
+  const addEvent = async () => {
+    if (!form.title.trim()) {
+      toast.danger('Title required', 'Enter an event title.')
+      return
+    }
+    setSaving(true)
+    try {
+      const created = addCalendarEvent({
+        date: form.date,
+        type: form.type,
+        title: form.title.trim(),
+        desc: form.desc.trim() || undefined,
+        channels: form.channels,
+        attachmentName: attachment?.name,
+      })
+      refresh()
+
+      let mailNote = ''
+      if (form.channels.length > 0) {
+        try {
+          const when = new Date(created.date + 'T00:00:00').toLocaleDateString(undefined, {
+            weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+          })
+          const contacts = await collectAudienceContacts('everyone')
+          const channels = form.channels.map((c) => (c === 'app' ? 'app' : c))
+          if (
+            (channels.includes('email') && !contacts.emails.length)
+            && (channels.includes('sms') && !contacts.phones.length)
+            && !channels.includes('app')
+          ) {
+            toast.danger(
+              'Event saved, no contacts',
+              'Add parent/teacher email or mobile, then resend with notify on.',
+            )
+            setAddOpen(false)
+            setAttachment(null)
+            setForm((f) => ({ ...f, title: '', desc: '', channels: ['email', 'sms', 'app'] }))
+            return
+          }
+          const kind = EVENT_META[created.type].label
+          let attachmentBase64: string | undefined
+          let attachmentFileName: string | undefined
+          let attachmentContentType: string | undefined
+          if (attachment) {
+            const encoded = await fileToBase64(attachment)
+            attachmentBase64 = encoded.base64
+            attachmentFileName = attachment.name
+            attachmentContentType = encoded.contentType
+          }
+          const ann = await createAnnouncement({
+            title: created.title,
+            body: created.desc?.trim() || `${kind} scheduled at ${app.school.name}.`,
+            type: 'calendar',
+            audience: 'everyone',
+            emails: contacts.emails,
+            phones: contacts.phones,
+            channels,
+            schoolName: app.school.name,
+            eventDate: when,
+            eventKind: kind,
+            attachmentBase64,
+            attachmentFileName,
+            attachmentContentType,
+          })
+          mailNote = ann.reach > 0
+            ? ` · notice${attachment ? ' + your file' : ''} to ${ann.reach}`
+            : ' · saved (0 reach — check contacts)'
+        } catch (err) {
+          toast.danger(
+            'Event saved, notify failed',
+            err instanceof Error ? err.message : 'Could not queue announcement.',
+          )
+          setAddOpen(false)
+          setAttachment(null)
+          setForm((f) => ({ ...f, title: '', desc: '', channels: ['email', 'sms', 'app'] }))
+          return
+        }
+      }
+
+      toast.success(
+        'Event saved',
+        `${EVENT_META[form.type].label}: ${form.title.trim()}${mailNote}`,
+      )
+      setAddOpen(false)
+      setAttachment(null)
+      setForm((f) => ({ ...f, title: '', desc: '', channels: ['email', 'sms', 'app'] }))
+    } catch (err) {
+      toast.danger('Could not save', err instanceof Error ? err.message : 'Please try again.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const deleteEvent = (ev: CalendarEvent) => {
+    removeCalendarEvent(ev.id)
+    refresh()
+    toast.success('Event removed', ev.title)
+    if (selDay && !listCalendarEvents().some((e) => e.date === selDay)) setSelDay(null)
   }
 
   const agenda = useMemo(() => [...events].sort((a, b) => a.date.localeCompare(b.date)), [events])
@@ -111,11 +235,12 @@ function CalendarScreen() {
     <div>
       <PageHead
         title="Calendar"
-        sub={`${app.school.name} · academic year`}
-        actions={editable ? <><DemoBadge /><Btn variant="primary" icon="plus" onClick={() => setAddOpen(true)}>Add event</Btn></> : <DemoBadge />}
+        sub={`${app.school.name} · academic year · your events only`}
+        actions={editable
+          ? <Btn variant="primary" icon="plus" onClick={() => setAddOpen(true)}>Add event</Btn>
+          : undefined}
       />
 
-      {/* toolbar */}
       <Card style={{ marginBottom: 16 }}>
         <div className="row ai-center jc-between gap12 wrap">
           <div className="row ai-center gap8">
@@ -131,7 +256,7 @@ function CalendarScreen() {
             const on = enabled.has(t)
             const m = EVENT_META[t]
             return (
-              <button key={t} onClick={() => toggleType(t)} style={{
+              <button key={t} type="button" onClick={() => toggleType(t)} style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 11px', borderRadius: 999, cursor: 'pointer',
                 border: `1px solid ${on ? m.color : 'var(--border)'}`,
                 background: on ? `color-mix(in srgb, ${m.color} 14%, transparent)` : 'var(--surface)',
@@ -146,12 +271,18 @@ function CalendarScreen() {
 
       {view === 'month' ? (
         <Card pad={false}>
+          {allEvents.length === 0 && (
+            <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+              <Empty icon="calendar" title="No events yet" body="Dummy sample events were removed. Add holidays, exams, fees, and PTMs — email notify queues a school announcement." />
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)' }}>
             {WEEKDAYS.map((w) => (
               <div key={w} className="t-xs fw7 muted3" style={{ padding: '10px 12px', textAlign: 'center', borderBottom: '1px solid var(--border)' }}>{w}</div>
             ))}
             {cells.map((d, i) => (
-              <div key={i}
+              <div
+                key={i}
                 onClick={() => d && setSelDay(iso(cursor.y, cursor.m, d))}
                 style={{
                   minHeight: 106, padding: 6,
@@ -159,17 +290,18 @@ function CalendarScreen() {
                   borderBottom: '1px solid var(--border)',
                   background: d == null ? 'var(--surface-2)' : undefined,
                   cursor: d ? 'pointer' : 'default',
-                }}>
+                }}
+              >
                 {d != null && (
                   <>
                     <span className="t-xs fw6" style={isToday(d)
                       ? { background: 'var(--brand-600)', color: '#fff', borderRadius: 999, width: 22, height: 22, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }
                       : { color: 'var(--text-2)' }}>{d}</span>
                     <div className="col gap4" style={{ marginTop: 4 }}>
-                      {(byDay[d] ?? []).slice(0, 3).map((e, j) => {
+                      {(byDay[d] ?? []).slice(0, 3).map((e) => {
                         const m = EVENT_META[e.type]
                         return (
-                          <div key={j} className="t-xs" style={{
+                          <div key={e.id} className="t-xs" style={{
                             display: 'flex', alignItems: 'center', gap: 4, borderRadius: 5, padding: '1px 5px', fontWeight: 600,
                             background: `color-mix(in srgb, ${m.color} 13%, transparent)`, color: m.color,
                             overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
@@ -191,14 +323,14 @@ function CalendarScreen() {
         <Card pad={false}>
           <CardHead title="Agenda" sub={`${agenda.length} events · ${monthLabel}`} icon="calendar" />
           {agenda.length === 0
-            ? <div style={{ padding: 8 }}><Empty icon="calendar" title="No events" body="No events match the current filters this month." /></div>
+            ? <div style={{ padding: 8 }}><Empty icon="calendar" title="No events" body="Nothing scheduled this month. Add an event to get started." /></div>
             : (
               <div className="col">
-                {agenda.map((e, i) => {
+                {agenda.map((e) => {
                   const m = EVENT_META[e.type]
                   const dt = new Date(e.date + 'T00:00:00')
                   return (
-                    <div key={i} className="row ai-center gap12" style={{ padding: '11px 16px', borderBottom: '1px solid var(--border)' }}>
+                    <div key={e.id} className="row ai-center gap12" style={{ padding: '11px 16px', borderBottom: '1px solid var(--border)' }}>
                       <div style={{ width: 46, textAlign: 'center', flex: '0 0 auto' }}>
                         <div className="fw7 t-lg" style={{ lineHeight: 1 }}>{dt.getDate()}</div>
                         <div className="t-xs muted3">{dt.toLocaleDateString(undefined, { weekday: 'short' })}</div>
@@ -206,6 +338,9 @@ function CalendarScreen() {
                       <span style={{ width: 8, height: 8, borderRadius: 999, background: m.color, flex: '0 0 auto' }} />
                       <div className="flex1"><div className="t-md fw6">{e.title}</div></div>
                       <Badge tone="neutral" icon={m.icon}>{m.label}</Badge>
+                      {editable && (
+                        <Btn size="sm" variant="ghost" icon="trash" onClick={() => deleteEvent(e)} aria-label="Remove event" />
+                      )}
                     </div>
                   )
                 })}
@@ -214,22 +349,37 @@ function CalendarScreen() {
         </Card>
       )}
 
-      {/* day detail */}
-      <Modal open={!!selDay} onClose={() => setSelDay(null)} size="sm" icon="calendar"
+      <Modal
+        open={!!selDay}
+        onClose={() => setSelDay(null)}
+        size="sm"
+        icon="calendar"
         title={selDay ? new Date(selDay + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' }) : ''}
         footer={editable
-          ? <div className="row gap8 jc-end"><Btn variant="ghost" onClick={() => setSelDay(null)}>Close</Btn><Btn variant="primary" icon="plus" onClick={() => { setForm((f) => ({ ...f, date: selDay! })); setSelDay(null); setAddOpen(true) }}>Add event</Btn></div>
-          : undefined}>
+          ? (
+            <div className="row gap8 jc-end">
+              <Btn variant="ghost" onClick={() => setSelDay(null)}>Close</Btn>
+              <Btn variant="primary" icon="plus" onClick={() => { setForm((f) => ({ ...f, date: selDay! })); setSelDay(null); setAddOpen(true) }}>Add event</Btn>
+            </div>
+          )
+          : undefined}
+      >
         {selEvents.length === 0
           ? <Empty icon="calendar" title="No events" body="Nothing scheduled for this day." />
           : (
             <div className="col gap8">
-              {selEvents.map((e, i) => {
+              {selEvents.map((e) => {
                 const m = EVENT_META[e.type]
                 return (
-                  <div key={i} className="row ai-center gap10" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '9px 11px' }}>
+                  <div key={e.id} className="row ai-center gap10" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '9px 11px' }}>
                     <span className="sm-card-ic" style={{ background: `color-mix(in srgb, ${m.color} 14%, transparent)`, color: m.color, flex: '0 0 auto' }}><Icon name={m.icon} size={15} /></span>
-                    <div className="flex1" style={{ minWidth: 0 }}><div className="fw6 t-sm">{e.title}</div><div className="t-xs muted3">{m.label}</div>{e.desc && <div className="t-xs muted" style={{ marginTop: 4 }}>{e.desc}</div>}</div>
+                    <div className="flex1" style={{ minWidth: 0 }}>
+                      <div className="fw6 t-sm">{e.title}</div>
+                      <div className="t-xs muted3">{m.label}{e.channels.includes('email') ? ' · email' : ''}{e.attachmentName ? ' · file' : ''}</div>
+                      {e.desc && <div className="t-xs muted" style={{ marginTop: 4 }}>{e.desc}</div>}
+                      {e.attachmentName && <div className="t-xs muted" style={{ marginTop: 4 }}>📎 {e.attachmentName}</div>}
+                    </div>
+                    {editable && <Btn size="sm" variant="ghost" icon="trash" onClick={() => deleteEvent(e)} />}
                   </div>
                 )
               })}
@@ -237,18 +387,42 @@ function CalendarScreen() {
           )}
       </Modal>
 
-      {/* add event */}
-      <Modal open={addOpen} onClose={() => setAddOpen(false)} size="sm" icon="plus" title="Add event"
-        footer={<div className="row gap8 jc-end"><Btn variant="ghost" onClick={() => setAddOpen(false)}>Cancel</Btn><Btn variant="primary" icon="check" onClick={addEvent}>Add event</Btn></div>}>
+      <Modal
+        open={addOpen}
+        onClose={() => {
+          if (saving) return
+          setAddOpen(false)
+          setAttachment(null)
+        }}
+        size="sm"
+        icon="plus"
+        title="Add event"
+        footer={(
+          <div className="row gap8 jc-end">
+            <Btn variant="ghost" disabled={saving} onClick={() => setAddOpen(false)}>Cancel</Btn>
+            <Btn variant="primary" icon="check" disabled={saving} onClick={() => void addEvent()}>
+              {saving ? 'Saving…' : form.channels.length ? 'Save & notify' : 'Save event'}
+            </Btn>
+          </div>
+        )}
+      >
         <div className="col gap12">
           <Field label="Date"><Input type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} /></Field>
           <Field label="Type"><Select value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as EvType }))} options={TYPES.map((t) => ({ value: t, label: EVENT_META[t].label }))} /></Field>
           <Field label="Title" required><Input icon="calendar" value={form.title} placeholder="e.g. Independence Day" onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} /></Field>
           <Field label="Description"><Textarea value={form.desc} placeholder="Optional details — agenda, venue, instructions…" onChange={(e) => setForm((f) => ({ ...f, desc: e.target.value }))} /></Field>
-          <Field label="Notify via" hint="Announce to parents & staff when this event is saved">
-            <div className="row ai-center gap16 wrap">
+          <Field label="Attachment" hint="Optional PDF or image — emailed with the Catre notice (max ~2.5 MB)">
+            <FileUpload
+              accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+              value={attachment}
+              onChange={setAttachment}
+              ariaLabel="Event attachment"
+            />
+          </Field>
+          <Field label="Notify via" hint="Email includes Catre PDF notice + your attachment (if any).">
+            <div className="col gap8">
               {CHANNELS.map((c) => (
-                <Checkbox key={c.key} checked={form.channels.includes(c.key)} onChange={() => toggleChannel(c.key)} label={c.label} />
+                <Checkbox key={c.key} checked={form.channels.includes(c.key)} onChange={() => toggleChannel(c.key)} label={`${c.label} — ${c.hint}`} />
               ))}
             </div>
           </Field>
