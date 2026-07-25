@@ -11,12 +11,15 @@ import type { BadgeTone } from '@/components/ui'
 import { SchoolPhoto } from '@/components/SchoolMark'
 import { grades } from '@/data/mockDb'
 import { useApprovals } from '@/api/hooks/useApprovals'
+import { approvalsForRole } from '@/api/approvals'
 import { useActOnApproval } from '@/api/hooks/useApprovalMutations'
 import { useStudents } from '@/api/hooks/useStudents'
 import { useTeachers } from '@/api/hooks/useTeachers'
 import { useStaff } from '@/api/hooks/useStaff'
 import { usePrincipalAttendance } from '@/api/hooks/usePrincipalAttendance'
 import { useFeeReportSummary } from '@/api/hooks/useFeeReports'
+import { useAnnouncements } from '@/api/hooks/useAnnouncements'
+import { useFeePayments } from '@/api/hooks/useFeePayments'
 import {
   loadPeopleAttendance, countPeoplePresent, PEOPLE_ATTENDANCE_CHANGED,
   type CheckInInfo,
@@ -33,19 +36,13 @@ const STAGES = [
 ]
 const RESULT_BANDS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', 'D', 'E']
 
-const ACTIVITY: { time: string; text: string }[] = [
-  { time: 'just now', text: 'Payment received — ₹48,000 from Aarav Sharma (X-A)' },
-  { time: '11m', text: 'Report cards published — Grade V (Periodic Test 1)' },
-  { time: '24m', text: 'New admission enquiry — Nursery 2026 batch' },
-  { time: '38m', text: 'Bus 12 departed route R-04 · ETA first stop 7:42 AM' },
-]
-
-const ANNOUNCEMENTS: { tag: string; tone: BadgeTone; title: string; when: string }[] = [
-  { tag: 'Exam', tone: 'brand', title: 'Term-1 datesheet released for Grades VI–XII', when: 'Today' },
-  { tag: 'Event', tone: 'info', title: 'Annual Sports Day — track trials begin Monday', when: 'Yesterday' },
-  { tag: 'Fees', tone: 'warning', title: 'Term-2 fee window opens 15 Jun · early-bird waiver', when: '2 days ago' },
-  { tag: 'Notice', tone: 'neutral', title: 'PTM scheduled this Saturday, 10 AM – 1 PM', when: '3 days ago' },
-]
+function announcementTone(type?: string): BadgeTone {
+  const t = (type || '').toLowerCase()
+  if (t.includes('fee') || t.includes('payment') || t.includes('receipt')) return 'warning'
+  if (t.includes('exam')) return 'brand'
+  if (t.includes('event')) return 'info'
+  return 'neutral'
+}
 
 function todayIso(): string {
   const d = new Date()
@@ -71,6 +68,8 @@ function SchoolDashboard() {
   const staffQ = useStaff()
   const attQ = usePrincipalAttendance(today, liveAtt)
   const feeQ = useFeeReportSummary()
+  const paymentsQ = useFeePayments()
+  const announcementsQ = useAnnouncements()
 
   /* Re-read local teacher/staff marks after Attendance save (or window focus). */
   const [peopleAttTick, setPeopleAttTick] = useState(0)
@@ -135,8 +134,12 @@ function SchoolDashboard() {
   const outstanding = feeQ.data?.outstanding ?? 0
   const collectedPct = feeQ.data?.pct ?? 0
   const collectedTerm = feeQ.data?.collectedTerm ?? 0
+  const billedTerm = feeQ.data?.billedTerm ?? 0
+  const defaulters = feeQ.data?.defaulters ?? 0
+  const feeByClass = feeQ.data?.byClass ?? []
   const latestPayment = feeQ.data?.latestPayment
   const feeLoading = feeQ.isLoading
+  const feeReady = Boolean(feeQ.data) || feeQ.isError
   const ratio = Math.round(liveStudents / Math.max(1, liveTeachers))
 
   const months = ['Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun']
@@ -145,35 +148,64 @@ function SchoolDashboard() {
     [attendancePct],
   )
 
+  const recentPayments = useMemo(() => {
+    const rows = paymentsQ.data ?? []
+    return [...rows]
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id))
+      .slice(0, 5)
+  }, [paymentsQ.data])
+
   const activity = useMemo(() => {
-    const rows = [...ACTIVITY]
-    if (latestPayment) {
-      rows.unshift({
-        time: 'just now',
-        text: `Payment received — ${fmtMoney(latestPayment.amount, cur)} from ${latestPayment.studentName} (${latestPayment.cls})`,
+    const rows: { time: string; text: string }[] = []
+    for (const p of recentPayments) {
+      rows.push({
+        time: p.date || 'recent',
+        text: `Fee payment — ${fmtMoney(p.amount, cur)} · ${p.studentName} (${p.cls})${p.mode ? ` · ${p.mode}` : ''}`,
+      })
+    }
+    if (!recentPayments.length && latestPayment) {
+      rows.push({
+        time: latestPayment.date || 'recent',
+        text: `Fee payment — ${fmtMoney(latestPayment.amount, cur)} · ${latestPayment.studentName} (${latestPayment.cls})`,
+      })
+    }
+    if (feeReady && !feeLoading) {
+      rows.push({
+        time: 'fees',
+        text: `Fees · collected today ${fmtMoney(feesToday, cur)} · outstanding ${fmtMoney(outstanding, cur)} · ${fmtNum(defaulters)} due`,
       })
     }
     if (attQ.isSuccess || studentsPresent > 0) {
-      rows.unshift({
+      rows.push({
         time: 'today',
         text: `Students · ${fmtNum(studentsPresent)} of ${fmtNum(studentTotal)} present (${attendancePct}%)`,
       })
     }
-    rows.unshift({
+    rows.push({
       time: 'today',
       text: `Teachers · ${fmtNum(teachersPresent)} of ${fmtNum(liveTeachers)} present (${teacherRate}%)`,
     })
-    rows.unshift({
+    rows.push({
       time: 'today',
       text: `Staff · ${fmtNum(supportPresent)} of ${fmtNum(liveSupport)} present (${supportRate}%)`,
     })
     return rows
   }, [
-    latestPayment, cur,
+    recentPayments, latestPayment, cur, feeReady, feeLoading,
+    feesToday, outstanding, defaulters,
     attQ.isSuccess, studentsPresent, studentTotal, attendancePct,
     teachersPresent, liveTeachers, teacherRate,
     supportPresent, liveSupport, supportRate,
   ])
+
+  const liveAnnouncements = useMemo(() => {
+    return (announcementsQ.data ?? []).slice(0, 6).map((a) => ({
+      tag: a.type || a.ch || 'Notice',
+      tone: announcementTone(a.type || a.ch || a.title),
+      title: a.title,
+      when: a.when,
+    }))
+  }, [announcementsQ.data])
 
   const genderBoys = Math.round(liveStudents * 0.53)
   const genderGirls = liveStudents - genderBoys
@@ -211,16 +243,14 @@ function SchoolDashboard() {
         <Kpi
           icon="rupee" iconBg="var(--info-bg)" iconColor="var(--info)"
           label="Fees collected today" value={feeLoading ? '—' : fmtMoney(feesToday, cur)}
-          delta="12.4%" deltaDir="up"
-          foot={`${collectedPct}% of term billed collected`}
-          spark={[12, 18, 9, 22, 16, 24, 19, 27]} sparkColor="var(--info)"
+          foot={feeLoading
+            ? 'Loading…'
+            : `Term ${fmtMoney(collectedTerm, cur)} · ${collectedPct}% of ${fmtMoney(billedTerm, cur)} billed`}
         />
         <Kpi
           icon="wallet" iconBg="var(--warning-bg)" iconColor="var(--warning)"
           label="Outstanding dues" value={feeLoading ? '—' : fmtMoney(outstanding, cur)}
-          delta="4.1%" deltaDir="down"
-          foot={`${100 - collectedPct}% of term billed pending`}
-          spark={[42, 40, 41, 38, 37, 35, 34, 32]} sparkColor="var(--warning)"
+          foot={feeLoading ? 'Loading…' : `${fmtNum(defaulters)} student invoice(s) due / partial`}
         />
         <Kpi
           icon="briefcase" iconBg="var(--brand-50)" iconColor="var(--brand-600)"
@@ -271,12 +301,17 @@ function SchoolDashboard() {
         </Card>
 
         <Card>
-          <CardHead title="Fee collection" sub="Term billed progress" icon="rupee" />
+          <CardHead
+            title="Fee collection"
+            sub={feeLoading ? 'Loading…' : `Term billed ${fmtMoney(billedTerm, cur)}`}
+            icon="rupee"
+            action={<Btn size="sm" variant="ghost" icon="rupee" onClick={() => app.go('school.fees')}>Open fees</Btn>}
+          />
           <div className="row ai-center jc-between gap16 wrap" style={{ marginTop: 12 }}>
             <Donut
               segments={[
-                { value: collectedPct, color: 'var(--success)', label: 'Collected' },
-                { value: 100 - collectedPct, color: 'var(--surface-3)', label: 'Pending' },
+                { value: Math.max(collectedPct, 0), color: 'var(--success)', label: 'Collected' },
+                { value: Math.max(100 - collectedPct, 0), color: 'var(--surface-3)', label: 'Pending' },
               ]}
               size={148} thickness={18}
               center={
@@ -293,9 +328,32 @@ function SchoolDashboard() {
                 { color: 'var(--success)', label: `Collected — ${feeLoading ? '—' : fmtMoney(collectedTerm, cur)}` },
                 { color: 'var(--surface-3)', label: `Outstanding — ${feeLoading ? '—' : fmtMoney(outstanding, cur)}` },
               ]} />
-              <div className="t-sm muted">On-time collection is up <strong style={{ color: 'var(--success)' }}>12.4%</strong> vs last month.</div>
+              <div className="t-sm muted">
+                {feeLoading
+                  ? 'Loading fee summary…'
+                  : `${fmtNum(defaulters)} due / partial · today ${fmtMoney(feesToday, cur)}`}
+              </div>
+              {latestPayment && (
+                <div className="t-xs muted3">
+                  Latest · {fmtMoney(latestPayment.amount, cur)} · {latestPayment.studentName} ({latestPayment.cls})
+                </div>
+              )}
             </div>
           </div>
+          {feeByClass.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div className="t-xs muted3" style={{ marginBottom: 8 }}>Outstanding by class</div>
+              <Bars
+                data={feeByClass.slice(0, 8).map((c) => ({
+                  value: c.value,
+                  label: c.label,
+                  color: c.value > 0 ? 'var(--warning)' : 'var(--success)',
+                }))}
+                h={120}
+                valueFmt={(v) => fmtMoney(v, cur)}
+              />
+            </div>
+          )}
         </Card>
       </div>
 
@@ -365,12 +423,14 @@ function SchoolDashboard() {
         <Card>
           <CardHead
             title="Live activity"
-            sub="Real-time across modules"
+            sub="Fees · attendance · staff"
             icon="zap"
             action={<Badge tone="success" dot>Live</Badge>}
           />
           <div className="col gap12" style={{ marginTop: 12 }}>
-            {activity.map((a, i) => (
+            {activity.length === 0 ? (
+              <Empty icon="zap" title="No live activity yet" body="Fee payments and attendance will show here." />
+            ) : activity.map((a, i) => (
               <div key={i} className="row ai-center gap12">
                 <span className="sm-dot-live" />
                 <div className="t-md" style={{ flex: 1 }}>{a.text}</div>
@@ -381,9 +441,18 @@ function SchoolDashboard() {
         </Card>
 
         <Card>
-          <CardHead title="Announcements" sub="School-wide notices" icon="bell" />
+          <CardHead
+            title="Announcements"
+            sub="School-wide notices"
+            icon="bell"
+            action={<Btn size="sm" variant="ghost" onClick={() => app.go('school.comm')}>View all</Btn>}
+          />
           <div className="col gap12" style={{ marginTop: 12 }}>
-            {ANNOUNCEMENTS.map((a, i) => (
+            {announcementsQ.isLoading ? (
+              <div className="t-sm muted">Loading announcements…</div>
+            ) : liveAnnouncements.length === 0 ? (
+              <Empty icon="bell" title="No announcements" body="Published notices will appear here." />
+            ) : liveAnnouncements.map((a, i) => (
               <div key={i} className="row ai-center gap12">
                 <Badge tone={a.tone}>{a.tag}</Badge>
                 <div className="t-md" style={{ flex: 1 }}>{a.title}</div>
@@ -443,8 +512,7 @@ function ApprovalsInbox() {
   const actOn = useActOnApproval()
 
   const { data: approvalsData } = useApprovals()
-  const approvals = approvalsData ?? []
-  const list = approvals.filter((a) => a.forRoles.includes(app.role) && !acted.has(a.id))
+  const list = approvalsForRole(approvalsData ?? [], app.role).filter((a) => !acted.has(a.id))
 
   const act = (a: Approval, kind: 'approve' | 'reject') => {
     setActed((prev) => new Set(prev).add(a.id))
