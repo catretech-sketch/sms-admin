@@ -7,21 +7,68 @@ function jsonResponse(body: unknown, status = 200): Response {
 beforeEach(() => { localStorage.clear(); vi.restoreAllMocks() })
 
 describe('listAnnouncements', () => {
-  it('returns the announcements list', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: [{ id: 'A1', title: 'Holiday', audience: 'All', when: '1d', reach: 1200, ch: 'app' }], next_cursor: null })))
-    expect((await listAnnouncements())[0]).toMatchObject({ id: 'A1', title: 'Holiday', audience: 'All' })
+  it('maps API AnnouncementResponse fields into the UI shape', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: [{
+        id: 'A1',
+        tenant_id: 't1',
+        title: 'Holiday',
+        body: 'School closed',
+        date: '2026-07-16T00:00:00Z',
+        from: 'admin',
+        role: 'admin',
+        type: 'general',
+        pinned: false,
+        audience: 'parents',
+      }],
+      next_cursor: null,
+    })))
+    const row = (await listAnnouncements())[0]
+    expect(row).toMatchObject({ id: 'A1', title: 'Holiday', audience: 'parents', ch: 'general', body: 'School closed' })
+    expect(row.when).not.toBe('—')
   })
 })
 
 describe('createAnnouncement', () => {
-  it('POSTs /announcements with the payload', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { id: 'A2', title: 'PTM', audience: 'Parents', when: 'now', reach: 800, ch: 'app' } }))
+  it('POSTs /announcements with title + body (required by CreateAnnouncementRequest)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      data: {
+        id: 'A2',
+        title: 'PTM',
+        body: 'Friday 4pm',
+        date: '2026-07-16T00:00:00Z',
+        type: 'general',
+        audience: 'parents',
+        pinned: false,
+      },
+    }))
     vi.stubGlobal('fetch', fetchMock)
-    const created = await createAnnouncement({ title: 'PTM', audience: 'Parents' })
+    const created = await createAnnouncement({ title: 'PTM', body: 'Friday 4pm', audience: 'parents' })
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toContain('/announcements')
     expect((init as RequestInit).method).toBe('POST')
-    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ title: 'PTM', audience: 'Parents' })
-    expect(created).toMatchObject({ id: 'A2', title: 'PTM' })
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      title: 'PTM',
+      body: 'Friday 4pm',
+      type: 'general',
+      audience: 'parents',
+      emails: [],
+      phones: [],
+      channels: ['email', 'sms', 'app'],
+      school_name: null,
+      event_date: null,
+      event_kind: null,
+      attachment_base64: null,
+      attachment_file_name: null,
+      attachment_content_type: null,
+    })
+    expect(created).toMatchObject({ id: 'A2', title: 'PTM', body: 'Friday 4pm' })
+  })
+
+  it('rejects blank body before hitting the network', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(createAnnouncement({ title: 'PTM', body: '  ' })).rejects.toThrow(/body/i)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
