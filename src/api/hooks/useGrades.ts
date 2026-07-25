@@ -18,6 +18,7 @@ export function useUpsertGrade(): UseMutationResult<GradeRow, Error, UpsertGrade
     mutationFn: (input) => upsertGrade(input),
     onSuccess: (g) => {
       qc.invalidateQueries({ queryKey: queryKeys.exams.grades(g.examPaperId) })
+      qc.invalidateQueries({ queryKey: ['exams', 'marksMap'] })
     },
   })
 }

@@ -41,21 +41,41 @@ export function endTime(start: string, duration: number): string {
 /** Conflict messages for a single exam's datesheet (empty = clean). */
 export function findClashes(slots: PaperSlot[]): string[] {
   const out = new Set<string>()
+
+  // Same subject twice for the same class (any dates) — O(n)
+  const seenSubject = new Map<string, PaperSlot>()
+  for (const a of slots) {
+    if (!a.subject) continue
+    const key = `${a.classId ?? ''}|${a.subject}`
+    const prev = seenSubject.get(key)
+    if (prev) {
+      const cls = a.className || prev.className
+      out.add(`Subject ${a.subject} — allocated to two papers${cls ? ` for ${cls}` : ''}`)
+    } else {
+      seenSubject.set(key, a)
+    }
+  }
+
+  // Overlaps only need same-date pairs — O(Σ n_day²) instead of O(n²)
+  const byDate = new Map<string, PaperSlot[]>()
+  for (const s of slots) {
+    if (!s.date) continue
+    const list = byDate.get(s.date)
+    if (list) list.push(s)
+    else byDate.set(s.date, [s])
+  }
+
   const overlap = (a: PaperSlot, b: PaperSlot): boolean => {
-    if (a.date !== b.date) return false
     const as = toMinutes(a.start), bs = toMinutes(b.start)
     if (as === null || bs === null) return false
     return as < bs + (b.duration || 0) && bs < as + (a.duration || 0)
   }
-  for (let i = 0; i < slots.length; i++) {
-    for (let j = i + 1; j < slots.length; j++) {
-      const a = slots[i], b = slots[j]
-      const sameClassScope = (a.classId ?? '') === (b.classId ?? '')
-      if (sameClassScope && a.subject && b.subject && a.subject === b.subject) {
-        const cls = a.className || b.className
-        out.add(`Subject ${a.subject} — allocated to two papers${cls ? ` for ${cls}` : ''}`)
-      }
-      if (overlap(a, b)) {
+
+  for (const daySlots of byDate.values()) {
+    for (let i = 0; i < daySlots.length; i++) {
+      for (let j = i + 1; j < daySlots.length; j++) {
+        const a = daySlots[i], b = daySlots[j]
+        if (!overlap(a, b)) continue
         const ai = [a.inv1, a.inv2].filter(Boolean)
         const bi = [b.inv1, b.inv2].filter(Boolean)
         for (const t of ai) if (bi.includes(t)) out.add(`Invigilator ${t} — overlapping slots on ${a.date}`)

@@ -42,6 +42,26 @@ describe('reportFor getMark override', () => {
     expect(sci).toBe(seeded.rows.find((r) => r.subject === 'Science')!.marks)
   })
 
+  it('liveOnly omits subjects without saved marks (no dummy seed)', () => {
+    const r = reportFor(
+      stu,
+      'EX1',
+      (_sid, subject) => (subject === 'English' ? 80 : undefined),
+      ['English', 'Mathematics', 'Science'],
+      { liveOnly: true },
+    )
+    expect(r.rows.map((row) => row.subject)).toEqual(['English'])
+    expect(r.rows[0].marks).toBe(80)
+    expect(r.pct).toBe(80)
+  })
+
+  it('liveOnly with no marks returns an empty report', () => {
+    const r = reportFor(stu, 'EX1', () => undefined, ['English'], { liveOnly: true })
+    expect(r.rows).toEqual([])
+    expect(r.pct).toBe(0)
+    expect(r.total).toBe(0)
+  })
+
   it('classRank applies the override across peers', () => {
     // override keyed by studentId: give exactly one peer a perfect score
     const target = students.find((s) => students.filter((p) => p.cls === s.cls).length > 1)!
@@ -123,5 +143,29 @@ describe('findClashes', () => {
       mk({ id: 'p1', subject: 'Hindi', date: '2026-09-10', inv1: 'S. Rao', room: 'Hall 2' }),
     ]
     expect(findClashes(slots)).toEqual([])
+  })
+
+  it('stays fast for large datesheets (many classes × subjects)', () => {
+    const slots: PaperSlot[] = []
+    for (let c = 0; c < 40; c++) {
+      for (let s = 0; s < 8; s++) {
+        slots.push(mk({
+          id: `c${c}-s${s}`,
+          classId: `c${c}`,
+          className: `G${c}`,
+          subject: `Sub${s}`,
+          date: `2026-09-${String((s % 28) + 1).padStart(2, '0')}`,
+          start: s % 2 === 0 ? '09:30' : '13:30',
+          room: `H${c}`,
+          inv1: `T${c}`,
+        }))
+      }
+    }
+    const t0 = performance.now()
+    const clashes = findClashes(slots)
+    const ms = performance.now() - t0
+    expect(slots).toHaveLength(320)
+    expect(clashes).toEqual([])
+    expect(ms).toBeLessThan(50)
   })
 })

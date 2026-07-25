@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
+import * as timetablePrint from '@/lib/timetablePrint'
 import { render, fireEvent, within, cleanup } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AppProvider } from '@/context/AppProvider'
@@ -55,17 +56,18 @@ describe('Timetable teacher/subject views', () => {
     expect(within(container).getByText(/class-wise overview/i)).toBeInTheDocument()
   })
 
-  it('prints the timetable via window.print', () => {
-    const printSpy = vi.fn()
-    const original = window.print
-    window.print = printSpy
+  it('opens a formatted print window for PDF export', async () => {
+    const hasSpy = vi.spyOn(timetablePrint, 'hasPrintableTimetable').mockReturnValue(true)
+    const exportSpy = vi.spyOn(timetablePrint, 'exportTimetablePdf').mockResolvedValue('printed')
     try {
       const { container, clickTab } = renderScreen()
       clickTab('Timetable')
-      fireEvent.click(within(container).getByText('Print'))
-      expect(printSpy).toHaveBeenCalledTimes(1)
+      fireEvent.click(within(container).getByText('Save PDF'))
+      expect(exportSpy).toHaveBeenCalledTimes(1)
+      expect(exportSpy.mock.calls[0][0]).toMatchObject({ view: 'class' })
     } finally {
-      window.print = original
+      hasSpy.mockRestore()
+      exportSpy.mockRestore()
     }
   })
 })

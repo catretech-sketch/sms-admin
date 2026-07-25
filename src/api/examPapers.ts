@@ -25,14 +25,43 @@ function isoDate(v: unknown): string {
   return v.slice(0, 10)
 }
 
-function timeHm(v: unknown): string {
-  if (typeof v !== 'string' || !v) return '09:30'
-  const m = /^(\d{1,2}):(\d{2})/.exec(v)
-  return m ? `${m[1].padStart(2, '0')}:${m[2]}` : v
+/** Normalize API / input times to HH:MM for UI, grid keys, and print. */
+export function timeHm(v: unknown): string {
+  if (v == null || v === '') return ''
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    const mins = Math.max(0, Math.round(v))
+    const h = Math.floor(mins / 60) % 24
+    const m = mins % 60
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+  }
+  if (typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    const h = Number(o.hours ?? o.hour ?? o.Hours ?? 0)
+    const m = Number(o.minutes ?? o.minute ?? o.Minutes ?? 0)
+    if (Number.isFinite(h) && Number.isFinite(m)) {
+      return `${String(Math.max(0, Math.min(23, Math.trunc(h)))).padStart(2, '0')}:${String(Math.max(0, Math.min(59, Math.trunc(m)))).padStart(2, '0')}`
+    }
+  }
+  const s = String(v).trim()
+  const m12 = /^(\d{1,2}):(\d{2})(?::\d{2})?\s*(am|pm)$/i.exec(s)
+  if (m12) {
+    let h = Number(m12[1]) % 12
+    if (m12[3].toLowerCase() === 'pm') h += 12
+    const m = Number(m12[2])
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+  }
+  const m24 = /^(\d{1,2}):(\d{2})(?::\d{2})?/.exec(s)
+  if (m24) {
+    const h = Math.max(0, Math.min(23, Number(m24[1])))
+    const m = Math.max(0, Math.min(59, Number(m24[2])))
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+  }
+  return ''
 }
 
 export function toExamPaper(wire: Record<string, unknown>): ExamPaper {
   const c = snakeToCamel<Record<string, unknown>>(wire)
+  const startRaw = c.startTime ?? c.start ?? wire.start_time ?? wire.start
   return {
     id: String(c.id ?? ''),
     examId: c.examId ? String(c.examId) : null,
@@ -41,8 +70,8 @@ export function toExamPaper(wire: Record<string, unknown>): ExamPaper {
     subject: String(c.subject ?? c.name ?? ''),
     subjectId: c.subjectId ? String(c.subjectId) : null,
     date: isoDate(c.date),
-    start: timeHm(c.startTime),
-    duration: Number(c.durationMin ?? 180) || 180,
+    start: timeHm(startRaw) || '09:30',
+    duration: Number(c.durationMin ?? c.duration ?? 180) || 180,
     maxMarks: Number(c.maxMarks ?? 100) || 100,
     room: String(c.room ?? ''),
     inv1: String(c.invigilator1 ?? ''),
@@ -86,7 +115,7 @@ function paperBody(input: CreateExamPaperInput | UpdateExamPaperInput, examId?: 
   if (input.name !== undefined) raw.name = input.name
   if (input.subject !== undefined) raw.subject = input.subject
   if (input.date !== undefined) raw.date = input.date
-  if (input.start !== undefined) raw.startTime = input.start
+  if (input.start !== undefined) raw.startTime = timeHm(input.start) || input.start
   if (input.duration !== undefined) raw.durationMin = input.duration
   if (input.maxMarks !== undefined) raw.maxMarks = input.maxMarks
   if (input.room !== undefined) raw.room = input.room

@@ -43,9 +43,60 @@ describe('notifyExamAudience', () => {
     }))
   })
 
+  it('scopes datesheet title/body to one class', async () => {
+    const { createAnnouncement } = await import('@/api/announcements')
+    const { collectAudienceContacts } = await import('@/lib/collectAudienceEmails')
+    await notifyExamAudience(exam, 'Demo School', 'datesheet', {
+      email: true, sms: false, app: true,
+    }, 'parents', { classLabel: 'I-A' })
+    expect(collectAudienceContacts).toHaveBeenCalledWith('parents', { classLabels: ['I-A'] })
+    expect(createAnnouncement).toHaveBeenCalledWith(expect.objectContaining({
+      title: expect.stringContaining('I-A'),
+      body: expect.stringContaining('I-A'),
+    }))
+  })
+
   it('rejects when no channel selected', async () => {
     await expect(notifyExamAudience(exam, 'Demo', 'results', {
       email: false, sms: false, app: false,
     })).rejects.toThrow(/channel/i)
+  })
+
+  it('notifies marks and attendance for one class', async () => {
+    const { createAnnouncement } = await import('@/api/announcements')
+    await notifyExamAudience(exam, 'Demo School', 'marks', {
+      email: false, sms: false, app: true,
+    }, 'parents', { classLabel: 'VI-A', subject: 'Math' })
+    expect(createAnnouncement).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'exam_marks',
+      title: expect.stringContaining('Math'),
+      channels: ['app'],
+      emails: ['parent@school.test'],
+      phones: ['9876543210'],
+    }))
+    await notifyExamAudience(exam, 'Demo School', 'attendance', {
+      email: false, sms: false, app: true,
+    }, 'parents', {
+      classLabel: 'VI-A',
+      subject: 'Math',
+      paperDate: '2026-09-02',
+      present: 1,
+      absent: 0,
+    })
+    expect(createAnnouncement).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'exam_attendance',
+      eventKind: 'attendance',
+      body: expect.stringContaining('1 present · 0 absent'),
+      emails: ['parent@school.test'],
+      phones: ['9876543210'],
+    }))
+  })
+
+  it('fails clearly when class has no parent contacts', async () => {
+    const { collectAudienceContacts } = await import('@/lib/collectAudienceEmails')
+    vi.mocked(collectAudienceContacts).mockResolvedValueOnce({ emails: [], phones: [] })
+    await expect(notifyExamAudience(exam, 'Demo', 'attendance', {
+      email: false, sms: false, app: true,
+    }, 'parents', { classLabel: 'IV-B' })).rejects.toThrow(/No parent contacts.*IV-B/i)
   })
 })
