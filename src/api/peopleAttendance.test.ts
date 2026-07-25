@@ -34,8 +34,8 @@ describe('effectivePeopleStatus', () => {
     expect(effectivePeopleStatus('teachers', p, {}, { checkIn, principalKnown: true })).toBe('absent')
   })
 
-  it('defaults to present for staff roll-call and unknown teachers', () => {
-    expect(effectivePeopleStatus('staff', { id: 's1', name: 'Ravi' }, {})).toBe('present')
+  it('defaults staff to absent (no app feed) but unknown teachers to present', () => {
+    expect(effectivePeopleStatus('staff', { id: 's1', name: 'Ravi' }, {})).toBe('absent')
     expect(effectivePeopleStatus('teachers', p, {}, { principalKnown: false })).toBe('present')
   })
 
@@ -62,8 +62,8 @@ describe('countPeoplePresent', () => {
     expect(present).toBe(2)
   })
 
-  it('counts staff via manual marks, defaulting unmarked to present', () => {
+  it('counts staff via manual marks, defaulting unmarked to absent', () => {
     const staff = [{ id: 's1', name: 'X' }, { id: 's2', name: 'Y' }]
-    expect(countPeoplePresent('staff', staff, { s2: 'absent' })).toBe(1)
+    expect(countPeoplePresent('staff', staff, { s2: 'present' })).toBe(1)
   })
 })

@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { listAttendance, saveAttendance } from './attendance'
+import { listAttendance, saveAttendance, listLocalAttendanceRange } from './attendance'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+}
+function notFound(): Response {
+  return jsonResponse({ error: { code: 'not_found', message: 'x' } }, 404)
 }
 beforeEach(() => { localStorage.clear(); vi.restoreAllMocks() })
 
@@ -61,5 +64,43 @@ describe('saveAttendance', () => {
     })
     expect(body.period).toBeUndefined()
     expect(body.marks).toBeUndefined()
+  })
+
+  it('persists marks locally when the save API is 404', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(notFound()))
+    await saveAttendance('c1', {
+      date: '2026-07-16',
+      records: [
+        { studentId: 's1', status: 'present' },
+        { studentId: 's2', status: 'absent' },
+      ],
+    })
+    const local = listLocalAttendanceRange('c1', '2026-07-01', '2026-07-31')
+    expect(local).toHaveLength(2)
+    expect(local.find((r) => r.studentId === 's1')?.status).toBe('present')
+    expect(local.find((r) => r.studentId === 's2')?.status).toBe('absent')
+  })
+
+  it('mirrors marks locally even on a successful API save', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: null })))
+    await saveAttendance('c1', {
+      date: '2026-07-16',
+      records: [{ studentId: 's1', status: 'late' }],
+    })
+    expect(listLocalAttendanceRange('c1', '2026-07-16', '2026-07-16')).toHaveLength(1)
+  })
+})
+
+describe('listAttendance local fallback', () => {
+  it('returns locally stored marks when the list API is 404', async () => {
+    // First seed local marks via a 404 save, then read them back through a 404 list.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(notFound()))
+    await saveAttendance('c1', {
+      date: '2026-07-16',
+      records: [{ studentId: 's1', status: 'present' }],
+    })
+    const rows = await listAttendance('c1', '2026-07-16')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ classId: 'c1', studentId: 's1', status: 'present', date: '2026-07-16' })
   })
 })

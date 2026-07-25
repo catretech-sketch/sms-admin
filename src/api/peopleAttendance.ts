@@ -1,7 +1,7 @@
 /* Daily teacher/staff roll-call until a dedicated API exists.
    Persisted per tenant + date in localStorage. */
 import { tokenStore } from './auth/tokenStore'
-import type { AttendanceStatus } from './attendance'
+import type { AttendanceRecord, AttendanceStatus } from './attendance'
 
 export type PeopleAttGroup = 'teachers' | 'staff'
 
@@ -23,6 +23,25 @@ export function loadPeopleAttendance(group: PeopleAttGroup, date: string): Recor
   } catch {
     return {}
   }
+}
+
+/** All locally-saved roll-call marks for a group, as attendance records (for trends/export). */
+export function listAllLocalPeopleAttendance(group: PeopleAttGroup): AttendanceRecord[] {
+  const out: AttendanceRecord[] = []
+  try {
+    const tenant = tokenStore.getTenantId() || 'default'
+    const prefix = `sms_${group}_attendance:${tenant}:`
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (!key || !key.startsWith(prefix)) continue
+      const date = key.slice(prefix.length)
+      const marks = loadPeopleAttendance(group, date)
+      for (const [id, status] of Object.entries(marks)) {
+        out.push({ id: `${group}-${id}-${date}`, classId: '', studentId: id, date, status })
+      }
+    }
+  } catch { /* storage disabled */ }
+  return out
 }
 
 export const PEOPLE_ATTENDANCE_CHANGED = 'sms:people-attendance-changed'
@@ -65,7 +84,9 @@ export interface EffectiveStatusOpts {
 /**
  * Resolve a person's status for a day. One source of truth shared by the
  * Attendance roster, the summary cards, and the Dashboard so they never disagree.
- * Priority: explicit CRM mark → teacher-app check-in → roll-call default (present).
+ * Priority: explicit CRM mark → teacher-app check-in → roll-call default.
+ * Staff have no app check-in feed, so they default to absent until CRM marks them present;
+ * teachers with no check-in feed loaded yet default to present (unknown, not yet contradicted).
  */
 export function effectivePeopleStatus(
   group: PeopleAttGroup,
@@ -80,6 +101,7 @@ export function effectivePeopleStatus(
     if (hit?.checkedIn) return 'present'
     if (opts.principalKnown && hit && !hit.checkedIn) return 'absent'
   }
+  if (group === 'staff') return 'absent'
   return 'present'
 }
 

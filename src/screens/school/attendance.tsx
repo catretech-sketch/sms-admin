@@ -23,7 +23,10 @@ import {
   countPeoplePresent, PEOPLE_ATTENDANCE_CHANGED, type CheckInInfo,
 } from '@/api/peopleAttendance'
 import { ClassWiseStudents } from './attendanceClassWise'
-import type { AttendanceStatus } from '@/api/attendance'
+import { listAllLocalAttendance, type AttendanceStatus } from '@/api/attendance'
+import { listAllLocalPeopleAttendance } from '@/api/peopleAttendance'
+import { buildStudentRegisterRows, registerToCsv, type RegisterRow } from '@/lib/attendanceExport'
+import { downloadTextFile } from '@/lib/feeExport'
 import type { Teacher, Staff, Role } from '@/types'
 
 type Group = 'students' | 'teachers' | 'staff' | 'geo'
@@ -459,6 +462,10 @@ function GeoFence() {
    ============================================================ */
 function AttendanceScreen() {
   const app = useApp()
+  const toast = useToast()
+  const studentsQ = useStudents()
+  const teachersQ = useTeachers()
+  const staffQ = useStaff()
   const allPeople = seesAllPeople(app.role)
   const canView = allPeople || can(app.role, 'attendance', 'V') || can(app.role, 'attendance', 'E')
   const editable = canMarkAttendance(app.role)
@@ -471,6 +478,25 @@ function AttendanceScreen() {
 
   const dateStr = new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
 
+  const exportRegister = () => {
+    let rows: RegisterRow[] = []
+    if (group === 'teachers' || group === 'staff') {
+      const roster = (group === 'teachers' ? teachersQ.data : staffQ.data) ?? []
+      const byId = new Map(roster.map((p) => [p.id, p.name]))
+      rows = listAllLocalPeopleAttendance(group)
+        .map((r) => ({ name: byId.get(r.studentId) ?? r.studentId, adm: r.studentId, cls: group, date: r.date, status: r.status }))
+        .sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name))
+    } else {
+      rows = buildStudentRegisterRows(listAllLocalAttendance(), studentsQ.data ?? [])
+    }
+    if (!rows.length) {
+      toast.danger('Nothing to export', 'No attendance has been marked yet for this group.')
+      return
+    }
+    downloadTextFile(`attendance-${group}-${todayIso()}.csv`, registerToCsv(rows))
+    toast.success('Register exported', `${rows.length} mark${rows.length === 1 ? '' : 's'} · ${group}`)
+  }
+
   if (!canView) {
     return <RestrictedScreen title="Attendance" note="Your role does not include attendance access." />
   }
@@ -482,7 +508,7 @@ function AttendanceScreen() {
         sub={allPeople
           ? `${dateStr} · Owner / Admin / Principal can mark present / absent for any student, teacher or staff`
           : dateStr}
-        actions={<Btn variant="secondary" icon="download" disabled>Export register</Btn>}
+        actions={<Btn variant="secondary" icon="download" disabled={group === 'geo'} onClick={exportRegister}>Export register</Btn>}
       />
 
       {allPeople && (
