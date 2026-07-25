@@ -8,6 +8,8 @@ import { Icon, IconBtn, Avatar, Badge, Popover, MenuItem, MenuSep, MenuLabel, Ti
 import { SchoolMark } from '@/components/SchoolMark'
 import { ROLE_META } from '@/data/mockDb'
 import { useNotifications } from '@/api/hooks/useNotifications'
+import { useApprovals } from '@/api/hooks/useApprovals'
+import { approvalsForRole } from '@/api/approvals'
 
 const LANGS = [{ v: 'en', l: 'English' }, { v: 'hi', l: 'हिन्दी Hindi' }, { v: 'ar', l: 'العربية (RTL)' }, { v: 'ta', l: 'தமிழ் Tamil' }]
 
@@ -20,6 +22,8 @@ export function Topbar() {
   const { data: notifData } = useNotifications()
   const notifications = notifData ?? []
   const unread = notifications.filter((n) => n.unread).length
+  const { data: approvalsData } = useApprovals(!isOwner)
+  const pendingApprovals = isOwner ? 0 : approvalsForRole(approvalsData ?? [], app.role).length
 
   return (
     <header className="sm-topbar">
@@ -65,6 +69,19 @@ export function Topbar() {
       </Popover>
 
       <IconBtn icon={theme.theme === 'dark' ? 'sun' : 'moon'} onClick={theme.toggleTheme} aria-label="Toggle theme" />
+
+      {!isOwner && (
+        <span style={{ position: 'relative' }}>
+          <IconBtn icon="inbox" onClick={() => app.go('school.approvals')} aria-label="Approvals" />
+          {pendingApprovals > 0 && (
+            <span style={{
+              position: 'absolute', top: -2, right: -2, minWidth: 16, height: 16, padding: '0 4px',
+              borderRadius: 99, background: 'var(--danger)', color: '#fff',
+              fontSize: 10, fontWeight: 700, lineHeight: '16px', textAlign: 'center',
+            }}>{pendingApprovals}</span>
+          )}
+        </span>
+      )}
 
       <Popover trigger={(open, toggle) => (
         <span style={{ position: 'relative' }}>

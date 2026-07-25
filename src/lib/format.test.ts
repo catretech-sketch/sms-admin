@@ -27,6 +27,18 @@ describe('format', () => {
     expect(['PASS', 'COMPARTMENT']).toContain(r.result)
     expect(r.pct).toBe(reportFor(students[0]).pct)
   })
+  it('reportFor computes percentage against each paper max marks, not a flat 100', () => {
+    const getMark = (_sid: string, subj: string) => ({ Math: 25, Sci: 45 } as Record<string, number>)[subj]
+    const r = reportFor(students[0], 'EX1', getMark, ['Math', 'Sci'], {
+      liveOnly: true,
+      getMax: (s) => (s === 'Math' ? 50 : 90),
+    })
+    // 25/50 + 45/90 → total 70 out of maxTotal 140 = 50%
+    expect(r.maxTotal).toBe(140)
+    expect(r.pct).toBe(50)
+    expect(r.rows.find((row) => row.subject === 'Math')?.max).toBe(50)
+  })
+
   it('ranks a student within its class (1-based, within class size)', () => {
     const { rank, classSize } = classRank(students[0])
     expect(rank).toBeGreaterThanOrEqual(1)
@@ -57,14 +69,42 @@ describe('topper ranking', () => {
     expect(top.map((t) => t.student.id)).toEqual(['a', 'b'])
   })
 
-  it('overallToppers ranks exam metric deterministically', () => {
-    const top = overallToppers(students, 'exam', 5)
-    expect(top).toHaveLength(5)
-    for (let i = 1; i < top.length; i++) {
-      expect(top[i - 1].score).toBeGreaterThanOrEqual(top[i].score)
+  it('overallToppers ranks exam metric from live marks only (no dummy)', () => {
+    const list = [mk('a', 'X', 70), mk('b', 'X', 95), mk('c', 'Y', 80)]
+    const opts = {
+      liveOnly: true as const,
+      examId: 'EX1',
+      subjects: ['English'],
+      getMark: (sid: string, _subject: string) =>
+        ({ a: 90, b: 70, c: 95 } as Record<string, number>)[sid],
     }
-    // secondary carries the attendance value for the exam metric
-    expect(top[0].secondary).toBe(top[0].student.attendance)
+    const top = overallToppers(list, 'exam', 5, opts)
+    expect(top.map((t) => t.student.id)).toEqual(['c', 'a', 'b'])
+    expect(top[0].score).toBe(95)
+    expect(top[0].secondary).toBe(80)
+  })
+
+  it('attendance metric ranks on live getAttendance, excluding students with no marks', () => {
+    const list = [mk('a', 'X', 12), mk('b', 'X', 99), mk('c', 'X', 50)]
+    // Live marks say a=95, c=80; b has no marks (null) → excluded. SIS % ignored.
+    const liveAtt: Record<string, number | null> = { a: 95, b: null, c: 80 }
+    const top = overallToppers(list, 'attendance', 10, {
+      getAttendance: (sid) => liveAtt[sid] ?? null,
+    })
+    expect(top.map((t) => t.student.id)).toEqual(['a', 'c'])
+    expect(top[0].score).toBe(95)
+  })
+
+  it('overallToppers exam liveOnly excludes students with no saved marks', () => {
+    const list = [mk('a', 'X', 70), mk('b', 'X', 95)]
+    const top = overallToppers(list, 'exam', 10, {
+      liveOnly: true,
+      examId: 'EX1',
+      subjects: ['English'],
+      getMark: (sid) => (sid === 'a' ? 88 : undefined),
+    })
+    expect(top.map((t) => t.student.id)).toEqual(['a'])
+    expect(top[0].score).toBe(88)
   })
 
   it('classToppers groups by class and limits per class', () => {

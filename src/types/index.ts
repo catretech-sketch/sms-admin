@@ -39,6 +39,8 @@ export interface FeeInvoice {
   id: string
   studentId: string
   studentName: string
+  /** Admission no. when API / join provides it. */
+  studentAdm?: string
   cls: string
   grade: string
   academicYear: string
@@ -278,7 +280,11 @@ export interface Teacher {
   workShift?: string
   workLocation?: string
   basicSalary?: string
+  hra?: string
+  allowances?: string
   epf?: string
+  profTax?: string
+  otherDeductions?: string
   uan?: string
   username?: string
   notes?: string
@@ -336,7 +342,11 @@ export interface Staff {
   dateOfJoining?: string
   dateOfLeaving?: string
   basicSalary?: string
+  hra?: string
+  allowances?: string
   epf?: string
+  profTax?: string
+  otherDeductions?: string
   uan?: string
   username?: string
   notes?: string
@@ -372,6 +382,8 @@ export interface Exam {
   name: string
   type: string
   grades: string
+  /** Class / section IDs included in this exam (shown on datesheet). */
+  classIds?: string[]
   from: string
   to: string
   subjects: number

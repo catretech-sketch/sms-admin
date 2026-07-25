@@ -5,7 +5,8 @@ import { useApp } from '@/lib/hooks'
 import { Icon, Btn, Tip, TierPill } from '@/components/ui'
 import { SchoolMark } from '@/components/SchoolMark'
 import { tierIncludes, gateRole } from '@/lib/gating'
-import { approvals } from '@/data/mockDb'
+import { useApprovals } from '@/api/hooks/useApprovals'
+import { approvalsForRole } from '@/api/approvals'
 import type { Tier, Role } from '@/types'
 
 interface NavItem { label: string; view: string; icon: string; lockTier?: Tier; adminOnly?: boolean; badge?: number }
@@ -63,7 +64,8 @@ function schoolNav(role: Role, approvalCount: number): NavGroup[] {
 export function Sidebar() {
   const app = useApp()
   const isOwner = app.consoleKind === 'owner'
-  const approvalCount = approvals.filter((a) => a.forRoles.includes(app.role)).length
+  const { data: approvalsData } = useApprovals(!isOwner)
+  const approvalCount = isOwner ? 0 : approvalsForRole(approvalsData ?? [], app.role).length
   const groups = isOwner ? OWNER_NAV : schoolNav(app.role, approvalCount)
 
   return (

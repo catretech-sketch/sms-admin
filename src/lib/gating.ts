@@ -21,13 +21,19 @@ export function gateRole(role: Role): GateRole {
   return role === 'owner' ? 'admin' : role
 }
 
+const ALL_CAPS: Cap[] = ['V', 'E', 'A']
+
 export function can(role: Role, module: string, cap: Cap): boolean {
+  // Founding owner has full access (admin + principal powers) — mirrors the backend,
+  // where school.owner satisfies both the SchoolAdmin and Principal policies.
+  if (role === 'owner') return true
   const m = PERMS[module]
   if (!m) return false
   return (m[gateRole(role)] || []).indexOf(cap) >= 0
 }
 
 export function caps(role: Role, module: string): Cap[] {
+  if (role === 'owner') return [...ALL_CAPS]
   return (PERMS[module] || {})[gateRole(role)] || []
 }
 

@@ -3,6 +3,8 @@ import type { Client } from './ownerTypes'
 
 export interface UpdateSchoolProfileBody {
   name?: string
+  /** Human school id (tenant slug). */
+  slug?: string
   country?: string
   address?: string
   contact_name?: string

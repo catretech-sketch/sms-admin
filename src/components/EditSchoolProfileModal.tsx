@@ -7,7 +7,7 @@ import {
 import { SchoolMark, SchoolPhoto } from '@/components/SchoolMark'
 import { compressImageFile } from '@/lib/compressImage'
 import { updateSchoolProfile } from '@/api/schoolProfile'
-import { clientToSchool } from '@/api/ownerMap'
+import { clientToSchool, isValidSchoolId, normalizeSchoolId } from '@/api/ownerMap'
 import { ApiError } from '@/api/client'
 import type { Client } from '@/api/ownerTypes'
 import type { School } from '@/types'
@@ -46,6 +46,7 @@ export function EditSchoolProfileModal({
 }) {
   const toast = useToast()
   const [name, setName] = useState('')
+  const [schoolId, setSchoolId] = useState('')
   const [address, setAddress] = useState('')
   const [city, setCity] = useState('')
   const [email, setEmail] = useState('')
@@ -62,6 +63,7 @@ export function EditSchoolProfileModal({
   useEffect(() => {
     if (!open || !school) return
     setName(school.name ?? '')
+    setSchoolId(school.slug ?? client?.slug ?? '')
     setCity(school.city === '—' ? '' : (school.city ?? ''))
     setAddress(client?.address ?? '')
     setEmail(client?.contact_email ?? '')
@@ -80,6 +82,7 @@ export function EditSchoolProfileModal({
   const preview: School = {
     ...school,
     name: name.trim() || school.name,
+    slug: schoolId.trim() || school.slug,
     logoUrl: clearLogo ? null : (logoUrl.trim() || school.logoUrl),
     imageUrl: clearImage ? null : (imageUrl.trim() || school.imageUrl),
   }
@@ -87,6 +90,10 @@ export function EditSchoolProfileModal({
   const save = async () => {
     if (!name.trim()) {
       toast.danger('Name required', 'Enter the school name.')
+      return
+    }
+    if (!isValidSchoolId(schoolId)) {
+      toast.danger('Invalid school ID', 'Use 3–40 characters: letters, numbers, hyphens (e.g. scc or riverdale-blr).')
       return
     }
     setBusy(true)
@@ -115,6 +122,7 @@ export function EditSchoolProfileModal({
 
       const updated = await updateSchoolProfile(school.id, {
         name: name.trim(),
+        slug: normalizeSchoolId(schoolId),
         country: city.trim() || undefined,
         address: address.trim() || undefined,
         contact_name: contactName.trim() || undefined,
@@ -162,6 +170,30 @@ export function EditSchoolProfileModal({
 
         <Field label="School name" required>
           <Input icon="building" value={name} onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field
+          label="School ID"
+          required
+          hint="Unique short code for this school (letters, numbers, hyphens)."
+          error={
+            schoolId.trim().length > 0 && !isValidSchoolId(schoolId)
+              ? 'Use 3–40 characters: letters, numbers, hyphens (e.g. scc or riverdale-blr)'
+              : undefined
+          }
+        >
+          <Input
+            icon="key"
+            value={schoolId}
+            placeholder="e.g. riverdale-blr"
+            onChange={(e) => {
+              const next = e.target.value
+                .toLowerCase()
+                .replace(/[^a-z0-9-]/g, '')
+                .replace(/--+/g, '-')
+                .slice(0, 40)
+              setSchoolId(next)
+            }}
+          />
         </Field>
         <Field label="Address">
           <Input icon="pin" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Street, district, city, state, PIN" />

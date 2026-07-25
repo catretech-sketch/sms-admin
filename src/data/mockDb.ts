@@ -5,7 +5,7 @@
    ============================================================ */
 import type {
   Tier, Role, GateRole, Cap, TierMeta, RoleMeta,
-  School, Student, Teacher, Staff, Bus, Exam, Approval, AppNotification,
+  School, Student, Teacher, Staff, Exam, Approval, AppNotification,
   Complaint, Thread,
 } from '@/types'
 
@@ -41,9 +41,10 @@ export const PERMS: Record<string, Record<GateRole, Cap[]>> = {
   identity: { admin: ['E'], principal: ['V', 'E'], vice_principal: ['V'], teacher: [], staff: [] },
   sis: { admin: ['E'], principal: ['V', 'E'], vice_principal: ['V', 'E'], teacher: ['V'], staff: ['V'] },
   academics: { admin: ['E'], principal: ['V', 'A'], vice_principal: ['E', 'A'], teacher: ['V', 'E'], staff: [] },
-  attendance: { admin: ['E'], principal: ['V', 'A'], vice_principal: ['V', 'E', 'A'], teacher: ['V', 'E'], staff: ['V'] },
+  /* Owner inherits admin. Leadership sees everyone (students + teachers + staff). */
+  attendance: { admin: ['V', 'E', 'A'], principal: ['V', 'E', 'A'], vice_principal: ['V', 'E', 'A'], teacher: ['V', 'E'], staff: ['V'] },
   exams: { admin: ['E'], principal: ['A'], vice_principal: ['A'], teacher: ['V', 'E'], staff: [] },
-  fees: { admin: ['E'], principal: ['A'], vice_principal: ['V'], teacher: [], staff: ['V'] },
+  fees: { admin: ['E'], principal: ['V', 'E', 'A'], vice_principal: ['V'], teacher: [], staff: ['V'] },
   hr: { admin: ['E'], principal: ['A'], vice_principal: ['A'], teacher: [], staff: ['V'] },
   communication: { admin: ['E'], principal: ['E', 'A'], vice_principal: ['E'], teacher: ['E'], staff: ['V', 'E'] },
   operations: { admin: ['E'], principal: ['V'], vice_principal: ['V'], teacher: [], staff: ['V', 'E'] },
@@ -69,7 +70,7 @@ function pick<T>(a: T[]): T { return a[Math.floor(rand() * a.length)] }
 const firstM = ['Aarav', 'Vivaan', 'Aditya', 'Reyansh', 'Arjun', 'Sai', 'Krishna', 'Ishaan', 'Rohan', 'Kabir', 'Dhruv', 'Ayaan', 'Atharv', 'Vihaan', 'Ansh']
 const firstF = ['Aanya', 'Diya', 'Saanvi', 'Aadhya', 'Pari', 'Anika', 'Myra', 'Sara', 'Ira', 'Kiara', 'Riya', 'Navya', 'Aarohi', 'Anvi', 'Tara']
 const last = ['Sharma', 'Iyer', 'Reddy', 'Khan', 'Patel', 'Nair', 'Gupta', 'Menon', 'Verma', 'Das', 'Rao', 'Bose', 'Shetty', 'Joshi', 'Pillai']
-export const sections = ['A', 'B', 'C', 'D']
+export const sections = ['A', 'B', 'C']
 export const grades = ['Nursery', 'LKG', 'UKG', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII']
 export const subjects = ['English', 'Hindi', 'Mathematics', 'Science', 'Social Studies', 'Computer']
 
@@ -101,68 +102,25 @@ for (let i = 0; i < 240; i++) {
 }
 
 /* ---------- Teachers ---------- */
-export const depts = ['Mathematics', 'Science', 'English', 'Hindi', 'Social Studies', 'Computer', 'Physical Education', 'Arts']
-const desigs = ['Senior Teacher', 'Teacher', 'HOD', 'PGT', 'TGT', 'Assistant Teacher']
+export const depts = [
+  'Admin',
+  'Principal',
+  'Vice Principal',
+  'Mathematics',
+  'Science',
+  'English',
+  'Hindi',
+  'Social Studies',
+  'Computer',
+  'Physical Education',
+  'Arts',
+]
+/** Empty — CRM uses live GET /teachers. Keep export for legacy screens until they migrate. */
 export const teachers: Teacher[] = []
-for (let i = 0; i < 48; i++) {
-  const male = rand() > 0.5
-  const fn = male ? pick(firstM) : pick(firstF)
-  const ln = pick(last)
-  const dept = pick(depts)
-  const rating = +(3.4 + rand() * 1.6).toFixed(1)
-  teachers.push({
-    id: 'EMP' + (2010 + i), name: fn + ' ' + ln, gender: male ? 'M' : 'F', dept,
-    desig: pick(desigs), subjects: [pick(subjects), pick(subjects)].filter((v, j, a) => a.indexOf(v) === j),
-    classTeacher: rand() > 0.55 ? pick(grades.slice(8)) + '-' + pick(sections) : null,
-    phone: '+91 9' + String(Math.floor(rand() * 900000000 + 100000000)),
-    email: (fn + '.' + ln).toLowerCase() + '@school.edu',
-    exp: 1 + Math.floor(rand() * 22), rating,
-    attendance: 88 + Math.floor(rand() * 12),
-    result: 60 + Math.floor(rand() * 40),
-    load: 18 + Math.floor(rand() * 12),
-    status: rand() > 0.05 ? 'active' : 'inactive',
-    avatarHue: Math.floor(rand() * 360),
-    top: rating >= 4.6,
-  })
-}
-teachers.sort((a, b) => b.rating - a.rating)
 
 /* ---------- Non-teaching staff ---------- */
-const staffRoles: [string, string][] = [
-  ['Bus Driver', 'transport'], ['Bus Conductor', 'transport'],
-  ['Security Guard', 'security'], ['Gatekeeper', 'security'],
-  ['Lab Assistant', 'academic'], ['Librarian', 'academic'],
-  ['Accountant', 'admin'], ['Office Clerk', 'admin'],
-  ['Housekeeping', 'support'], ['Nurse', 'support'], ['Gardener', 'support'], ['Cook', 'support'],
-]
+/** Empty — CRM uses live GET /staff. */
 export const staff: Staff[] = []
-for (let i = 0; i < 56; i++) {
-  const male = rand() > 0.4
-  const fn = male ? pick(firstM) : pick(firstF)
-  const ln = pick(last)
-  const [role, cat] = pick(staffRoles)
-  staff.push({
-    id: 'STF' + (3010 + i), name: fn + ' ' + ln, gender: male ? 'M' : 'F', role, cat,
-    dept: cat === 'transport' ? 'Transport' : cat === 'security' ? 'Security' : cat === 'academic' ? 'Academic Support' : cat === 'admin' ? 'Administration' : 'General Support',
-    phone: '+91 9' + String(Math.floor(rand() * 900000000 + 100000000)),
-    shift: pick(['Morning', 'Day', 'Evening', 'Rotational']),
-    route: cat === 'transport' ? 'R-0' + (1 + Math.floor(rand() * 5)) : null,
-    attendance: 84 + Math.floor(rand() * 16),
-    status: rand() > 0.05 ? 'active' : 'inactive',
-    avatarHue: Math.floor(rand() * 360),
-  })
-}
-
-/* ---------- Buses ---------- */
-export const buses: Bus[] = [
-  { id: 'R-01', no: 'KA-01-F-2207', label: 'Bus 7', driver: 'M. Singh', conductor: 'R. Das', route: 'Indiranagar loop', capacity: 42, students: 38, stops: 9, status: 'on_route', speed: 32, eta: '7:42', fuel: 74, color: '#16a34a' },
-  { id: 'R-02', no: 'KA-01-G-8841', label: 'Bus 12', driver: 'K. Das', conductor: 'S. Roy', route: 'Whitefield express', capacity: 48, students: 44, stops: 12, status: 'on_route', speed: 41, eta: '7:55', fuel: 61, color: '#4f46e5' },
-  { id: 'R-03', no: 'KA-05-C-3390', label: 'Bus 3', driver: 'R. Yadav', conductor: 'A. Khan', route: 'Koramangala', capacity: 36, students: 29, stops: 7, status: 'at_stop', speed: 0, eta: '7:38', fuel: 88, color: '#f59e0b' },
-  { id: 'R-04', no: 'KA-03-H-1120', label: 'Bus 18', driver: 'S. Pillai', conductor: 'M. Nair', route: 'HSR Layout', capacity: 40, students: 35, stops: 10, status: 'on_route', speed: 28, eta: '8:04', fuel: 45, color: '#0ea5e9' },
-  { id: 'R-05', no: 'KA-02-J-7765', label: 'Bus 9', driver: 'A. Kumar', conductor: 'P. Bose', route: 'Marathahalli', capacity: 44, students: 41, stops: 11, status: 'delayed', speed: 12, eta: '8:12', fuel: 33, color: '#dc2626' },
-  { id: 'R-06', no: 'KA-01-K-4502', label: 'Bus 21', driver: 'V. Reddy', conductor: 'L. Iyer', route: 'Jayanagar', capacity: 42, students: 0, stops: 8, status: 'idle', speed: 0, eta: '—', fuel: 92, color: '#64748b' },
-  { id: 'R-07', no: 'KA-04-B-9981', label: 'Bus 5', driver: '—', conductor: '—', route: 'Electronic City', capacity: 48, students: 0, stops: 14, status: 'maintenance', speed: 0, eta: '—', fuel: 20, color: '#94a3b8' },
-]
 
 /* ---------- Exams ---------- */
 export const exams: Exam[] = [

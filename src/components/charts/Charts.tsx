@@ -2,11 +2,11 @@
    SchoolMate — Lightweight SVG charts. Ported from charts.jsx.
    Uses useId() for stable gradient ids (SSR/test safe).
    ============================================================ */
-import { useId, type ReactNode } from 'react'
+import { useId, type ReactNode, type CSSProperties } from 'react'
 
 export interface Segment { value: number; color: string; label?: string }
 export interface Series { data: number[]; color: string; label?: string }
-export type BarDatum = number | { value: number; label?: string; color?: string }
+export type BarDatum = number | { value: number; label?: string; color?: string; valueLabel?: ReactNode; empty?: boolean }
 
 /* ---------- Sparkline ---------- */
 export function Spark({ data, w = 120, h = 34, color = 'var(--brand-600)', fill = true, strokeW = 2 }: {
@@ -55,23 +55,59 @@ export function Donut({ segments, size = 120, thickness = 16, gap = 2, center }:
 }
 
 /* ---------- Bars ---------- */
-export function Bars({ data, h = 140, color = 'var(--brand-600)', labels, valueFmt }: {
+export function Bars({ data, h = 140, color = 'var(--brand-600)', labels, valueFmt, onBarClick, activeIndex }: {
   data: BarDatum[]; h?: number; color?: string; labels?: string[]; valueFmt?: (v: number) => ReactNode
+  onBarClick?: (index: number) => void; activeIndex?: number
 }) {
   const max = Math.max(...data.map((d) => (typeof d === 'object' ? d.value : d))) || 1
+  const clickable = typeof onBarClick === 'function'
   return (
     <div className="sm-bars" style={{ height: h }}>
       {data.map((d, i) => {
         const v = typeof d === 'object' ? d.value : d
         const lab = typeof d === 'object' ? d.label : (labels && labels[i])
         const cl = typeof d === 'object' ? d.color : undefined
+        const isEmpty = typeof d === 'object' && d.empty === true
+        const valNode = (typeof d === 'object' && d.valueLabel != null) ? d.valueLabel : (valueFmt ? valueFmt(v) : v)
+        const active = activeIndex === i
+        const colStyle: CSSProperties = {
+          ...(clickable ? { cursor: 'pointer' } : {}),
+          ...(active
+            ? {
+                background: 'color-mix(in srgb, var(--brand-600) 14%, transparent)',
+                borderRadius: 10,
+                boxShadow: 'inset 0 0 0 1.5px var(--brand-600)',
+              }
+            : {}),
+          transition: 'background .15s ease',
+        }
         return (
-          <div key={i} className="sm-bar-col">
-            <div className="sm-bar-val">{valueFmt ? valueFmt(v) : v}</div>
-            <div className="sm-bar-track" style={{ height: '100%' }}>
-              <div className="sm-bar-fill" style={{ height: `${(v / max) * 100}%`, background: cl || color }} />
-            </div>
-            <div className="sm-bar-lab">{lab}</div>
+          <div
+            key={i}
+            className={['sm-bar-col', clickable && 'is-clickable', active && 'is-active'].filter(Boolean).join(' ')}
+            style={colStyle}
+            onClick={clickable ? () => onBarClick!(i) : undefined}
+            role={clickable ? 'button' : undefined}
+            tabIndex={clickable ? 0 : undefined}
+            onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onBarClick!(i) } } : undefined}
+            title={clickable && typeof lab === 'string' ? lab : undefined}
+          >
+            <div className="sm-bar-val" style={active ? { color: 'var(--brand-600)' } : undefined}>{valNode}</div>
+            {isEmpty ? (
+              <div
+                className="sm-bar-track"
+                style={{
+                  height: '100%',
+                  background: 'repeating-linear-gradient(45deg, var(--surface-3) 0, var(--surface-3) 6px, var(--surface-2) 6px, var(--surface-2) 12px)',
+                  border: active ? '1.5px dashed var(--brand-600)' : '1.5px dashed var(--text-3)',
+                }}
+              />
+            ) : (
+              <div className="sm-bar-track" style={{ height: '100%' }}>
+                <div className="sm-bar-fill" style={{ height: `${(v / max) * 100}%`, background: cl || color }} />
+              </div>
+            )}
+            <div className="sm-bar-lab" style={active ? { color: 'var(--brand-600)', fontWeight: 700 } : undefined}>{lab}</div>
           </div>
         )
       })}

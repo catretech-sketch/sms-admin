@@ -92,30 +92,59 @@ export function Search({ value, onChange, placeholder = 'Search…', style }: {
   )
 }
 
+function isImageFile(file: File): boolean {
+  if (file.type.startsWith('image/')) return true
+  return /\.(jpe?g|png|gif|webp|bmp)$/i.test(file.name)
+}
+
 /* ------------------------------------------------------------
-   FileUpload — client-side picker with type/size validation and
-   an inline preview (image thumbnail or doc chip). Mock only: the
-   selected File lives in caller state; nothing is uploaded.
+   FileUpload — picker with image preview + Replace / Remove.
+   Optional existingUrl shows a previously saved photo (e.g. edit student).
    ------------------------------------------------------------ */
-export function FileUpload({ accept = '.pdf,.jpg,.jpeg,.png', value, onChange, ariaLabel }: {
+export function FileUpload({
+  accept = '.pdf,.jpg,.jpeg,.png',
+  value,
+  onChange,
+  ariaLabel,
+  existingUrl,
+  existingLabel,
+  onClearExisting,
+  photoPreview = false,
+}: {
   accept?: string
   value: File | null
   onChange: (file: File | null) => void
   ariaLabel?: string
+  /** Saved photo/data-URL when not replacing with a new File yet. */
+  existingUrl?: string | null
+  existingLabel?: string
+  onClearExisting?: () => void
+  /** Larger square preview (student / parent photos). */
+  photoPreview?: boolean
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [err, setErr] = useState<string | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
+  const [broken, setBroken] = useState(false)
 
+  /* FileReader data-URL — stable under React Strict Mode (object URLs get revoked). */
   useEffect(() => {
-    if (value && value.type.startsWith('image/')) {
-      const url = URL.createObjectURL(value)
-      setPreview(url)
-      return () => URL.revokeObjectURL(url)
+    setBroken(false)
+    if (!value || !isImageFile(value)) {
+      setPreview(null)
+      return
     }
-    setPreview(null)
-    return undefined
-  }, [value])
+    let cancelled = false
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (!cancelled) setPreview(String(reader.result || ''))
+    }
+    reader.onerror = () => {
+      if (!cancelled) setPreview(null)
+    }
+    reader.readAsDataURL(value)
+    return () => { cancelled = true }
+  }, [value, existingUrl])
 
   const pick = (file: File | null) => {
     if (!file) { onChange(null); setErr(null); return }
@@ -127,34 +156,96 @@ export function FileUpload({ accept = '.pdf,.jpg,.jpeg,.png', value, onChange, a
       return
     }
     setErr(null)
+    onClearExisting?.()
     onChange(file)
   }
 
   const clear = () => {
     onChange(null)
+    onClearExisting?.()
     setErr(null)
+    setPreview(null)
     if (inputRef.current) inputRef.current.value = ''
   }
 
+  const openPicker = () => {
+    if (inputRef.current) inputRef.current.value = ''
+    inputRef.current?.click()
+  }
+
+  const thumbSrc = broken ? null : (preview || (!value ? (existingUrl || null) : null))
+  const hasFile = !!value || !!existingUrl
+  const showPhoto = photoPreview || !!thumbSrc
+
   return (
-    <div className="sm-upload">
+    <div className={['sm-upload', showPhoto && 'is-photo'].filter(Boolean).join(' ')}>
       <input
         ref={inputRef} type="file" accept={accept} hidden aria-label={ariaLabel}
         onChange={(e) => pick(e.target.files?.[0] ?? null)}
       />
-      {value ? (
-        <div className={['sm-upload-file', err && 'is-error'].filter(Boolean).join(' ')}>
-          {preview
-            ? <img src={preview} alt="" className="sm-upload-thumb" />
+      {hasFile ? (
+        <div className={['sm-upload-file', showPhoto && 'is-photo', err && 'is-error'].filter(Boolean).join(' ')}>
+          {thumbSrc
+            ? (
+              <img
+                src={thumbSrc}
+                alt=""
+                className={['sm-upload-thumb', showPhoto && 'is-photo'].filter(Boolean).join(' ')}
+                onError={() => setBroken(true)}
+              />
+              )
             : <span className="sm-upload-ic"><Icon name="doc" size={16} /></span>}
           <div className="sm-upload-meta">
-            <div className="fw6 t-sm sm-upload-name">{value.name}</div>
-            <div className="t-xs muted">{(value.size / 1024 / 1024).toFixed(2)} MB</div>
+            <div className="fw6 t-sm sm-upload-name">
+              {value?.name || existingLabel || 'Current file'}
+            </div>
+            <div className="t-xs muted">
+              {value ? `${(value.size / 1024 / 1024).toFixed(2)} MB` : 'Saved · replace to change'}
+            </div>
+            <div className="row gap6 wrap" style={{ marginTop: 6 }}>
+              {(preview || existingUrl) && (
+                <button
+                  type="button"
+                  className="sm-upload-action"
+                  onClick={() => {
+                    const src = preview || existingUrl
+                    if (!src) return
+                    /* Always open via blob — Chrome blocks data: PDF tabs. */
+                    void (async () => {
+                      try {
+                        const res = await fetch(src)
+                        const blob = await res.blob()
+                        const url = URL.createObjectURL(blob)
+                        const w = window.open(url, '_blank')
+                        if (!w) {
+                          const a = document.createElement('a')
+                          a.href = url
+                          a.download = value?.name || existingLabel || 'document'
+                          a.click()
+                        }
+                        setTimeout(() => URL.revokeObjectURL(url), 120_000)
+                      } catch {
+                        window.open(src, '_blank')
+                      }
+                    })()
+                  }}
+                >
+                  Open
+                </button>
+              )}
+              <button type="button" className="sm-upload-action" onClick={openPicker}>Replace</button>
+              <button type="button" className="sm-upload-action is-danger" onClick={clear}>Remove</button>
+            </div>
           </div>
-          <button type="button" className="sm-upload-x" onClick={clear} aria-label="Remove file"><Icon name="x" size={14} /></button>
         </div>
+      ) : photoPreview ? (
+        <button type="button" className="sm-upload-drop is-photo" onClick={openPicker}>
+          <span className="sm-upload-drop-ic"><Icon name="user" size={28} /></span>
+          <span className="fw6 t-sm">Upload photo</span>
+          <span className="t-xs muted">JPG or PNG · max 4 MB</span>
+        </button>
       ) : (
-        <button type="button" className="sm-upload-drop" onClick={() => inputRef.current?.click()}>
+        <button type="button" className="sm-upload-drop" onClick={openPicker}>
           <Icon name="upload" size={16} />
           <span>Choose file</span>
           <span className="t-xs muted">PDF, JPG, PNG · max 4 MB</span>

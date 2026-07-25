@@ -7,12 +7,12 @@
    All methods are async so UI code is written for the network.
    ============================================================ */
 import type {
-  School, Student, Teacher, Staff, Bus, Exam, Approval, AppNotification,
+  School, Student, Teacher, Staff, Exam, Approval, AppNotification,
   Complaint, Thread, Report, RankInfo, Role,
   ListStudentsOpts, ListTeachersOpts, ListStaffOpts,
 } from '@/types'
 import {
-  schools, students, teachers, staff, buses, exams, approvals,
+  schools, students, teachers, staff, exams, approvals,
   notifications, complaints, threads,
 } from '@/data/mockDb'
 import { reportFor, classRank } from './format'
@@ -24,7 +24,6 @@ export interface Api {
   getStudent(id: string): Promise<Student | undefined>
   listTeachers(opts?: ListTeachersOpts): Promise<Teacher[]>
   listStaff(opts?: ListStaffOpts): Promise<Staff[]>
-  listBuses(): Promise<Bus[]>
   listExams(): Promise<Exam[]>
   listApprovals(role: Role): Promise<Approval[]>
   notifications(): Promise<AppNotification[]>
@@ -63,7 +62,6 @@ export class MockApi implements Api {
     if (opts.cat && opts.cat !== 'all') r = r.filter((s) => s.cat === opts.cat)
     return ok(r)
   }
-  listBuses() { return ok(buses) }
   listExams() { return ok(exams) }
   listApprovals(role: Role) { return ok(approvals.filter((a) => a.forRoles.includes(role))) }
   notifications() { return ok(notifications) }

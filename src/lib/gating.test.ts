@@ -35,16 +35,31 @@ describe('gating', () => {
     expect(can('admin', 'sis', 'E')).toBe(true)
     expect(can('teacher', 'fees', 'E')).toBe(false)
     expect(can('principal', 'exams', 'A')).toBe(true)
+    expect(can('principal', 'fees', 'E')).toBe(true)
+    expect(can('principal', 'fees', 'A')).toBe(true)
   })
   it('caps() returns the capability array', () => {
     expect(caps('admin', 'sis')).toContain('E')
     expect(caps('teacher', 'fees')).toEqual([])
   })
-  it('owner inherits the admin permission matrix', () => {
-    for (const mod of ['setup', 'sis', 'academics', 'fees', 'dashboard']) {
-      expect(caps('owner', mod)).toEqual(caps('admin', mod))
+  it('owner has full access to every module (admin + principal powers)', () => {
+    for (const mod of ['setup', 'sis', 'academics', 'fees', 'hr', 'dashboard', 'attendance']) {
+      expect(caps('owner', mod)).toEqual(['V', 'E', 'A'])
       for (const cap of ['V', 'E', 'A'] as const)
-        expect(can('owner', mod, cap)).toBe(can('admin', mod, cap))
+        expect(can('owner', mod, cap)).toBe(true)
+    }
+  })
+  it('owner, admin and principal can view and edit all attendance', () => {
+    for (const role of ['owner', 'admin', 'principal'] as const) {
+      expect(can(role, 'attendance', 'V')).toBe(true)
+      expect(can(role, 'attendance', 'E')).toBe(true)
+    }
+  })
+  it('admin and principal can mark anyone like owner', () => {
+    for (const role of ['admin', 'principal'] as const) {
+      expect(can(role, 'attendance', 'V')).toBe(true)
+      expect(can(role, 'attendance', 'E')).toBe(true)
+      expect(can(role, 'attendance', 'A')).toBe(true)
     }
   })
 })

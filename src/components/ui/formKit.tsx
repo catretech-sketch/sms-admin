@@ -7,6 +7,7 @@
 import type { Dispatch, ReactNode, SetStateAction } from 'react'
 import { Field, Input, Textarea, Select, FileUpload } from './forms'
 import type { SelectOption } from './forms'
+import { properName, properPlace } from '@/lib/properCase'
 
 export type FormState = Record<string, string>
 export type FileState = Record<string, File | null>
@@ -20,7 +21,14 @@ export function fieldGrid(children: ReactNode) {
   )
 }
 
-export interface TxtOpts { required?: boolean; icon?: string; ph?: string; type?: string }
+export interface TxtOpts {
+  required?: boolean
+  icon?: string
+  ph?: string
+  type?: string
+  /** Title-case person names / place names on blur (add + edit). */
+  case?: 'name' | 'place'
+}
 
 export function useFormKit(
   f: FormState,
@@ -36,7 +44,15 @@ export function useFormKit(
     <Field label={label} required={opts.required} error={errors[key]}>
       <Input
         icon={opts.icon} type={opts.type} value={f[key]} placeholder={opts.ph}
-        error={!!errors[key]} onChange={(ev) => set(key, ev.target.value)}
+        error={!!errors[key]}
+        onChange={(ev) => set(key, ev.target.value)}
+        onBlur={opts.case
+          ? (ev) => {
+            const raw = ev.target.value
+            const next = opts.case === 'place' ? properPlace(raw) : properName(raw)
+            if (next !== raw) set(key, next)
+          }
+          : undefined}
       />
     </Field>
   )
@@ -55,9 +71,26 @@ export function useFormKit(
     </div>
   )
 
-  const upload = (key: string, label: ReactNode) => (
+  const upload = (
+    key: string,
+    label: ReactNode,
+    opts?: {
+      existingUrl?: string | null
+      existingLabel?: string
+      onClearExisting?: () => void
+      photoPreview?: boolean
+    },
+  ) => (
     <Field label={label} error={errors[key]}>
-      <FileUpload value={files[key]} onChange={setFile(key)} ariaLabel={typeof label === 'string' ? label : key} />
+      <FileUpload
+        value={files[key]}
+        onChange={setFile(key)}
+        ariaLabel={typeof label === 'string' ? label : key}
+        existingUrl={opts?.existingUrl}
+        existingLabel={opts?.existingLabel}
+        onClearExisting={opts?.onClearExisting}
+        photoPreview={opts?.photoPreview}
+      />
     </Field>
   )
 

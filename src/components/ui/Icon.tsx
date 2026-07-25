@@ -56,6 +56,8 @@ const ICONS: Record<string, string> = {
   key: 'M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3',
   arrowRight: 'M5 12h14M12 5l7 7-7 7',
   arrowLeft: 'M19 12H5M12 19l-7-7 7-7',
+  arrowUp: 'M12 19V5M5 12l7-7 7 7',
+  chevUp: 'M6 15l6-6 6 6',
   zap: 'M13 2L3 14h9l-1 8 10-12h-9z',
   menu: 'M3 12h18M3 6h18M3 18h18',
   layers: 'M12 2 2 7l10 5 10-5zM2 17l10 5 10-5M2 12l10 5 10-5',

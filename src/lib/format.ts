@@ -40,18 +40,24 @@ export function reportFor(
   examId?: string,
   getMark?: (studentId: string, subject: string) => number | undefined,
   subjectList?: string[],
+  opts?: { liveOnly?: boolean; getMax?: (subject: string) => number },
 ): Report {
   const subs = subjectList?.length ? subjectList : subjects
-  const rows = subs.map((s) => {
-    const max = 100
+  const liveOnly = !!opts?.liveOnly
+  const rows = subs.flatMap((s) => {
+    const max = Math.max(1, Math.round(opts?.getMax?.(s) ?? 100))
     const override = getMark?.(stu.id, s)
+    if (liveOnly && override == null) return []
     const marks = override ?? studentSubjectMarks(stu, s, examId)
     const pct = (marks / max) * 100
     const g = gradeFor(pct)
-    return { subject: s, max, marks, grade: g, gpa: gpaFor(g), pass: marks >= 33 }
+    return [{ subject: s, max, marks, grade: g, gpa: gpaFor(g), pass: pct >= 33 }]
   })
+  if (!rows.length) {
+    return { rows: [], total: 0, maxTotal: 0, pct: 0, grade: '—', gpa: 0, result: 'PASS' }
+  }
   const total = rows.reduce((a, r) => a + r.marks, 0)
-  const maxTotal = rows.length * 100
+  const maxTotal = rows.reduce((a, r) => a + r.max, 0)
   const pct = +((total / maxTotal) * 100).toFixed(1)
   const gpa = +(rows.reduce((a, r) => a + r.gpa, 0) / rows.length).toFixed(1)
   return { rows, total, maxTotal, pct, grade: gradeFor(pct), gpa, result: rows.every((r) => r.pass) ? 'PASS' : 'COMPARTMENT' }
@@ -63,17 +69,29 @@ export function classRank(
   getMark?: (studentId: string, subject: string) => number | undefined,
   peers?: Student[],
   subjectList?: string[],
+  opts?: { liveOnly?: boolean; getMax?: (subject: string) => number },
 ): RankInfo {
   const classPeers = peers ?? students.filter((s) => s.cls === stu.cls)
-  const scored = classPeers.map((s) => ({ id: s.id, pct: reportFor(s, examId, getMark, subjectList).pct })).sort((a, b) => b.pct - a.pct)
-  const rank = scored.findIndex((s) => s.id === stu.id) + 1
-  return { rank, classSize: classPeers.length }
+  const scored = classPeers
+    .map((s) => {
+      const r = reportFor(s, examId, getMark, subjectList, opts)
+      return { id: s.id, pct: r.pct, rows: r.rows.length }
+    })
+    .filter((s) => !opts?.liveOnly || s.rows > 0)
+    .sort((a, b) => b.pct - a.pct)
+  if (opts?.liveOnly && !scored.length) {
+    return { rank: 0, classSize: 0 }
+  }
+  const idx = scored.findIndex((s) => s.id === stu.id)
+  return {
+    rank: idx >= 0 ? idx + 1 : (opts?.liveOnly ? 0 : 1),
+    classSize: opts?.liveOnly ? scored.length : classPeers.length,
+  }
 }
 
-export function attendanceMonths(stu: Student): MonthValue[] {
-  const months = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov']
-  const h = hash(stu.id)
-  return months.map((m, i) => ({ label: m, value: Math.max(60, Math.min(100, stu.attendance + ((h >> i) % 14) - 7)) }))
+/** @deprecated Hash-seeded dummy months removed — use listStudentAttendanceHistory / useStudentMonthlyAttendance. */
+export function attendanceMonths(_stu: Student): MonthValue[] {
+  return []
 }
 
 /* ---- Toppers ranking (pure; pass an explicit student list) ---- */
@@ -81,18 +99,56 @@ export type TopperMetric = 'exam' | 'attendance'
 export interface ScoredStudent { student: Student; score: number; secondary: number }
 export interface ClassTopperGroup { cls: string; toppers: ScoredStudent[] }
 
-export function examPct(stu: Student): number { return reportFor(stu).pct }
-
-function primaryScore(stu: Student, metric: TopperMetric): number {
-  return metric === 'exam' ? examPct(stu) : stu.attendance
+export type TopperScoreOpts = {
+  examId?: string
+  getMark?: (studentId: string, subject: string) => number | undefined
+  subjects?: string[]
+  /** When true, exam % uses saved marks only — no hash/dummy scores. */
+  liveOnly?: boolean
+  /**
+   * Live attendance % resolver from real day marks. Returns null when the
+   * student has no recorded marks (excluded from Attendance toppers).
+   */
+  getAttendance?: (studentId: string) => number | null
+  /** Per-subject max marks (from the exam paper). Defaults to 100 when absent. */
+  getMax?: (subject: string) => number
 }
-function secondaryScore(stu: Student, metric: TopperMetric): number {
-  return metric === 'exam' ? stu.attendance : examPct(stu)
+
+/** Exam % — prefer live marks when opts.liveOnly; otherwise legacy seeded report. */
+export function examPct(stu: Student, opts?: TopperScoreOpts): number | null {
+  if (opts?.liveOnly) {
+    const r = reportFor(stu, opts.examId, opts.getMark, opts.subjects, { liveOnly: true, getMax: opts.getMax })
+    return r.rows.length ? r.pct : null
+  }
+  return reportFor(stu, opts?.examId, opts?.getMark, opts?.subjects, { getMax: opts?.getMax }).pct
 }
 
-function rankStudents(list: Student[], metric: TopperMetric): ScoredStudent[] {
+/** Live attendance % when a resolver is supplied, else the SIS field. */
+function attendanceScore(stu: Student, opts?: TopperScoreOpts): number | null {
+  if (opts?.getAttendance) return opts.getAttendance(stu.id)
+  return stu.attendance
+}
+
+function primaryScore(stu: Student, metric: TopperMetric, opts?: TopperScoreOpts): number | null {
+  if (metric === 'attendance') return attendanceScore(stu, opts)
+  return examPct(stu, opts)
+}
+function secondaryScore(stu: Student, metric: TopperMetric, opts?: TopperScoreOpts): number {
+  if (metric === 'attendance') {
+    const pct = examPct(stu, opts)
+    return pct == null ? 0 : pct
+  }
+  return attendanceScore(stu, opts) ?? 0
+}
+
+function rankStudents(list: Student[], metric: TopperMetric, opts?: TopperScoreOpts): ScoredStudent[] {
   return list
-    .map((s) => ({ student: s, score: primaryScore(s, metric), secondary: secondaryScore(s, metric) }))
+    .map((s) => {
+      const score = primaryScore(s, metric, opts)
+      if (score == null) return null
+      return { student: s, score, secondary: secondaryScore(s, metric, opts) }
+    })
+    .filter((row): row is ScoredStudent => row != null)
     .sort((a, b) =>
       b.score - a.score ||
       b.secondary - a.secondary ||
@@ -100,11 +156,21 @@ function rankStudents(list: Student[], metric: TopperMetric): ScoredStudent[] {
     )
 }
 
-export function overallToppers(list: Student[], metric: TopperMetric, limit: number): ScoredStudent[] {
-  return rankStudents(list, metric).slice(0, limit)
+export function overallToppers(
+  list: Student[],
+  metric: TopperMetric,
+  limit: number,
+  opts?: TopperScoreOpts,
+): ScoredStudent[] {
+  return rankStudents(list, metric, opts).slice(0, limit)
 }
 
-export function classToppers(list: Student[], metric: TopperMetric, perClass: number): ClassTopperGroup[] {
+export function classToppers(
+  list: Student[],
+  metric: TopperMetric,
+  perClass: number,
+  opts?: TopperScoreOpts,
+): ClassTopperGroup[] {
   const byCls = new Map<string, Student[]>()
   for (const s of list) {
     const arr = byCls.get(s.cls)
@@ -113,5 +179,6 @@ export function classToppers(list: Student[], metric: TopperMetric, perClass: nu
   }
   return [...byCls.keys()]
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-    .map((cls) => ({ cls, toppers: overallToppers(byCls.get(cls)!, metric, perClass) }))
+    .map((cls) => ({ cls, toppers: overallToppers(byCls.get(cls)!, metric, perClass, opts) }))
+    .filter((g) => g.toppers.length > 0)
 }
