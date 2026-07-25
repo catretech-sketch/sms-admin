@@ -3,9 +3,10 @@ import { listApprovals } from '../approvals'
 import { queryKeys } from '../queryKeys'
 import type { Approval } from '@/types'
 
-export function useApprovals(): UseQueryResult<Approval[]> {
+export function useApprovals(enabled = true): UseQueryResult<Approval[]> {
   return useQuery({
     queryKey: queryKeys.approvals.all,
     queryFn: () => listApprovals(),
+    enabled,
   })
 }
