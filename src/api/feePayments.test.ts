@@ -1,11 +1,39 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { listFeePayments, payInvoice, createFeeRazorpayOrder, verifyFeeRazorpayPayment } from './feePayments'
+import { generateFeeInvoices, listFeeInvoices } from './feeInvoices'
+import { ApiError } from './ApiError'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
+function notFound(): Response {
+  return jsonResponse({ error: { code: 'not_found', message: 'x' } }, 404)
+}
 const wirePayment = { id: 1, student_id: 's1', student_name: 'Asha', cls: 'X-A', fee_type: 'academic', amount: 4800, mode: 'UPI', ref: 'TXN1', date: '2026-06-01' }
 beforeEach(() => { localStorage.clear(); vi.restoreAllMocks() })
+
+function seedAndMockLocalFees(): void {
+  localStorage.setItem('sms_fee_heads:default', JSON.stringify([{ id: 'h1', name: 'Academic', active: true }]))
+  localStorage.setItem('sms_fee_structure:default', JSON.stringify({
+    name: 'Fees', academicYear: '2025-26', classGrade: '', section: '', currency: 'INR',
+    effectiveFrom: '2025-04-01', status: 'active', description: '',
+    amounts: { 'X-A': { h1: 10000 } },
+  }))
+  vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+    const u = String(url)
+    if (u.includes('/students')) {
+      return Promise.resolve(jsonResponse({
+        data: [{
+          id: 's1', name: 'Asha', admission_no: 'ADM1',
+          class_label: 'X-A', grade: 'X', section: 'A', gender: 'F',
+          status: 'active', fee_status: 'due', fee_due: 0, attendance_pct: 0,
+        }],
+        next_cursor: null,
+      }))
+    }
+    return Promise.resolve(notFound())
+  }))
+}
 
 describe('listFeePayments', () => {
   it('maps student_id/student_name/fee_type generically', async () => {
@@ -91,5 +119,45 @@ describe('verifyFeeRazorpayPayment', () => {
     const body = JSON.parse((init as RequestInit).body as string)
     expect(body).toMatchObject({ razorpay_order_id: 'order_x', razorpay_payment_id: 'pay_x', razorpay_signature: 'sig' })
     expect(payment).toMatchObject({ id: 1, studentId: 's1', studentName: 'Asha' })
+  })
+})
+
+describe('payInvoice local fallback', () => {
+  it('records payment against local invoice when pay API is 404', async () => {
+    seedAndMockLocalFees()
+    await generateFeeInvoices({ classes: ['X-A'], academicYear: '2025-26', term: 'Term 1' })
+    const [inv] = await listFeeInvoices()
+    expect(inv.due).toBe(10000)
+
+    const payment = await payInvoice(inv.id, {
+      id: 0,
+      invoiceId: inv.id,
+      studentId: inv.studentId,
+      studentName: inv.studentName,
+      cls: inv.cls,
+      headId: 'h1',
+      amount: 4000,
+      mode: 'UPI',
+      ref: 'TXN-LOCAL',
+      date: '2026-07-17',
+    })
+    expect(payment.amount).toBe(4000)
+    expect(payment.id).toBeTruthy()
+
+    const updated = (await listFeeInvoices()).find((r) => r.id === inv.id)
+    expect(updated).toMatchObject({ paid: 4000, due: 6000, status: 'partial' })
+
+    const history = await listFeePayments()
+    expect(history.some((p) => p.ref === 'TXN-LOCAL' && p.amount === 4000)).toBe(true)
+  })
+
+  it('still throws non-404 pay errors', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      jsonResponse({ error: { code: 'forbidden', message: 'no' } }, 403),
+    ))
+    await expect(payInvoice('INV-1', {
+      id: 0, studentId: 's1', studentName: 'Asha', cls: 'X-A',
+      amount: 100, mode: 'Cash', ref: 'x', date: '2026-07-17',
+    })).rejects.toBeInstanceOf(ApiError)
   })
 })

@@ -10,7 +10,7 @@ export function useFeeInvoices(opts: { q?: string; status?: string; grade?: stri
 export function useGenerateFeeInvoices(): UseMutationResult<
   { created: number },
   Error,
-  { grades: string[]; academicYear: string; term: string; dueDate?: string }
+  { grades?: string[]; classes?: string[]; academicYear: string; term: string; dueDate?: string }
 > {
   const qc = useQueryClient()
   return useMutation({
@@ -18,6 +18,7 @@ export function useGenerateFeeInvoices(): UseMutationResult<
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.feeInvoices.all })
       qc.invalidateQueries({ queryKey: queryKeys.feeReports.summary })
+      qc.invalidateQueries({ queryKey: ['owner', 'feeSummary'] })
     },
   })
 }

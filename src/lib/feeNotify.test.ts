@@ -46,6 +46,38 @@ describe('notifyFeeAudience', () => {
     }))
   })
 
+  it('attaches an HTML fee receipt for parent mail and app download', async () => {
+    const { createAnnouncement } = await import('@/api/announcements')
+    await notifyFeeAudience({
+      kind: 'receipt',
+      schoolName: 'Demo School',
+      studentName: 'Asha',
+      amount: 1000,
+      mode: 'Cash',
+      channels: { email: true, sms: false, app: true },
+      emails: ['p@x.com'],
+      phones: [],
+      receipt: {
+        schoolName: 'Demo School',
+        studentName: 'Asha',
+        cls: 'IV-B',
+        amount: 1000,
+        mode: 'Cash',
+        paidAt: '17 Jul 2026',
+        studentAdm: 'ADM-1',
+      },
+    })
+    expect(createAnnouncement).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'fee_receipt',
+      attachmentContentType: 'text/html;charset=utf-8',
+      attachmentFileName: expect.stringContaining('Fee-receipt'),
+      attachmentBase64: expect.any(String),
+    }))
+    const call = vi.mocked(createAnnouncement).mock.calls[0][0]
+    expect(call.attachmentBase64!.length).toBeGreaterThan(20)
+    expect(call.body).toMatch(/download|app/i)
+  })
+
   it('falls back to audience contacts for a reminder when explicit contacts are omitted', async () => {
     const { collectAudienceContacts } = await import('@/lib/collectAudienceEmails')
     const { createAnnouncement } = await import('@/api/announcements')
@@ -64,7 +96,7 @@ describe('notifyFeeAudience', () => {
       type: 'fee_reminder',
       channels: ['email', 'app'],
       emails: ['parent@school.test'],
-      phones: [],
+      phones: ['9876543210'],
     }))
   })
 

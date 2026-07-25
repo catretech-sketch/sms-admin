@@ -18,6 +18,7 @@ export function usePayInvoice(): UseMutationResult<FeePayment, Error, { invoiceI
       qc.invalidateQueries({ queryKey: queryKeys.feePayments.all })
       qc.invalidateQueries({ queryKey: queryKeys.feeInvoices.all })
       qc.invalidateQueries({ queryKey: queryKeys.feeReports.summary })
+      qc.invalidateQueries({ queryKey: ['owner', 'feeSummary'] })
     },
   })
 }
@@ -34,6 +35,7 @@ export function useVerifyFeeRazorpayPayment(): UseMutationResult<FeePayment, Err
       qc.invalidateQueries({ queryKey: queryKeys.feePayments.all })
       qc.invalidateQueries({ queryKey: queryKeys.feeInvoices.all })
       qc.invalidateQueries({ queryKey: queryKeys.feeReports.summary })
+      qc.invalidateQueries({ queryKey: ['owner', 'feeSummary'] })
     },
   })
 }

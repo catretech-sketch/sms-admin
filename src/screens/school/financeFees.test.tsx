@@ -141,6 +141,17 @@ beforeEach(() => {
       return jsonOk({ data: feePayments, next_cursor: null })
     }
 
+    if (u.includes('/classes')) {
+      return jsonOk({
+        data: [
+          { id: 'c1', name: 'X-A', grade: 'X', section: 'A', student_count: 30, room: '101' },
+          { id: 'c2', name: 'X-B', grade: 'X', section: 'B', student_count: 28, room: '102' },
+          { id: 'c3', name: 'IX-A', grade: 'IX', section: 'A', student_count: 32, room: '201' },
+        ],
+        next_cursor: null,
+      })
+    }
+
     return jsonOk({ data: [], next_cursor: null })
   }))
 })
@@ -335,67 +346,89 @@ describe('Fee collection history', () => {
 })
 
 describe('Fee structure', () => {
-  it('shows fee heads from the API, adds one, and saves the structure', async () => {
+  it('shows fee heads from the API, adds one, and saves the class-wise structure', async () => {
     const { container, clickTab } = renderScreen()
     clickTab('Structure')
 
-    // default heads render from GET /fees/heads
     await waitFor(() => {
-      expect(within(container).getByText('Academic')).toBeInTheDocument()
+      expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0)
     })
-    expect(within(container).getByText('Transport')).toBeInTheDocument()
-    expect(within(container).getByText('Other')).toBeInTheDocument()
+    expect(within(container).getAllByText('Transport').length).toBeGreaterThan(0)
+    expect(within(container).getAllByText('Other').length).toBeGreaterThan(0)
 
-    // add a custom head via useCreateFeeHead → POST /fees/heads
-    fireEvent.change(within(container).getByPlaceholderText(/New fee head/i), { target: { value: 'Lab fee' } })
-    fireEvent.click(within(container).getByText('Add fee head'))
+    await waitFor(() => {
+      expect(within(container).getByRole('group', { name: 'Filter by grade' })).toBeInTheDocument()
+    })
+    fireEvent.click(within(container).getByRole('button', { name: 'X' }))
+    await waitFor(() => {
+      expect(within(container).getAllByText('X-A').length).toBeGreaterThan(0)
+    })
+    expect(within(container).getAllByText('X-B').length).toBeGreaterThan(0)
+
+    expect(within(container).getByDisplayValue(/School fees/i)).toBeInTheDocument()
+    expect(within(container).getByText(/Fee structure name/i)).toBeInTheDocument()
+
+    fireEvent.change(within(container).getByPlaceholderText(/Type fee name|e\.g\. Library|Custom head|Add another/i), { target: { value: 'Lab fee' } })
+    fireEvent.click(within(container).getByRole('button', { name: /Add fee type/i }))
     await waitFor(() => {
       const fetchMock = vi.mocked(fetch)
       const postCall = fetchMock.mock.calls.find(([url, opts]) => opts?.method === 'POST' && String(url).includes('/fees/heads'))
       expect(postCall).toBeDefined()
     })
     await waitFor(() => {
-      expect(within(container).getByText('Lab fee')).toBeInTheDocument()
+      expect(within(container).getAllByText(/Lab [Ff]ee/).length).toBeGreaterThan(0)
     })
 
-    // edit an amount + save → PUT /fees/structure
     const firstAmount = within(container).getAllByRole('spinbutton')[0] as HTMLInputElement
     fireEvent.change(firstAmount, { target: { value: '50000' } })
-    fireEvent.click(within(container).getByText('Save structure'))
+    fireEvent.click(within(container).getByText('Save only'))
 
     await waitFor(() => {
       const fetchMock = vi.mocked(fetch)
       const putCall = fetchMock.mock.calls.find(([url, opts]) => opts?.method === 'PUT' && String(url).includes('/fees/structure'))
       expect(putCall).toBeDefined()
+      const body = JSON.parse((putCall?.[1] as RequestInit).body as string)
+      expect(body.name).toBeTruthy()
+      expect(body.academic_year).toBeTruthy()
+      expect(body.effective_from).toBeTruthy()
+      expect(body.status).toBe('active')
+      expect(body.amounts['X-A'] || body.amounts['IX-A'] || body.amounts['X-B']).toBeTruthy()
     })
     await waitFor(() => {
       expect(within(container).getByText(/Fee structure saved/i)).toBeInTheDocument()
     })
   })
 
-  it('generates invoices for the selected academic year, term and grades', async () => {
+  it('generates invoices for selected classes (class-wise)', async () => {
     const { container, clickTab } = renderScreen()
     clickTab('Structure')
 
     await waitFor(() => {
-      expect(within(container).getByText('Academic')).toBeInTheDocument()
+      expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0)
     })
 
-    fireEvent.change(within(container).getByPlaceholderText(/2026-27/i), { target: { value: '2026-27' } })
-    fireEvent.click(within(container).getByRole('group', { name: 'Select grades' }).children[0])
-    fireEvent.click(within(container).getByRole('button', { name: 'Generate invoices' }))
+    fireEvent.click(within(container).getByRole('button', { name: 'X' }))
+    await waitFor(() => {
+      expect(within(container).getAllByRole('spinbutton').length).toBeGreaterThan(0)
+    })
+
+    const firstAmount = within(container).getAllByRole('spinbutton')[0] as HTMLInputElement
+    fireEvent.change(firstAmount, { target: { value: '12000' } })
+
+    fireEvent.click(within(container).getByRole('button', { name: 'Save & generate' }))
 
     await waitFor(() => {
       const fetchMock = vi.mocked(fetch)
       const postCall = fetchMock.mock.calls.find(([url, opts]) => opts?.method === 'POST' && String(url).includes('/fees/invoices/generate'))
       expect(postCall).toBeDefined()
       const body = JSON.parse((postCall?.[1] as RequestInit).body as string)
-      expect(body).toMatchObject({ academic_year: '2026-27' })
-      expect(Array.isArray(body.grades)).toBe(true)
-      expect(body.grades.length).toBeGreaterThan(0)
+      expect(body.academic_year).toBeTruthy()
+      expect(Array.isArray(body.classes)).toBe(true)
+      expect(body.classes.length).toBeGreaterThan(0)
+      expect(body.grades).toBeUndefined()
     })
     await waitFor(() => {
-      expect(within(container).getByText(/Invoices generated/i)).toBeInTheDocument()
+      expect(within(container).getByText(/invoices generated/i)).toBeInTheDocument()
     })
   })
 })
