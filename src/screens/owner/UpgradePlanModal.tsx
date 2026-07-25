@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useToast } from '@/lib/hooks'
 import { Modal, Btn, Badge, TierPill, Spinner } from '@/components/ui'
+import { SchoolMark } from '@/components/SchoolMark'
 import { TIERS, TIER_META } from '@/data/mockDb'
 import { fmtMoney } from '@/lib/format'
 import type { School, Tier } from '@/types'
@@ -154,6 +155,13 @@ export function UpgradePlanModal({
         </div>
       }
     >
+      <div className="row ai-center gap12" style={{ marginBottom: 14 }}>
+        <SchoolMark school={school} size={40} />
+        <div>
+          <div className="fw7">{school.name}</div>
+          <div className="t-xs muted">{school.city}</div>
+        </div>
+      </div>
       {plansQ.isLoading ? (
         <div className="col ai-center gap12" style={{ padding: 24 }}><Spinner size={28} /><div className="t-sm muted">Loading plans…</div></div>
       ) : upgradePlans.length === 0 ? (

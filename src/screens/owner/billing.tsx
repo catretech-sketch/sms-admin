@@ -13,14 +13,15 @@ import {
 import { TIERS, TIER_META } from '@/data/mockDb'
 import { fmtMoney, fmtNum } from '@/lib/format'
 import type { School, Tier } from '@/types'
-import { usePortfolioSchools, useOwnerPlans, useMyUpgradeRequests } from '@/api/hooks/useOwner'
+import { usePortfolioSchools, useOwnerPlans, useMyUpgradeRequests, useOwnerFeeSummary } from '@/api/hooks/useOwner'
 import { clientToSchool } from '@/api/ownerMap'
 import { listInvoices, type ApiInvoice } from '@/api/billing'
 import { useQuery } from '@tanstack/react-query'
 import { queryKeys } from '@/api/queryKeys'
-import type { Plan } from '@/api/ownerTypes'
+import type { Plan, FeeSchoolSummary } from '@/api/ownerTypes'
 import { UpgradePlanModal } from '@/screens/owner/UpgradePlanModal'
 import type { PlanUpgradeRequest, UpgradeStatus } from '@/api/upgradeRequests'
+import { SchoolMark } from '@/components/SchoolMark'
 
 /* compact ₹ for charts/KPIs */
 function compactMoney(n: number): string {
@@ -34,42 +35,68 @@ const statusTone: Record<School['status'], BadgeTone> = { active: 'success', tri
 const statusLabel: Record<School['status'], string> = { active: 'Active', trial: 'Trial', past_due: 'Past due' }
 
 /* ============================================================
-   OwnerReports — live portfolio comparison only
-   (no mock schools, no fake FY scaling / attendance)
+   OwnerReports — live portfolio + student fee comparison
    ============================================================ */
-type Metric = 'enrolment' | 'staff' | 'revenue' | 'health'
+type Metric = 'enrolment' | 'staff' | 'subscription' | 'fees_collected' | 'fees_outstanding' | 'fee_rate'
 
 interface MetricMeta {
   label: string
   short: string
   sum: boolean
-  base: (s: School) => number
+  isFee: boolean
   fmt: (v: number) => string
 }
 const METRIC_META: Record<Metric, MetricMeta> = {
-  enrolment: { label: 'Enrolment', short: 'students', sum: true, base: (s) => s.students, fmt: (v) => fmtNum(Math.round(v)) },
-  staff: { label: 'Staff', short: 'staff', sum: true, base: (s) => s.staff, fmt: (v) => fmtNum(Math.round(v)) },
-  revenue: { label: 'Revenue (MRR)', short: 'MRR', sum: true, base: (s) => s.mrr, fmt: (v) => compactMoney(Math.round(v)) },
-  health: { label: 'Health score', short: 'health', sum: false, base: (s) => s.fees, fmt: (v) => v.toFixed(0) },
+  enrolment: { label: 'Enrolment', short: 'students', sum: true, isFee: false, fmt: (v) => fmtNum(Math.round(v)) },
+  staff: { label: 'Staff', short: 'staff', sum: true, isFee: false, fmt: (v) => fmtNum(Math.round(v)) },
+  subscription: { label: 'Subscription MRR', short: 'MRR', sum: true, isFee: false, fmt: (v) => compactMoney(Math.round(v)) },
+  fees_collected: { label: 'Student fees collected', short: 'collected', sum: true, isFee: true, fmt: (v) => fmtMoney(Math.round(v)) },
+  fees_outstanding: { label: 'Student fees outstanding', short: 'outstanding', sum: true, isFee: true, fmt: (v) => fmtMoney(Math.round(v)) },
+  fee_rate: { label: 'Fee collection rate', short: 'rate', sum: false, isFee: true, fmt: (v) => `${v.toFixed(1)}%` },
+}
+
+function feeRowForSchool(school: School, feeSchools: FeeSchoolSummary[]): FeeSchoolSummary | undefined {
+  return feeSchools.find((f) => f.tenant_id === school.id || (school.slug && f.tenant_id === school.slug))
+}
+
+function metricValue(school: School, fee: FeeSchoolSummary | undefined, metric: Metric): number {
+  switch (metric) {
+    case 'enrolment': return school.students
+    case 'staff': return school.staff
+    case 'subscription': return school.mrr
+    case 'fees_collected': return Number(fee?.collected ?? 0)
+    case 'fees_outstanding': return Number(fee?.outstanding ?? 0)
+    case 'fee_rate': {
+      const collected = Number(fee?.collected ?? 0)
+      const outstanding = Number(fee?.outstanding ?? 0)
+      const denom = collected + outstanding
+      return denom > 0 ? Math.round((collected / denom) * 1000) / 10 : 0
+    }
+    default: return 0
+  }
 }
 
 function OwnerReports() {
   const app = useApp()
   const [metric, setMetric] = useState<Metric>('enrolment')
   const schoolsQ = usePortfolioSchools(app.isPlatform)
+  const feeQ = useOwnerFeeSummary(true)
   const schools = useMemo(() => (schoolsQ.data ?? []).map(clientToSchool), [schoolsQ.data])
+  const feeSchools = feeQ.data?.schools ?? []
+  const feePeriod = feeQ.data?.period
 
   const meta = METRIC_META[metric]
 
   const ranked = useMemo(() => {
     return schools
       .map((s) => {
-        const raw = meta.base(s)
+        const fee = feeRowForSchool(s, feeSchools)
+        const raw = metricValue(s, fee, metric)
         const value = meta.sum ? Math.round(raw) : +raw.toFixed(1)
-        return { school: s, value }
+        return { school: s, value, fee }
       })
       .sort((a, b) => b.value - a.value)
-  }, [schools, meta])
+  }, [schools, feeSchools, metric, meta])
 
   const summary = useMemo(() => {
     if (ranked.length === 0) return { agg: 0, top: null as null | typeof ranked[0], low: null as null | typeof ranked[0], count: 0 }
@@ -80,12 +107,25 @@ function OwnerReports() {
   }, [ranked, meta])
 
   const bars = ranked.map((r) => ({ value: r.value, label: r.school.name, color: r.school.color }))
+  const feeDonut = useMemo(() => {
+    if (!meta.isFee || metric !== 'fees_collected') return []
+    return feeSchools
+      .filter((f) => Number(f.collected) > 0)
+      .map((f, i) => {
+        const school = schools.find((s) => s.id === f.tenant_id || s.slug === f.tenant_id)
+        return { value: Number(f.collected), label: f.name, color: school?.color ?? ['#4f46e5', '#0ea5e9', '#10b981'][i % 3] }
+      })
+  }, [meta.isFee, metric, feeSchools, schools])
 
-  if (schoolsQ.isLoading) {
+  const loading = schoolsQ.isLoading || feeQ.isLoading
+  if (loading) {
     return <div className="col ai-center jc-center gap12" style={{ minHeight: 280 }}><Spinner size={28} /><div className="t-sm muted">Loading reports…</div></div>
   }
   if (schoolsQ.isError) {
     return <Empty icon="alert" title="Could not load reports" body="Check your connection and try again." />
+  }
+  if (feeQ.isError && meta.isFee) {
+    return <Empty icon="alert" title="Could not load fee data" body="Check your connection and try again." />
   }
   if (schools.length === 0) {
     return (
@@ -102,7 +142,9 @@ function OwnerReports() {
     <div>
       <PageHead
         title="Cross-school reports"
-        sub={`Comparing ${schools.length} ${schools.length === 1 ? 'school' : 'schools'} · ${meta.label} · live portfolio`}
+        sub={meta.isFee && feePeriod
+          ? `Comparing ${schools.length} schools · ${meta.label} · ${feePeriod.from} → ${feePeriod.to}`
+          : `Comparing ${schools.length} ${schools.length === 1 ? 'school' : 'schools'} · ${meta.label} · live portfolio`}
       />
 
       <Card className="row ai-center jc-between gap12 wrap" style={{ marginBottom: 16 }}>
@@ -111,6 +153,9 @@ function OwnerReports() {
           onChange={(v) => setMetric(v as Metric)}
           options={(Object.keys(METRIC_META) as Metric[]).map((m) => ({ value: m, label: METRIC_META[m].label }))}
         />
+        {meta.isFee && (
+          <Btn size="sm" icon="rupee" onClick={() => app.go('owner.revenue')}>Fee collection</Btn>
+        )}
       </Card>
 
       <div className="sm-kpi-grid" style={{ marginBottom: 16 }}>
@@ -138,12 +183,66 @@ function OwnerReports() {
       </div>
 
       <Card>
-        <CardHead title={`${meta.label} by school`} sub="Ranked from live portfolio data" icon="grid" />
+        <CardHead
+          title={`${meta.label} by school`}
+          sub={meta.isFee ? 'From student fee invoices & payments in each school' : 'Ranked from live portfolio data'}
+          icon="grid"
+        />
         <div style={{ marginTop: 16 }}>
-          {bars.length === 0
-            ? <Empty icon="grid" title="No data" body="No values to chart for this metric." />
+          {bars.length === 0 || (meta.isFee && bars.every((b) => b.value <= 0))
+            ? (
+              <Empty
+                icon={meta.isFee ? 'rupee' : 'grid'}
+                title={meta.isFee ? 'No student fee data yet' : 'No data'}
+                body={meta.isFee
+                  ? 'Open a school → Fees → generate invoices and record payments. Amounts appear here across your portfolio.'
+                  : 'No values to chart for this metric.'}
+              />
+            )
             : <HBars data={bars} labelWidth={200} valueFmt={(v) => meta.fmt(v)} />}
         </div>
+        {metric === 'fees_collected' && feeDonut.length > 0 && (
+          <div className="row ai-center gap20 wrap" style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+            <Donut
+              segments={feeDonut}
+              size={130} thickness={18}
+              center={
+                <div style={{ textAlign: 'center' }}>
+                  <div className="fw7" style={{ fontSize: 14 }}>{compactMoney(summary.agg)}</div>
+                  <div className="t-xs muted">collected</div>
+                </div>
+              }
+            />
+            <div className="col gap8" style={{ flex: 1, minWidth: 140 }}>
+              <Legend items={feeDonut.map((d) => ({ color: d.color, label: d.label }))} />
+            </div>
+          </div>
+        )}
+        {ranked.length > 0 && (
+          <div className="col gap10" style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+            {ranked.map((r, i) => (
+              <div key={r.school.id} className="row ai-center gap12">
+                <span className="t-xs muted fw6" style={{ width: 22 }}>{i + 1}</span>
+                <SchoolMark school={r.school} size={32} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="fw6" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.school.name}</div>
+                  <div className="t-xs muted">
+                    {r.school.city}
+                    {meta.isFee && r.fee && (
+                      <> · {fmtNum(r.fee.payment_count)} payments · {fmtNum(r.fee.invoice_count)} open invoices</>
+                    )}
+                  </div>
+                </div>
+                <div className="fw7">{meta.fmt(r.value)}</div>
+                {meta.isFee && (
+                  <Btn size="sm" variant="ghost" icon="arrowRight" onClick={() => {
+                    void app.enterSchool(r.school.id, r.school).then((ok) => { if (ok) app.go('school.fees') })
+                  }}>Fees</Btn>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </Card>
     </div>
   )
@@ -166,7 +265,7 @@ function SubscriptionsTab({
       key: 'name', label: 'School', sortValue: (s) => s.name,
       render: (s) => (
         <div className="row ai-center gap10">
-          <span className="sm-avatar" style={{ width: 34, height: 34, background: s.color, fontSize: 13, borderRadius: 10 }}>{s.logo}</span>
+          <SchoolMark school={s} size={34} />
           <div>
             <div className="fw6">{s.name}</div>
             <div className="t-xs muted">{s.city}</div>
@@ -348,7 +447,7 @@ function RevenueTab({ schools }: { schools: School[] }) {
     })), [schools])
 
   const bySchool = useMemo(
-    () => schools.map((s) => ({ value: s.mrr, label: s.logo || s.name.slice(0, 2), color: s.color })),
+    () => schools.map((s) => ({ value: s.mrr, label: s.name, color: s.color })),
     [schools],
   )
 

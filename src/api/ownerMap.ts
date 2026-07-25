@@ -21,6 +21,8 @@ export function clientToSchool(c: Client, i = 0): School {
   return {
     id: c.id,
     name: c.name,
+    /** Human school id (tenant slug) set at create. */
+    slug: c.slug,
     city: c.country ?? c.address ?? '—',
     plan: asTier(c.tier),
     students: c.students_count ?? 0,
@@ -39,12 +41,24 @@ export function clientToSchool(c: Client, i = 0): School {
   }
 }
 
-export function slugify(name: string): string {
-  const base = name
+/** Normalize a user-entered school id into a slug (no random suffix). */
+export function normalizeSchoolId(raw: string): string {
+  return raw
+    .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
     .slice(0, 40)
+}
+
+/** School id: 3–40 chars, lowercase letters/digits/hyphens (no leading/trailing hyphen). */
+export function isValidSchoolId(raw: string): boolean {
+  const id = normalizeSchoolId(raw)
+  return id.length >= 3 && id.length <= 40 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)
+}
+
+export function slugify(name: string): string {
+  const base = normalizeSchoolId(name)
   /* Suffix avoids IX_Tenants_Slug collisions when recreating similarly named schools. */
   const suffix = Date.now().toString(36).slice(-4)
   return base ? `${base}-${suffix}` : `school-${Date.now().toString(36)}`

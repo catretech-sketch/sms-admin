@@ -90,6 +90,7 @@ export function useOwnerFeeSummary(enabled = true, params: { from?: string; to?:
     queryKey: queryKeys.owner.feeSummary(params),
     queryFn: () => getMySchoolsFeeSummary(params),
     enabled,
+    refetchOnWindowFocus: true,
   })
 }
 

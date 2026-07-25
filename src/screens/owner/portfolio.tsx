@@ -17,7 +17,8 @@ import { TIERS, TIER_META } from '@/data/mockDb'
 import { fmtMoney, fmtNum } from '@/lib/format'
 import type { School, Tier } from '@/types'
 import { usePortfolioSchools, useOwnerPlans, useCreateSchool, useOwnerFeeSummary, useDeleteSchool } from '@/api/hooks/useOwner'
-import { clientToSchool, slugify } from '@/api/ownerMap'
+import { clientToSchool, isValidSchoolId, normalizeSchoolId } from '@/api/ownerMap'
+import type { FeeSchoolSummary } from '@/api/ownerTypes'
 import { ApiError } from '@/api/client'
 import { UpgradePlanModal } from '@/screens/owner/UpgradePlanModal'
 import {
@@ -76,6 +77,7 @@ function fmtCompact(n: number): string {
    ============================================================ */
 function OwnerDashboard() {
   const app = useApp()
+  const toast = useToast()
   const { data: clients = [], isLoading, isError } = usePortfolioSchools(app.isPlatform)
   const feeQ = useOwnerFeeSummary(true)
   const schools = useMemo(() => clients.map(clientToSchool), [clients])
@@ -272,13 +274,19 @@ function OwnerDashboard() {
 /* ============================================================
    2) Schools list (+ branded account report modal)
    ============================================================ */
+function feeForSchool(school: School, feeSchools: FeeSchoolSummary[]): FeeSchoolSummary | undefined {
+  return feeSchools.find((f) => f.tenant_id === school.id || (school.slug != null && f.tenant_id === school.slug))
+}
+
 function OwnerSchools() {
   const app = useApp()
   const toast = useToast()
   const qc = useQueryClient()
   const { data: clients = [], isLoading, isError } = usePortfolioSchools(app.isPlatform)
+  const feeQ = useOwnerFeeSummary(true)
   const deleteMut = useDeleteSchool(app.isPlatform)
   const schoolsList = useMemo(() => clients.map(clientToSchool), [clients])
+  const feeSchools = feeQ.data?.schools ?? []
   const [q, setQ] = useState('')
   const [plan, setPlan] = useState('all')
   const [status, setStatus] = useState('all')
@@ -300,7 +308,11 @@ function OwnerSchools() {
     return schoolsList.filter((s) => {
       if (plan !== 'all' && s.plan !== plan) return false
       if (status !== 'all' && s.status !== status) return false
-      if (needle && !(s.name.toLowerCase().includes(needle) || s.city.toLowerCase().includes(needle))) return false
+      if (needle && !(
+        s.name.toLowerCase().includes(needle)
+        || s.city.toLowerCase().includes(needle)
+        || (s.slug ?? '').toLowerCase().includes(needle)
+      )) return false
       return true
     })
   }, [schoolsList, q, plan, status])
@@ -313,7 +325,9 @@ function OwnerSchools() {
           <SchoolMark school={s} size={36} />
           <div>
             <div className="t-md fw6">{s.name}</div>
-            <div className="t-xs muted3">{s.city} · {s.tz}</div>
+            <div className="t-xs muted3">
+              {s.slug ? `${s.slug} · ` : ''}{s.city} · {s.tz}
+            </div>
           </div>
         </div>
       ),
@@ -321,8 +335,27 @@ function OwnerSchools() {
     { key: 'plan', label: 'Plan', sortValue: (s) => s.plan, render: (s) => <TierPill plan={s.plan} /> },
     { key: 'students', label: 'Students', align: 'right', sortValue: (s) => s.students, render: (s) => fmtNum(s.students) },
     { key: 'staff', label: 'Staff', align: 'right', sortValue: (s) => s.staff, render: (s) => fmtNum(s.staff) },
-    { key: 'fees', label: 'Health', align: 'right', sortValue: (s) => s.fees, render: (s) => <span style={{ color: s.fees < 70 ? 'var(--warning)' : undefined }}>{s.fees}</span> },
-    { key: 'mrr', label: 'MRR', align: 'right', sortValue: (s) => s.mrr, render: (s) => fmtMoney(s.mrr, s.currency) },
+    {
+      key: 'collected', label: 'Collected', align: 'right',
+      sortValue: (s) => Number(feeForSchool(s, feeSchools)?.collected ?? 0),
+      render: (s) => {
+        const fee = feeForSchool(s, feeSchools)
+        return <span className="fw6">{feeQ.isLoading ? '…' : fmtMoney(Number(fee?.collected ?? 0), s.currency)}</span>
+      },
+    },
+    {
+      key: 'outstanding', label: 'Outstanding', align: 'right',
+      sortValue: (s) => Number(feeForSchool(s, feeSchools)?.outstanding ?? 0),
+      render: (s) => {
+        const fee = feeForSchool(s, feeSchools)
+        const out = Number(fee?.outstanding ?? 0)
+        return (
+          <span className="t-sm" style={{ color: out > 0 ? 'var(--warning)' : undefined }}>
+            {feeQ.isLoading ? '…' : fmtMoney(out, s.currency)}
+          </span>
+        )
+      },
+    },
     { key: 'status', label: 'Status', sortValue: (s) => s.status, render: (s) => <Badge tone={STATUS_TONE[s.status]}>{STATUS_LABEL[s.status]}</Badge> },
     {
       key: 'actions', label: 'Actions', align: 'right',
@@ -377,8 +410,13 @@ function OwnerSchools() {
     <div className="col gap20">
       <PageHead
         title="Schools"
-        sub={`${schoolsList.length} ${schoolsList.length === 1 ? 'school' : 'schools'} in your portfolio · Delete is for empty schools only (0 students & 0 staff)`}
-        actions={<Btn variant="primary" icon="plus" onClick={() => app.go('owner.create')}>Create school</Btn>}
+        sub={`${schoolsList.length} ${schoolsList.length === 1 ? 'school' : 'schools'} in your portfolio · Fee collection from each school · Delete only when empty (0 students & 0 staff)`}
+        actions={
+          <div className="row gap8">
+            <Btn icon="rupee" onClick={() => app.go('owner.revenue')}>Fee collection</Btn>
+            <Btn variant="primary" icon="plus" onClick={() => app.go('owner.create')}>Create school</Btn>
+          </div>
+        }
       />
 
       <Card pad={false}>
@@ -404,7 +442,7 @@ function OwnerSchools() {
           rows={rows}
           rowKey={(s) => s.id}
           pageSize={10}
-          initialSort={{ key: 'mrr', dir: 'desc' }}
+          initialSort={{ key: 'collected', dir: 'desc' }}
           bulk
           bulkActions={(selected, clear) => (
             <>
@@ -416,7 +454,11 @@ function OwnerSchools() {
         />
       </Card>
 
-      <AccountReportModal school={report} onClose={() => setReport(null)} />
+      <AccountReportModal
+        school={report}
+        fee={report ? feeForSchool(report, feeSchools) : undefined}
+        onClose={() => setReport(null)}
+      />
       <EditSchoolProfileModal
         open={!!editSchool}
         school={editSchool}
@@ -502,27 +544,36 @@ function OwnerSchools() {
 }
 
 /* ---------- Branded account report ---------- */
-function AccountReportModal({ school, onClose }: { school: School | null; onClose: () => void }) {
+function AccountReportModal({ school, fee, onClose }: {
+  school: School | null
+  fee?: FeeSchoolSummary
+  onClose: () => void
+}) {
   if (!school) return null
   const s = school
   const rate = rateFor(s.students, s.plan)
   const annual = s.students * rate
   const ref = `AR-${s.id.toUpperCase()}-${new Date().getFullYear()}`
   const today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+  const collected = Number(fee?.collected ?? 0)
+  const outstanding = Number(fee?.outstanding ?? 0)
+  const feeRate = collected + outstanding > 0
+    ? Math.round((collected / (collected + outstanding)) * 1000) / 10
+    : 0
 
   const metrics: { label: string; value: string }[] = [
     { label: 'Students enrolled', value: fmtNum(s.students) },
     { label: 'Staff', value: fmtNum(s.staff) },
-    { label: 'Attendance', value: s.attendance + '%' },
-    { label: 'Fee collection', value: s.fees + '%' },
+    { label: 'Fees collected', value: fmtMoney(collected, s.currency) },
+    { label: 'Fees outstanding', value: fmtMoney(outstanding, s.currency) },
   ]
   const details: { label: string; value: string }[] = [
-    { label: 'Account manager', value: 'Anil Mehta' },
-    { label: 'Billing contact', value: `accounts@${s.id}.edu` },
-    { label: 'Monthly recurring revenue', value: fmtMoney(s.mrr, s.currency) },
-    { label: 'Onboarded', value: 'Apr 2024' },
+    { label: 'Fee collection rate', value: `${feeRate}%` },
+    { label: 'Open invoices', value: fmtNum(fee?.invoice_count ?? 0) },
+    { label: 'Payments (period)', value: fmtNum(fee?.payment_count ?? 0) },
     { label: 'Support tier', value: s.plan === 'platinum' ? 'Dedicated' : s.plan === 'gold' ? 'Priority' : 'Standard' },
     { label: 'Time zone', value: s.tz },
+    { label: 'Plan', value: TIER_META[s.plan].label },
   ]
 
   return (
@@ -647,6 +698,8 @@ const CYCLE_META: Record<BillingCycle, { label: string; div: number; per: string
 
 interface WizardData {
   name: string
+  /** Unique short school id (stored as tenant slug), e.g. scc or riverdale-blr */
+  schoolId: string
   /** Street / building line */
   address: string
   district: string
@@ -714,7 +767,7 @@ function CreateSchoolWizard() {
   const [step, setStep] = useState(0)
   const [paying, setPaying] = useState(false)
   const [data, setData] = useState<WizardData>({
-    name: '', address: '', district: '', city: '', state: '', pincode: '',
+    name: '', schoolId: '', address: '', district: '', city: '', state: '', pincode: '',
     tz: 'Asia/Kolkata',
     logoUrl: '', logoFile: null, imageUrl: '', imageFile: null,
     adminName: app.user?.name ?? '', adminEmail: app.user?.email ?? '', adminPhone: '',
@@ -753,6 +806,7 @@ function CreateSchoolWizard() {
   const canNext = (() => {
     if (step === 0) {
       return data.name.trim() !== ''
+        && isValidSchoolId(data.schoolId)
         && data.address.trim() !== ''
         && data.district.trim() !== ''
         && data.city.trim() !== ''
@@ -876,7 +930,11 @@ function CreateSchoolWizard() {
     setPaying(true)
     let createdTenantId: string | null = null
     try {
-      const slug = slugify(data.name)
+      const slug = normalizeSchoolId(data.schoolId)
+      if (!isValidSchoolId(slug)) {
+        toast.danger('Invalid school ID', 'Use 3–40 characters: letters, numbers, hyphens (e.g. scc or riverdale-blr).')
+        return
+      }
       let logoUrl = data.logoUrl.trim() || undefined
       if (data.logoFile) {
         try {
@@ -994,9 +1052,33 @@ function CreateSchoolWizard() {
       <Card>
         {step === 0 && (
           <div className="col gap16">
-            <CardHead title="Basics" sub="Name, address, logo and school photo used across CRM modules" icon="building" />
+            <CardHead title="Basics" sub="Name, school ID, address, logo and school photo used across CRM modules" icon="building" />
             <Field label="School name" required>
               <Input icon="building" value={data.name} placeholder="e.g. Riverdale International School" onChange={(e) => set('name', e.target.value)} />
+            </Field>
+            <Field
+              label="School ID"
+              required
+              hint="Unique short code for this school (letters, numbers, hyphens). You can change it later in Edit."
+              error={
+                data.schoolId.trim().length > 0 && !isValidSchoolId(data.schoolId)
+                  ? 'Use 3–40 characters: letters, numbers, hyphens (e.g. scc or riverdale-blr)'
+                  : undefined
+              }
+            >
+              <Input
+                icon="key"
+                value={data.schoolId}
+                placeholder="e.g. riverdale-blr"
+                onChange={(e) => {
+                  const next = e.target.value
+                    .toLowerCase()
+                    .replace(/[^a-z0-9-]/g, '')
+                    .replace(/--+/g, '-')
+                    .slice(0, 40)
+                  set('schoolId', next)
+                }}
+              />
             </Field>
             <Field label="Street address" required hint="Building, street, area — used on invoices & reports.">
               <Input icon="pin" value={data.address} placeholder="e.g. 4th Floor, Prestige Tech Park" onChange={(e) => set('address', e.target.value)} />
@@ -1399,6 +1481,7 @@ function ReviewStep({ data, plan }: { data: WizardData; plan: import('@/api/owne
       : 'Pay online (Razorpay) — Catre activates after payment'
   const rows: { label: string; value: React.ReactNode }[] = [
     { label: 'School name', value: data.name || '—' },
+    { label: 'School ID', value: data.schoolId ? normalizeSchoolId(data.schoolId) : '—' },
     { label: 'Street address', value: data.address || '—' },
     { label: 'District', value: data.district || '—' },
     { label: 'City', value: data.city || '—' },

@@ -13,6 +13,7 @@ import { useOwnerFeeSummary, usePortfolioSchools } from '@/api/hooks/useOwner'
 import { clientToSchool } from '@/api/ownerMap'
 import type { FeeSchoolSummary } from '@/api/ownerTypes'
 import type { School } from '@/types'
+import { SchoolMark } from '@/components/SchoolMark'
 
 const COLORS = ['#4f46e5', '#0ea5e9', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#14b8a6', '#ef4444']
 
@@ -52,9 +53,22 @@ function OwnerRevenue() {
 
   const bars = useMemo(
     () => [...schools]
+      .filter((s) => Number(s.collected) > 0)
       .sort((a, b) => b.collected - a.collected)
       .map((s, i) => ({
         value: Number(s.collected),
+        label: s.name,
+        color: COLORS[i % COLORS.length],
+      })),
+    [schools],
+  )
+
+  const outstandingBars = useMemo(
+    () => [...schools]
+      .filter((s) => Number(s.outstanding) > 0)
+      .sort((a, b) => Number(b.outstanding) - Number(a.outstanding))
+      .map((s, i) => ({
+        value: Number(s.outstanding),
         label: s.name,
         color: COLORS[i % COLORS.length],
       })),
@@ -68,10 +82,10 @@ function OwnerRevenue() {
         const s = schoolsById.get(r.tenant_id)
         return (
           <div className="row ai-center gap10">
-            <span className="sm-avatar" style={{
-              width: 34, height: 34, borderRadius: 10, fontSize: 12,
-              background: s?.color ?? COLORS[0],
-            }}>{s?.logo ?? r.name.slice(0, 2).toUpperCase()}</span>
+            <SchoolMark
+              school={s ?? { name: r.name, logo: r.name.slice(0, 2).toUpperCase(), color: COLORS[0], logoUrl: null }}
+              size={34}
+            />
             <div>
               <div className="fw6">{r.name}</div>
               <div className="t-xs muted">{fmtNum(r.payment_count)} payments · {fmtNum(r.invoice_count)} open invoices</div>
@@ -220,8 +234,17 @@ function OwnerRevenue() {
         <CardHead title="Collected ranking" sub="Bars by school (cash this period)" icon="trend" />
         <div style={{ marginTop: 16 }}>
           {bars.length === 0
-            ? <Empty icon="building" title="No schools" body="Add a school to track fee collection." />
+            ? <Empty icon="rupee" title="No fee cash yet" body="Generate invoices and record payments inside a school — amounts appear here." />
             : <HBars data={bars} labelWidth={200} valueFmt={(v) => fmtMoney(v)} />}
+        </div>
+      </Card>
+
+      <Card>
+        <CardHead title="Outstanding by school" sub="Open student fee invoices" icon="alert" />
+        <div style={{ marginTop: 16 }}>
+          {outstandingBars.length === 0
+            ? <Empty icon="checkCircle" title="Nothing outstanding" body="No open fee invoices across your schools." />
+            : <HBars data={outstandingBars} labelWidth={200} valueFmt={(v) => fmtMoney(v)} />}
         </div>
       </Card>
 
