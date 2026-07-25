@@ -32,3 +32,15 @@ export async function createTeacher(t: Teacher): Promise<Teacher> {
   const wire = await request<Record<string, unknown>>('/teachers', { method: 'POST', body: fromTeacher(t) })
   return toTeacher(wire)
 }
+
+/** Writes through to the teacher's linked Users row (Users.PhotoUrl — the same
+ *  field the teacher app reads), not a teacherExtras/localStorage field.
+ *  `photoDataUrl: null` clears the photo. Throws `no_linked_user` (409) if this
+ *  teacher hasn't accepted their sign-in invite yet — the caller should treat
+ *  that as expected and non-fatal, not surface it as a hard failure. */
+export async function updateTeacherPhoto(id: string, photoDataUrl: string | null): Promise<void> {
+  await request(`/teachers/${id}`, {
+    method: 'PATCH',
+    body: { photo_url: photoDataUrl, set_photo: true },
+  })
+}
