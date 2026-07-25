@@ -8,17 +8,23 @@ import { useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import { can } from '@/lib/gating'
 import {
-  PageHead, Card, Btn, Badge, Avatar, Search, Select,
+  PageHead, Card, CardHead, Btn, Badge, Avatar, Search, Select,
   Drawer, Icon, Empty, Progress, DataTable, Spinner,
   type Column, type BadgeTone,
 } from '@/components/ui'
 import { depts } from '@/data/mockDb'
 import { fmtMoney } from '@/lib/format'
+import { normalizeStaffCategory, staffCategoryLabel } from '@/lib/staffCategory'
 import type { Teacher, Staff } from '@/types'
 import { useTeachers } from '@/api/hooks/useTeachers'
+import { normalizeSubjects } from '@/api/teachers'
 import { useStaff } from '@/api/hooks/useStaff'
 import { useStudents } from '@/api/hooks/useStudents'
 import { studentParentLabel } from '@/api/students'
+import {
+  listPeopleDocs, peoplePhotoUrl, openStoredDoc, downloadStoredDoc, isStoredImage,
+} from '@/api/peopleExtras'
+import { openMailCompose } from '@/lib/composeMail'
 
 /* ---------- shared helpers ---------- */
 const attColor = (v: number): string => (v >= 90 ? 'var(--success)' : v >= 80 ? 'var(--brand-600)' : v >= 75 ? 'var(--warning)' : 'var(--danger)')
@@ -34,22 +40,99 @@ function StatRow({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
+function SubjectChips({ subjects, max }: { subjects: unknown; max?: number }) {
+  const list = normalizeSubjects(subjects)
+  if (!list.length) return <span className="muted">—</span>
+  const cap = max ?? list.length
+  const shown = list.slice(0, cap)
+  const extra = list.length - shown.length
+  return (
+    <div className="sm-subject-chips" title={list.join(', ')}>
+      {shown.map((s) => <Badge key={s} tone="brand" soft>{s}</Badge>)}
+      {extra > 0 && <Badge tone="neutral" soft>+{extra}</Badge>}
+    </div>
+  )
+}
+
+function PeopleDocsList({
+  kind, personId, toast,
+}: {
+  kind: 'teacher' | 'staff'
+  personId: string
+  toast: ReturnType<typeof useToast>
+}) {
+  const docs = listPeopleDocs(kind, personId)
+  if (docs.length === 0) {
+    return (
+      <Empty
+        icon="doc"
+        title="No documents yet"
+        body="Re-onboard or re-upload photo / Aadhaar / resume (under ~2.5 MB for PDFs) to view them here."
+      />
+    )
+  }
+  return (
+    <div className="col gap8">
+      {docs.map((d) => (
+        <div key={d.key + d.fileName} className="row ai-center jc-between gap10" style={{ padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 10 }}>
+          <div className="row ai-center gap12" style={{ minWidth: 0 }}>
+            {d.dataUrl && isStoredImage(d) ? (
+              <img src={d.dataUrl} alt={d.label} className="sm-upload-thumb is-photo" style={{ width: 48, height: 48, borderRadius: 10 }} />
+            ) : (
+              <span className="sm-card-ic"><Icon name="doc" size={16} /></span>
+            )}
+            <div style={{ minWidth: 0 }}>
+              <div className="fw6">{d.label}</div>
+              <div className="t-xs muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.fileName}</div>
+            </div>
+          </div>
+          <div className="row ai-center gap6">
+            <Badge tone={d.dataUrl ? 'success' : 'neutral'}>{d.dataUrl ? 'Ready' : 'Name only'}</Badge>
+            <Btn
+              variant="ghost" size="sm" icon="eye"
+              onClick={() => {
+                if (!openStoredDoc(d)) {
+                  toast.info('Preview unavailable', d.dataUrl ? 'Allow popups, or use Download.' : 'Re-upload this file (PDF under ~2.5 MB).')
+                }
+              }}
+            >
+              View
+            </Btn>
+            <Btn
+              variant="secondary" size="sm" icon="download"
+              onClick={() => {
+                if (!downloadStoredDoc(d)) toast.info('Download unavailable', 'Re-upload this file first.')
+              }}
+            >
+              Download
+            </Btn>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function TeacherProfile({ teacher, onClose, onMessage }: { teacher: Teacher | null; onClose: () => void; onMessage: (t: Teacher) => void }) {
+  const app = useApp()
+  const toast = useToast()
   if (!teacher) return null
+  const photoUrl = peoplePhotoUrl('teacher', teacher.id)
   return (
     <Drawer
       open={!!teacher} onClose={onClose} icon="user"
-      title={teacher.name} sub={`${teacher.id} · ${teacher.desig}`}
+      title={teacher.name} sub={`${teacher.code || teacher.id} · ${teacher.desig}`}
       footer={
         <div className="row gap8 jc-end">
           <Btn variant="ghost" onClick={onClose}>Close</Btn>
+          <Btn variant="secondary" icon="edit" onClick={() => { app.go('school.teachers.edit', { focus: teacher.id }); onClose() }}>Edit</Btn>
           <Btn variant="primary" icon="message" onClick={() => onMessage(teacher)}>Message</Btn>
         </div>
       }
     >
       <div className="col gap16">
         <div className="row ai-center gap12">
-          <Avatar name={teacher.name} hue={teacher.avatarHue} size={56} />
+          <Avatar name={teacher.name} hue={teacher.avatarHue} size={56} src={photoUrl} />
           <div>
             <div className="row ai-center gap8">
               <span className="fw7 t-lg">{teacher.name}</span>
@@ -62,8 +145,16 @@ function TeacherProfile({ teacher, onClose, onMessage }: { teacher: Teacher | nu
         <Card>
           <div className="col gap12">
             <StatRow label="Designation" value={teacher.desig} />
-            <StatRow label="Subjects" value={teacher.subjects.join(', ') || '—'} />
-            <StatRow label="Class teacher" value={teacher.classTeacher ?? '—'} />
+            <div className="sm-profile-field">
+              <span className="muted t-sm">Subjects</span>
+              <SubjectChips subjects={teacher.subjects} />
+            </div>
+            <StatRow
+              label="Class teacher"
+              value={teacher.classTeacher
+                ? <Badge tone="brand" soft>{teacher.classTeacher}</Badge>
+                : <span className="muted">—</span>}
+            />
             <StatRow label="Experience" value={`${teacher.exp} yrs`} />
             <StatRow label="Email" value={teacher.email} />
             <StatRow label="Status" value={<Badge tone={statusTone(teacher.status)}>{statusLabel(teacher.status)}</Badge>} />
@@ -87,6 +178,58 @@ function TeacherProfile({ teacher, onClose, onMessage }: { teacher: Teacher | nu
             <StatRow label="Teaching load" value={`${teacher.load} periods/wk`} />
           </div>
         </Card>
+
+        <Card>
+          <CardHead title="Photo & documents" sub="Stored on this device" icon="doc" />
+          <div style={{ marginTop: 8 }}>
+            <PeopleDocsList kind="teacher" personId={teacher.id} toast={toast} />
+          </div>
+        </Card>
+      </div>
+    </Drawer>
+  )
+}
+
+function StaffProfile({ staff, onClose, onMessage }: { staff: Staff | null; onClose: () => void; onMessage: (s: Staff) => void }) {
+  const app = useApp()
+  const toast = useToast()
+  if (!staff) return null
+  const photoUrl = peoplePhotoUrl('staff', staff.id)
+  return (
+    <Drawer
+      open={!!staff} onClose={onClose} icon="briefcase"
+      title={staff.name} sub={`${staff.code || staff.id} · ${staff.role}`}
+      footer={
+        <div className="row gap8 jc-end">
+          <Btn variant="ghost" onClick={onClose}>Close</Btn>
+          <Btn variant="secondary" icon="edit" onClick={() => { app.go('school.staff.edit', { focus: staff.id }); onClose() }}>Edit</Btn>
+          <Btn variant="primary" icon="message" onClick={() => onMessage(staff)}>Message</Btn>
+        </div>
+      }
+    >
+      <div className="col gap16">
+        <div className="row ai-center gap12">
+          <Avatar name={staff.name} hue={staff.avatarHue} size={56} src={photoUrl} />
+          <div>
+            <div className="fw7 t-lg">{staff.name}</div>
+            <div className="t-sm muted">{staff.dept} · {staff.shift}</div>
+          </div>
+        </div>
+        <Card>
+          <div className="col gap12">
+            <StatRow label="Role" value={staff.role} />
+            <StatRow label="Category" value={staffCategoryLabel(staff.cat, staff.dept, staff.role)} />
+            <StatRow label="Phone" value={staff.phone} />
+            <StatRow label="Email" value={staff.email || '—'} />
+            <StatRow label="Status" value={<Badge tone={statusTone(staff.status)}>{statusLabel(staff.status)}</Badge>} />
+          </div>
+        </Card>
+        <Card>
+          <CardHead title="Photo & documents" sub="Stored on this device" icon="doc" />
+          <div style={{ marginTop: 8 }}>
+            <PeopleDocsList kind="staff" personId={staff.id} toast={toast} />
+          </div>
+        </Card>
       </div>
     </Drawer>
   )
@@ -107,7 +250,23 @@ function TeachersScreen() {
   const { data: teachersData } = useTeachers()
   const teachers = teachersData ?? []
 
-  const message = (t: Teacher) => toast.success('Message sent', `Notified ${t.name}.`)
+  const message = (t: Teacher) => {
+    const email = (t.email || '').trim()
+    if (!email) {
+      toast.danger('No email on file', `Add an email for ${t.name} before messaging.`)
+      return
+    }
+    try {
+      openMailCompose({
+        to: email,
+        subject: `Message from ${app.school.name}`,
+        body: `Dear ${t.name},\n\n`,
+      })
+      toast.success('Opening mail', `Compose email to ${t.name}.`)
+    } catch (err) {
+      toast.danger('Could not open mail', err instanceof Error ? err.message : 'Invalid email.')
+    }
+  }
 
   const topPerformers = useMemo(
     () => teachers.slice().sort((a, b) => b.rating - a.rating).slice(0, 4),
@@ -117,7 +276,12 @@ function TeachersScreen() {
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
     return teachers.filter((t) => {
-      if (needle && !(t.name.toLowerCase().includes(needle) || t.dept.toLowerCase().includes(needle) || t.id.toLowerCase().includes(needle))) return false
+      if (needle && !(
+        t.name.toLowerCase().includes(needle)
+        || t.dept.toLowerCase().includes(needle)
+        || t.id.toLowerCase().includes(needle)
+        || (t.code ?? '').toLowerCase().includes(needle)
+      )) return false
       if (dept !== 'all' && t.dept !== dept) return false
       if (status !== 'all' && t.status !== status) return false
       return true
@@ -129,13 +293,13 @@ function TeachersScreen() {
       key: 'name', label: 'Teacher', sortValue: (t) => t.name,
       render: (t) => (
         <div className="row ai-center gap10">
-          <Avatar name={t.name} hue={t.avatarHue} size={34} />
+          <Avatar name={t.name} hue={t.avatarHue} size={34} src={peoplePhotoUrl('teacher', t.id)} />
           <div>
             <div className="row ai-center gap6">
               <span className="fw6">{t.name}</span>
               {t.top && <span style={{ color: 'var(--gold)' }}><Icon name="sparkle" size={13} /></span>}
             </div>
-            <div className="t-xs muted">{t.id}</div>
+            <div className="t-xs muted">{t.code || t.id}</div>
           </div>
         </div>
       ),
@@ -152,8 +316,8 @@ function TeachersScreen() {
     {
       key: 'subjects', label: 'Subjects',
       render: (t) => (
-        <div className="row gap4 wrap">
-          {t.subjects.length ? t.subjects.map((s) => <Badge key={s} tone="neutral">{s}</Badge>) : <span className="muted">—</span>}
+        <div className="sm-col-subjects">
+          <SubjectChips subjects={t.subjects} max={3} />
         </div>
       ),
     },
@@ -209,7 +373,7 @@ function TeachersScreen() {
         {topPerformers.map((t) => (
           <Card key={t.id} hover>
             <div className="row ai-center gap12">
-              <Avatar name={t.name} hue={t.avatarHue} size={44} />
+              <Avatar name={t.name} hue={t.avatarHue} size={44} src={peoplePhotoUrl('teacher', t.id)} />
               <div style={{ minWidth: 0 }}>
                 <div className="fw7" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.name}</div>
                 <div className="t-xs muted">{t.dept}</div>
@@ -262,24 +426,49 @@ function StaffScreen() {
   const toast = useToast()
   const [q, setQ] = useState('')
   const [cat, setCat] = useState('all')
+  const [profile, setProfile] = useState<Staff | null>(null)
 
   const editable = can(app.role, 'sis', 'E')
   const { data: staffData } = useStaff()
   const roster = staffData ?? []
 
-  const message = (s: Staff) => toast.success('Message sent', `Notified ${s.name}.`)
+  const message = (s: Staff) => {
+    const email = (s.email || '').trim()
+    if (!email) {
+      toast.danger('No email on file', `Add an email for ${s.name} before messaging.`)
+      return
+    }
+    try {
+      openMailCompose({
+        to: email,
+        subject: `Message from ${app.school.name}`,
+        body: `Dear ${s.name},\n\n`,
+      })
+      toast.success('Opening mail', `Compose email to ${s.name}.`)
+    } catch (err) {
+      toast.danger('Could not open mail', err instanceof Error ? err.message : 'Invalid email.')
+    }
+  }
 
   const counts = useMemo(() => {
     const m: Record<string, number> = {}
-    roster.forEach((s) => { m[s.cat] = (m[s.cat] || 0) + 1 })
+    roster.forEach((s) => {
+      const key = normalizeStaffCategory(s.cat, s.dept, s.role)
+      if (key) m[key] = (m[key] || 0) + 1
+    })
     return m
   }, [roster])
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
     return roster.filter((s) => {
-      if (needle && !(s.name.toLowerCase().includes(needle) || s.role.toLowerCase().includes(needle) || s.id.toLowerCase().includes(needle))) return false
-      if (cat !== 'all' && s.cat !== cat) return false
+      if (needle && !(
+        s.name.toLowerCase().includes(needle)
+        || s.role.toLowerCase().includes(needle)
+        || s.id.toLowerCase().includes(needle)
+        || (s.code ?? '').toLowerCase().includes(needle)
+      )) return false
+      if (cat !== 'all' && normalizeStaffCategory(s.cat, s.dept, s.role) !== cat) return false
       return true
     })
   }, [q, cat, roster])
@@ -289,10 +478,10 @@ function StaffScreen() {
       key: 'name', label: 'Staff', sortValue: (s) => s.name,
       render: (s) => (
         <div className="row ai-center gap10">
-          <Avatar name={s.name} hue={s.avatarHue} size={34} />
+          <Avatar name={s.name} hue={s.avatarHue} size={34} src={peoplePhotoUrl('staff', s.id)} />
           <div>
             <div className="fw6">{s.name}</div>
-            <div className="t-xs muted">{s.id} · {s.gender === 'M' ? 'Male' : 'Female'}</div>
+            <div className="t-xs muted">{s.code || s.id} · {s.gender === 'M' ? 'Male' : 'Female'}</div>
           </div>
         </div>
       ),
@@ -302,7 +491,7 @@ function StaffScreen() {
       render: (s) => (
         <div>
           <div className="fw6">{s.role}</div>
-          <div className="t-xs muted">{s.dept}</div>
+          <div className="t-xs muted">{staffCategoryLabel(s.cat, s.dept, s.role)} · {s.dept}</div>
         </div>
       ),
     },
@@ -372,9 +561,12 @@ function StaffScreen() {
           pageSize={10}
           rowKey={(s) => s.id}
           initialSort={{ key: 'name', dir: 'asc' }}
+          onRowClick={(s) => setProfile(s)}
           empty={<Empty icon="users" title="No staff match" body="Try adjusting the search or category." />}
         />
       </Card>
+
+      <StaffProfile staff={profile} onClose={() => setProfile(null)} onMessage={(s) => { message(s); setProfile(null) }} />
     </div>
   )
 }
@@ -387,6 +579,7 @@ interface Parent {
   id: string
   name: string
   phone: string
+  email: string
   hue: number
   wards: Ward[]
   due: number
@@ -400,24 +593,43 @@ function ParentsScreen() {
   const students = studentsQ.data ?? []
 
   const openWard = (id: string) => app.go('school.student', { focus: id })
-  const message = (p: Parent) => toast.success('Message sent', `Notified ${p.name}.`)
+  const message = (p: Parent) => {
+    const email = (p.email || '').trim()
+    if (!email) {
+      toast.danger('No email on file', `Add a guardian email for ${p.name}'s ward(s) before messaging.`)
+      return
+    }
+    try {
+      openMailCompose({
+        to: email,
+        subject: `Message from ${app.school.name}`,
+        body: `Dear ${p.name},\n\n`,
+      })
+      toast.success('Opening mail', `Compose email to ${p.name}.`)
+    } catch (err) {
+      toast.danger('Could not open mail', err instanceof Error ? err.message : 'Invalid email.')
+    }
+  }
 
   const parents = useMemo<Parent[]>(() => {
     const map = new Map<string, Parent>()
     students.forEach((s) => {
       const name = studentParentLabel(s)
       const phone = (s.phone || s.father?.phone || s.mother?.phone || '').trim()
+      const email = (s.father?.email || s.mother?.email || s.email || '').trim()
       const key = `${name.toLowerCase()}|${phone}`
       const ward: Ward = { id: s.id, name: s.name, cls: s.cls }
       const existing = map.get(key)
       if (existing) {
         existing.wards.push(ward)
         existing.due += s.feeDue
+        if (!existing.email && email) existing.email = email
       } else {
         map.set(key, {
           id: 'PAR-' + s.id,
           name,
           phone,
+          email,
           hue: s.avatarHue,
           wards: [ward],
           due: s.feeDue,

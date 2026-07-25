@@ -71,12 +71,14 @@ describe('Add Teacher form', () => {
   })
 
   it('adds the teacher and navigates back when valid', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+    // Return a fresh Response per call: the form mounts a roster query that reads
+    // one body before the create POST, and a Response body can only be read once.
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(jsonResponse({
       data: {
         id: 'srv', name: 'Rajesh Kumar', gender: 'M',
         department: 'Mathematics', designation: 'Teacher', attendance_pct: 0,
       },
-    })))
+    }))))
 
     renderForm()
     fillRequired()

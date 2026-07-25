@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { listTeachers, createTeacher } from './teachers'
+import { listTeachers, createTeacher, normalizeSubjects } from './teachers'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -13,6 +13,16 @@ const wireTeacher = {
 
 beforeEach(() => { localStorage.clear(); vi.restoreAllMocks() })
 
+describe('normalizeSubjects', () => {
+  it('parses arrays, comma strings, and JSON strings', () => {
+    expect(normalizeSubjects(['Physics', 'Chemistry'])).toEqual(['Physics', 'Chemistry'])
+    expect(normalizeSubjects('Physics, Chemistry')).toEqual(['Physics', 'Chemistry'])
+    expect(normalizeSubjects('["Physics","Math"]')).toEqual(['Physics', 'Math'])
+    expect(normalizeSubjects('')).toEqual([])
+    expect(normalizeSubjects(null)).toEqual([])
+  })
+})
+
 describe('listTeachers', () => {
   it('maps wire snake_case to the camelCase Teacher shape (dept/desig/attendance renamed)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: [wireTeacher], next_cursor: null })))
@@ -20,6 +30,7 @@ describe('listTeachers', () => {
     expect(rows[0]).toMatchObject({
       id: 'T-01', name: 'Meera', dept: 'Science', desig: 'HOD',
       classTeacher: '10-A', attendance: 97, avatarHue: 180, top: true,
+      subjects: ['Physics'],
     })
     const raw = rows[0] as unknown as Record<string, unknown>
     expect(raw.department).toBeUndefined()
@@ -42,6 +53,15 @@ describe('listTeachers', () => {
     const url2 = fetchMock.mock.calls[0][0] as string
     expect(url2).not.toContain('dept=')
     expect(url2).not.toContain('status=')
+  })
+
+  it('normalizes comma-separated subjects from the API', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: [{ ...wireTeacher, subjects: 'Physics, Chemistry, Biology' }],
+      next_cursor: null,
+    })))
+    const rows = await listTeachers()
+    expect(rows[0].subjects).toEqual(['Physics', 'Chemistry', 'Biology'])
   })
 })
 

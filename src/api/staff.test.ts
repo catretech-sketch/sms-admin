@@ -26,6 +26,15 @@ describe('listStaff', () => {
     expect((rows[0] as unknown as Record<string, unknown>).attendancePct).toBeUndefined()
   })
 
+  it('infers category from department when API category is null', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: [{ ...wireStaff, category: null, department: 'General Support', role: 'Peon' }],
+      next_cursor: null,
+    })))
+    const rows = await listStaff()
+    expect(rows[0].cat).toBe('support')
+  })
+
   it('forwards q/cat as query params and drops "all"', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: [], next_cursor: null }))
     vi.stubGlobal('fetch', fetchMock)

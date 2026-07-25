@@ -70,7 +70,7 @@ export function fromStudent(s: Student): Record<string, unknown> {
     || String(s.mother?.phone ?? '').trim()
     || null
   return {
-    admission_no: s.adm,
+    admission_no: s.adm?.trim() || null,
     name: s.name,
     gender: s.gender,
     grade: s.grade,

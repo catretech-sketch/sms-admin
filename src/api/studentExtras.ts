@@ -5,7 +5,8 @@ import { tokenStore } from './auth/tokenStore'
 import type { ParentInfo, Student, StudentDocs } from '@/types'
 
 export interface StoredDoc {
-  key: keyof StudentDocs | 'photo' | 'fatherPhoto' | 'motherPhoto'
+  /** Student / teacher / staff file key (e.g. photo, aadhaar, resume). */
+  key: string
   label: string
   fileName: string
   mime: string
@@ -117,28 +118,93 @@ export function extrasFromStudent(s: Student, files: StoredDoc[] = []): StudentE
   }
 }
 
-export async function fileToStoredDoc(
-  key: StoredDoc['key'],
-  file: File | null | undefined,
-): Promise<StoredDoc | null> {
-  if (!file) return null
-  const label = DOC_LABELS[key] || file.name
-  const meta: StoredDoc = {
-    key,
-    label,
-    fileName: file.name,
-    mime: file.type || 'application/octet-stream',
-    size: file.size,
-  }
-  /* Cap payload so localStorage stays usable (~700KB each). */
-  if (file.size > 700_000) return meta
-  const dataUrl = await new Promise<string>((resolve, reject) => {
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => resolve(String(reader.result || ''))
     reader.onerror = () => reject(reader.error)
     reader.readAsDataURL(file)
   })
-  return { ...meta, dataUrl }
+}
+
+function isImageUpload(file: File): boolean {
+  if (file.type.startsWith('image/')) return true
+  return /\.(jpe?g|png|gif|webp|bmp)$/i.test(file.name)
+}
+
+export async function fileToStoredDoc(
+  key: string,
+  file: File | null | undefined,
+  labelOverride?: string,
+): Promise<StoredDoc | null> {
+  if (!file) return null
+  const label = labelOverride || DOC_LABELS[key] || file.name
+  let mime = file.type || 'application/octet-stream'
+  let size = file.size
+  let dataUrl: string | undefined
+
+  /* Images: compress so phone photos still preview (raw files often exceed quota). */
+  if (isImageUpload(file)) {
+    try {
+      const { compressImageFile } = await import('@/lib/compressImage')
+      dataUrl = await compressImageFile(file, { maxEdge: 960, quality: 0.78 })
+      mime = 'image/jpeg'
+      const b64 = dataUrl.split(',')[1] || ''
+      size = Math.round(b64.length * 0.75)
+    } catch {
+      if (file.size <= 900_000) dataUrl = await readAsDataUrl(file)
+    }
+  } else if (file.size <= 2_500_000) {
+    /* PDFs/docs — Chrome won't open raw data: URLs; we store then open via blob. */
+    dataUrl = await readAsDataUrl(file)
+    if (!mime || mime === 'application/octet-stream') {
+      if (/\.pdf$/i.test(file.name)) mime = 'application/pdf'
+    }
+  }
+
+  return {
+    key,
+    label,
+    fileName: file.name,
+    mime,
+    size,
+    dataUrl,
+  }
+}
+
+export function isStoredImage(doc: Pick<StoredDoc, 'mime' | 'fileName' | 'dataUrl'>): boolean {
+  if (doc.dataUrl?.startsWith('data:image/')) return true
+  if (doc.mime?.startsWith('image/')) return true
+  return /\.(jpe?g|png|gif|webp|bmp)$/i.test(doc.fileName)
+}
+
+export function isStoredPdf(doc: Pick<StoredDoc, 'mime' | 'fileName' | 'dataUrl'>): boolean {
+  if (doc.mime === 'application/pdf') return true
+  if (doc.dataUrl?.startsWith('data:application/pdf')) return true
+  return /\.pdf$/i.test(doc.fileName)
+}
+
+function dataUrlToBlob(dataUrl: string): Blob | null {
+  try {
+    const comma = dataUrl.indexOf(',')
+    if (comma < 0) return null
+    const header = dataUrl.slice(0, comma)
+    const b64 = dataUrl.slice(comma + 1)
+    const mime = /data:([^;,]+)/i.exec(header)?.[1] || 'application/octet-stream'
+    const binary = atob(b64)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    return new Blob([bytes], { type: mime })
+  } catch {
+    return null
+  }
+}
+
+function blobUrlFromDoc(doc: StoredDoc): string | null {
+  if (!doc.dataUrl) return null
+  const blob = dataUrlToBlob(doc.dataUrl)
+  if (!blob) return null
+  return URL.createObjectURL(blob)
 }
 
 export function listStoredDocs(studentId: string, s?: Student): StoredDoc[] {
@@ -155,20 +221,42 @@ export function listStoredDocs(studentId: string, s?: Student): StoredDoc[] {
   return docs
 }
 
+/** Student photo data-URL for list/avatar previews when uploaded at enrolment. */
+export function studentPhotoUrl(studentId: string): string | undefined {
+  return listStoredDocs(studentId).find((d) => d.key === 'photo' && d.dataUrl)?.dataUrl
+}
+
 export function downloadStoredDoc(doc: StoredDoc): boolean {
   if (!doc.dataUrl) return false
+  const url = blobUrlFromDoc(doc) || doc.dataUrl
   const a = document.createElement('a')
-  a.href = doc.dataUrl
-  a.download = doc.fileName
+  a.href = url
+  a.download = doc.fileName || 'document'
   a.rel = 'noopener'
   document.body.appendChild(a)
   a.click()
   a.remove()
+  if (url.startsWith('blob:')) setTimeout(() => URL.revokeObjectURL(url), 60_000)
   return true
 }
 
+/** Open PDF/image in a new tab. Uses blob: URLs — Chrome blocks data:application/pdf. */
 export function openStoredDoc(doc: StoredDoc): boolean {
   if (!doc.dataUrl) return false
-  window.open(doc.dataUrl, '_blank', 'noopener,noreferrer')
+  const url = blobUrlFromDoc(doc)
+  if (!url) return downloadStoredDoc(doc)
+
+  const win = window.open(url, '_blank')
+  if (!win) {
+    /* Popup blocked — fall back to download so the file is still usable. */
+    const a = document.createElement('a')
+    a.href = url
+    a.download = doc.fileName || 'document'
+    a.rel = 'noopener'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 120_000)
   return true
 }

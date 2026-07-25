@@ -9,22 +9,59 @@ import {
   Drawer, Tabs, Icon, Empty, Progress, Spark, Bars, DataTable,
   type Column, type BadgeTone,
 } from '@/components/ui'
-import { grades } from '@/data/mockDb'
 import { gateRole } from '@/lib/gating'
 import { useStudents, useStudent } from '@/api/hooks/useStudents'
+import { useExams } from '@/api/hooks/useExams'
+import { useExamPapers } from '@/api/hooks/useExamPapers'
+import { useExamMarksMap } from '@/api/hooks/useGrades'
+import { useClasses } from '@/api/hooks/useClasses'
 import { studentGuardianName } from '@/api/students'
-import { listStoredDocs, downloadStoredDoc, openStoredDoc } from '@/api/studentExtras'
+import { listStoredDocs, downloadStoredDoc, openStoredDoc, isStoredImage, studentPhotoUrl } from '@/api/studentExtras'
+import { openMailCompose, guardianEmailsFromStudent } from '@/lib/composeMail'
+import { markKey } from '@/lib/examData'
+import { properName } from '@/lib/properCase'
 import {
-  reportFor, classRank, attendanceMonths, fmtMoney,
+  reportFor, classRank, fmtMoney,
   overallToppers, classToppers,
-  type TopperMetric, type ScoredStudent, type ClassTopperGroup,
+  type TopperMetric, type ScoredStudent, type ClassTopperGroup, type TopperScoreOpts,
 } from '@/lib/format'
-import type { Student, FeeStatus, Role } from '@/types'
+import { useStudentMonthlyAttendance } from '@/api/hooks/useStudentMonthlyAttendance'
+import { useFeeInvoices } from '@/api/hooks/useFeeInvoices'
+import { useFeePayments } from '@/api/hooks/useFeePayments'
+import { buildStudentTimeline } from '@/lib/studentTimeline'
+import { monthlyBreakdown, monthlySeriesForKeys, academicYearMonthKeys, academicYearStart, monthDailyGrid, attendancePctByStudent } from '@/api/studentAttendance'
+import { listAllLocalAttendance, type AttendanceStatus } from '@/api/attendance'
+import type { Student, FeeStatus, Role, Exam } from '@/types'
+import type { SchoolClass } from '@/api/classes'
+import { DEFAULT_GRADES } from '@/lib/defaultClasses'
 
 /* ---------- shared helpers ---------- */
 const feeTone: Record<FeeStatus, BadgeTone> = { paid: 'success', partial: 'warning', due: 'danger' }
 const feeLabel: Record<FeeStatus, string> = { paid: 'Paid', partial: 'Partial', due: 'Due' }
+const dayStatusTone: Record<AttendanceStatus, BadgeTone> = { present: 'success', late: 'warning', absent: 'danger' }
+const dayStatusLabel: Record<AttendanceStatus, string> = { present: 'Present', late: 'Late', absent: 'Absent' }
+const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+function fmtDayLabel(iso: string): string {
+  const d = new Date(`${iso}T12:00:00`)
+  if (Number.isNaN(d.getTime())) return iso
+  return `${WEEKDAY[d.getDay()]} ${d.getDate()}`
+}
 const attColor = (v: number): string => (v >= 90 ? 'var(--success)' : v >= 80 ? 'var(--brand-600)' : v >= 75 ? 'var(--warning)' : 'var(--danger)')
+
+function classLabelOf(c: SchoolClass): string {
+  return (c.name || `${c.grade}-${c.section}`).trim()
+}
+
+/** Prefer marks_entry / completed exams, then latest end date. */
+function pickLatestExam(exams: Exam[] | undefined): Exam | null {
+  if (!exams?.length) return null
+  const rank = (e: Exam) => (e.status === 'completed' ? 3 : e.status === 'marks_entry' ? 2 : e.published ? 1 : 0)
+  return [...exams].sort((a, b) => {
+    const rd = rank(b) - rank(a)
+    if (rd) return rd
+    return String(b.to || '').localeCompare(String(a.to || ''))
+  })[0] ?? null
+}
 
 export function canEdit(role: Role): boolean {
   return gateRole(role) === 'admin' || role === 'principal' || role === 'vice_principal'
@@ -113,11 +150,19 @@ function RankMedal({ rank }: { rank: number }) {
   )
 }
 
-function Leaderboard({ rows, metric, onPick }: { rows: ScoredStudent[]; metric: TopperMetric; onPick: (id: string) => void }) {
+function Leaderboard({ rows, metric, onPick, examLabel }: {
+  rows: ScoredStudent[]; metric: TopperMetric; onPick: (id: string) => void; examLabel?: string
+}) {
   return (
     <Card pad={false}>
       <div style={{ padding: 16 }}>
-        <CardHead title="Overall toppers" sub={`Top ${rows.length} · school-wide`} icon="cap" />
+        <CardHead
+          title="Overall toppers"
+          sub={examLabel
+            ? `Top ${rows.length} · ${examLabel} · live marks`
+            : `Top ${rows.length} · school-wide`}
+          icon="cap"
+        />
       </div>
       <table className="sm-table">
         <thead>
@@ -135,16 +180,16 @@ function Leaderboard({ rows, metric, onPick }: { rows: ScoredStudent[]; metric: 
               <td><RankMedal rank={i + 1} /></td>
               <td>
                 <div className="row ai-center gap10">
-                  <Avatar name={r.student.name} hue={r.student.avatarHue} size={30} />
+                  <Avatar name={properName(r.student.name)} hue={r.student.avatarHue} size={30} src={studentPhotoUrl(r.student.id)} />
                   <div>
-                    <div className="fw6">{r.student.name}</div>
+                    <div className="fw6">{properName(r.student.name)}</div>
                     <div className="t-xs muted">{r.student.adm}</div>
                   </div>
                 </div>
               </td>
               <td className="fw6">{r.student.cls}</td>
               <td className="ta-right fw7">{r.score}%</td>
-              <td className="ta-right muted">{r.secondary}%</td>
+              <td className="ta-right muted">{metric === 'exam' ? `${r.secondary}%` : (r.secondary > 0 ? `${r.secondary}%` : '—')}</td>
             </tr>
           ))}
         </tbody>
@@ -163,9 +208,9 @@ function ClassToppersGrid({ groups, onPick }: { groups: ClassTopperGroup[]; onPi
             {g.toppers.map((r, i) => (
               <div key={r.student.id} className="row ai-center gap10" style={{ cursor: 'pointer' }} onClick={() => onPick(r.student.id)}>
                 <RankMedal rank={i + 1} />
-                <Avatar name={r.student.name} hue={r.student.avatarHue} size={28} />
+                <Avatar name={properName(r.student.name)} hue={r.student.avatarHue} size={28} src={studentPhotoUrl(r.student.id)} />
                 <div style={{ flex: 1 }}>
-                  <div className="fw6">{r.student.name}</div>
+                  <div className="fw6">{properName(r.student.name)}</div>
                   <div className="t-xs muted">{r.student.adm}</div>
                 </div>
                 <span className="fw7 t-sm">{r.score}%</span>
@@ -180,23 +225,93 @@ function ClassToppersGrid({ groups, onPick }: { groups: ClassTopperGroup[]; onPi
 
 function ToppersView({ students, onPick }: { students: Student[]; onPick: (id: string) => void }) {
   const [cat, setCat] = useState<TopperMetric>('exam')
-  const overall = useMemo(() => overallToppers(students, cat, 10), [students, cat])
-  const byClass = useMemo(() => classToppers(students, cat, 3), [students, cat])
+  const examsQ = useExams()
+  const latestExam = useMemo(() => pickLatestExam(examsQ.data), [examsQ.data])
+  const marksQ = useExamMarksMap(latestExam?.id ?? null)
+  const papersQ = useExamPapers(latestExam?.id ?? null)
+  const examSubjects = useMemo(
+    () => [...new Set((papersQ.data ?? []).map((p) => p.subject).filter(Boolean))],
+    [papersQ.data],
+  )
+  const liveMarks = marksQ.data ?? {}
+  const subjectMax = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const p of papersQ.data ?? []) {
+      if (p.subject) m[p.subject] = p.maxMarks || 100
+    }
+    return m
+  }, [papersQ.data])
+  const getMax = useMemo(() => (subject: string) => subjectMax[subject] ?? 100, [subjectMax])
+  const attMap = useMemo(() => attendancePctByStudent(listAllLocalAttendance()), [])
+  const getAttendance = useMemo(
+    () => (sid: string): number | null => (attMap.has(sid) ? attMap.get(sid)! : null),
+    [attMap],
+  )
+  const scoreOpts = useMemo<TopperScoreOpts>(() => {
+    /* Always resolve exam % from live marks (never the seeded/dummy report),
+       so it is correct whether it's the primary column (Exam toppers) or the
+       secondary column (Attendance toppers). No live marks → null → shown as "—". */
+    const opts: TopperScoreOpts = { getAttendance, liveOnly: true, getMax }
+    if (latestExam?.id) {
+      opts.examId = latestExam.id
+      opts.subjects = examSubjects.length ? examSubjects : undefined
+      opts.getMark = (sid, subject) => liveMarks[markKey(latestExam.id, sid, subject)]
+    }
+    return opts
+  }, [latestExam, examSubjects, liveMarks, getAttendance, getMax])
+
+  const overall = useMemo(
+    () => overallToppers(students, cat, 10, scoreOpts),
+    [students, cat, scoreOpts],
+  )
+  const byClass = useMemo(
+    () => classToppers(students, cat, 3, scoreOpts),
+    [students, cat, scoreOpts],
+  )
   const catTabs = [
     { value: 'exam', label: 'Exam toppers', icon: 'cap' },
     { value: 'attendance', label: 'Attendance toppers', icon: 'calendar' },
   ]
+  const examLoading = cat === 'exam' && (examsQ.isLoading || marksQ.isLoading || papersQ.isLoading)
+  const noLiveExam = cat === 'exam' && !examLoading && overall.length === 0
+  const noLiveAttendance = cat === 'attendance' && overall.length === 0
+
   return (
     <div className="col gap16">
       <Tabs value={cat} onChange={(v) => setCat(v as TopperMetric)} tabs={catTabs} />
       {students.length === 0
         ? <Empty icon="users" title="No students" body="Add students to see toppers." />
-        : (
-          <>
-            <Leaderboard rows={overall} metric={cat} onPick={onPick} />
-            <ClassToppersGrid groups={byClass} onPick={onPick} />
-          </>
-        )}
+        : examLoading
+          ? <div className="t-sm muted" style={{ padding: 24 }}>Loading live exam marks…</div>
+          : noLiveExam
+            ? (
+              <Empty
+                icon="cap"
+                title="No live exam marks yet"
+                body="Enter marks under Exams → Marks entry. Sample / dummy exam % is not shown on toppers."
+              />
+            )
+            : noLiveAttendance
+            ? (
+              <Empty
+                icon="calendar"
+                title="No live attendance yet"
+                body="Mark students under Attendance. Toppers rank on real day marks — the dummy SIS % is not used."
+              />
+            )
+            : (
+              <>
+                <Leaderboard
+                  rows={overall}
+                  metric={cat}
+                  onPick={onPick}
+                  examLabel={cat === 'exam' && latestExam ? latestExam.name : undefined}
+                />
+                {byClass.length === 0
+                  ? null
+                  : <ClassToppersGrid groups={byClass} onPick={onPick} />}
+              </>
+            )}
     </div>
   )
 }
@@ -218,6 +333,14 @@ function StudentsScreen() {
   const { data } = useStudents()
   const students = data ?? []
 
+  const gradeOptions = useMemo(() => {
+    const unique = new Set<string>([...DEFAULT_GRADES])
+    for (const s of students) {
+      if (s.grade) unique.add(s.grade)
+    }
+    return [...unique]
+  }, [students])
+
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
     return students.filter((s) => {
@@ -234,7 +357,7 @@ function StudentsScreen() {
       key: 'name', label: 'Student', sortValue: (s) => s.name,
       render: (s) => (
         <div className="row ai-center gap10">
-          <Avatar name={s.name} hue={s.avatarHue} size={34} />
+          <Avatar name={s.name} hue={s.avatarHue} size={34} src={studentPhotoUrl(s.id)} />
           <div>
             <div className="fw6">{s.name}</div>
             <div className="t-xs muted">{s.adm} · {s.gender === 'M' ? 'Male' : 'Female'}</div>
@@ -318,7 +441,7 @@ function StudentsScreen() {
       <Card pad={false}>
         <div className="row ai-center gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
           <Search value={q} onChange={setQ} placeholder="Search name, admission no, class…" style={{ flex: 1, minWidth: 220 }} />
-          <Select options={['all', ...grades.slice(4)]} value={grade} onChange={(e) => setGrade(e.target.value)} />
+          <Select options={['all', ...gradeOptions]} value={grade} onChange={(e) => setGrade(e.target.value)} />
           <Select options={[{ value: 'all', label: 'All status' }, { value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }]} value={status} onChange={(e) => setStatus(e.target.value)} />
           <Select options={[{ value: 'all', label: 'All fees' }, { value: 'paid', label: 'Paid' }, { value: 'partial', label: 'Partial' }, { value: 'due', label: 'Due' }]} value={fee} onChange={(e) => setFee(e.target.value)} />
         </div>
@@ -333,7 +456,31 @@ function StudentsScreen() {
           onRowClick={(s) => app.go('school.student', { focus: s.id })}
           bulkActions={(selected, clear) => (
             <>
-              <Btn variant="secondary" size="sm" icon="message" onClick={() => { toast.success('Message queued', `Sent to ${selected.length} guardian(s).`); clear() }}>Message</Btn>
+              <Btn
+                variant="secondary"
+                size="sm"
+                icon="message"
+                onClick={() => {
+                  const emails = [...new Set(selected.flatMap((s) => guardianEmailsFromStudent(s)))]
+                  if (!emails.length) {
+                    toast.danger('No guardian emails', 'Selected students have no guardian email on file.')
+                    return
+                  }
+                  try {
+                    openMailCompose({
+                      to: emails,
+                      subject: `Message from ${app.school.name}`,
+                      body: 'Dear Parent / Guardian,\n\n',
+                    })
+                    toast.success('Opening mail', `Compose to ${emails.length} guardian email(s).`)
+                    clear()
+                  } catch (err) {
+                    toast.danger('Could not open mail', err instanceof Error ? err.message : 'Invalid email.')
+                  }
+                }}
+              >
+                Message
+              </Btn>
               <Btn variant="secondary" size="sm" icon="arrowRight" onClick={() => { toast.success('Promoted', `${selected.length} student(s) advanced.`); clear() }}>Promote</Btn>
               <Btn variant="ghost" size="sm" onClick={clear}>Clear</Btn>
             </>
@@ -378,9 +525,27 @@ function Student360() {
   const app = useApp()
   const toast = useToast()
   const [tab, setTab] = useState('details')
+  const [openMonth, setOpenMonth] = useState<string | null>(null)
   const editable = canEdit(app.role)
 
   const { data: fetched, isLoading, isError } = useStudent(app.focus)
+  const examsQ = useExams()
+  const classesQ = useClasses()
+  const studentsQ = useStudents()
+  const latestExam = useMemo(() => pickLatestExam(examsQ.data), [examsQ.data])
+  const marksQ = useExamMarksMap(latestExam?.id ?? null)
+  const papersQ = useExamPapers(latestExam?.id ?? null)
+  // NOTE: keep every hook above the loading/error guards below so the hook
+  // order stays stable across renders (React crashes otherwise).
+  const classId = (classesQ.data ?? []).find((c) => classLabelOf(c) === fetched?.cls)?.id
+  const monthsQ = useStudentMonthlyAttendance(
+    fetched?.id,
+    classId,
+    Boolean(fetched) && (tab === 'attendance' || tab === 'overview' || tab === 'timeline'),
+  )
+  const invoicesQ = useFeeInvoices()
+  const paymentsQ = useFeePayments()
+
   if (isLoading) {
     return <div className="col ai-center jc-center gap12" style={{ minHeight: 240 }}><div className="t-sm muted">Loading student…</div></div>
   }
@@ -393,11 +558,47 @@ function Student360() {
     )
   }
   const stu = fetched
+  const examSubjects = [...new Set(
+    (papersQ.data ?? [])
+      .filter((p) => !classId || !p.classId || p.classId === classId)
+      .map((p) => p.subject)
+      .filter(Boolean),
+  )]
+  const examId = latestExam?.id
+  const liveMarks = marksQ.data ?? {}
+  const subjectMax: Record<string, number> = {}
+  for (const p of papersQ.data ?? []) {
+    if (p.subject) subjectMax[p.subject] = p.maxMarks || 100
+  }
+  const getMax = (subject: string) => subjectMax[subject] ?? 100
+  const getMark = (sid: string, subject: string) =>
+    examId ? liveMarks[markKey(examId, sid, subject)] : undefined
+  const peers = (studentsQ.data ?? []).filter((s) => s.cls === stu.cls)
+  const live = { liveOnly: true as const, getMax }
+  const report = examId && examSubjects.length
+    ? reportFor(stu, examId, getMark, examSubjects, live)
+    : { rows: [], total: 0, maxTotal: 0, pct: 0, grade: '—', gpa: 0, result: 'PASS' as const }
+  const hasLiveMarks = report.rows.length > 0
+  const rank = hasLiveMarks && examId
+    ? classRank(stu, examId, getMark, peers, examSubjects, live)
+    : { rank: 0, classSize: peers.length }
+  const academicsSub = hasLiveMarks && latestExam
+    ? `${latestExam.name} · live marks · Overall ${report.pct}% · Grade ${report.grade} · Rank ${rank.rank}/${rank.classSize}`
+    : 'No live exam marks yet — enter under Exams → Marks entry'
   const guardian = studentGuardianName(stu) || stu.guardian
-  const report = reportFor(stu)
-  const rank = classRank(stu)
-  const months = attendanceMonths(stu)
+  const attRecords = monthsQ.data ?? []
+  const months = monthlyBreakdown(attRecords, stu.id)
+  const academicStartYear = (() => {
+    const m = String(stu.academicYear || '').match(/\d{4}/)
+    return m ? Number(m[0]) : academicYearStart()
+  })()
+  const monthAxis = monthlySeriesForKeys(attRecords, stu.id, academicYearMonthKeys(academicStartYear))
+  const markedMonths = months // months that actually have marks (for stats)
+  const openMonthDays = openMonth ? monthDailyGrid(attRecords, stu.id, openMonth) : []
   const docs = listStoredDocs(stu.id, stu)
+  const photoUrl = studentPhotoUrl(stu.id) ?? docs.find((d) => d.key === 'photo' && d.dataUrl)?.dataUrl
+  const fatherPhotoUrl = docs.find((d) => d.key === 'fatherPhoto' && d.dataUrl)?.dataUrl
+  const motherPhotoUrl = docs.find((d) => d.key === 'motherPhoto' && d.dataUrl)?.dataUrl
 
   const tabs = [
     { value: 'details', label: 'Details', icon: 'user' },
@@ -409,19 +610,30 @@ function Student360() {
     { value: 'timeline', label: 'Timeline', icon: 'clock' },
   ]
 
-  const ledger = [
-    { id: 'INV-2026-T1', label: 'Term 1 tuition', amount: 48000, paid: 48000, date: '12 Apr 2026' },
-    { id: 'INV-2026-T2', label: 'Term 2 tuition', amount: 48000, paid: stu.feeStatus === 'paid' ? 48000 : stu.feeStatus === 'partial' ? 48000 - stu.feeDue : 0, date: stu.feeStatus === 'due' ? '— pending' : '18 Aug 2026' },
-    { id: 'INV-2026-TR', label: 'Transport (annual)', amount: 18000, paid: 18000, date: '12 Apr 2026' },
-  ]
+  // Live fee ledger — invoices for this student (API or local fallback).
+  const studentInvoices = (invoicesQ.data ?? []).filter(
+    (inv) => inv.studentId === stu.id || (stu.adm && inv.studentAdm === stu.adm),
+  )
+  const ledger = studentInvoices.map((inv) => ({
+    id: inv.id,
+    label: inv.lines?.map((l) => l.headName).filter(Boolean).join(', ')
+      || [inv.term, inv.academicYear].filter(Boolean).join(' · ')
+      || 'Fee invoice',
+    amount: inv.total,
+    paid: inv.paid,
+    date: inv.dueDate || '—',
+  }))
+  const ledgerOutstanding = studentInvoices.length
+    ? studentInvoices.reduce((s, inv) => s + (inv.due || 0), 0)
+    : stu.feeDue
 
-  const timeline = [
-    { tone: 'var(--success)', title: 'Fee payment received', body: '₹48,000 — Term 1 tuition', time: '12 Apr 2026' },
-    { tone: 'var(--brand-600)', title: 'Promoted to ' + stu.cls, body: 'Academic year 2026–27', time: '01 Apr 2026' },
-    { tone: 'var(--warning)', title: 'Late arrival', body: 'Marked late · bus delay', time: '22 Mar 2026' },
-    { tone: 'var(--brand-600)', title: 'Won inter-house quiz', body: stu.house + ' house · 2nd place', time: '14 Mar 2026' },
-    { tone: 'var(--success)', title: 'Enrolled', body: 'Admission ' + stu.adm, time: '02 Apr 2025' },
-  ]
+  const timeline = buildStudentTimeline({
+    student: stu,
+    payments: paymentsQ.data ?? [],
+    invoices: studentInvoices,
+    attendance: attRecords,
+  })
+  const timelineLoading = paymentsQ.isLoading || invoicesQ.isLoading || monthsQ.isLoading
 
   const fmtSize = (n: number) => (n > 0 ? `${Math.max(1, Math.round(n / 1024))} KB` : '—')
 
@@ -435,11 +647,12 @@ function Student360() {
       <Card>
         <div className="row ai-center gap16 wrap jc-between">
           <div className="row ai-center gap16">
-            <Avatar name={stu.name} hue={stu.avatarHue} size={68} />
+            <Avatar name={stu.name} hue={stu.avatarHue} size={68} src={photoUrl} />
             <div>
               <div className="row ai-center gap8 wrap">
                 <h2 className="sm-pagehead-title" style={{ margin: 0 }}>{stu.name}</h2>
                 <Badge tone={stu.status === 'active' ? 'success' : 'neutral'}>{stu.status === 'active' ? 'Active' : 'Inactive'}</Badge>
+                {hasLiveMarks && latestExam && <Badge tone="brand">{latestExam.name}</Badge>}
               </div>
               <div className="row ai-center gap12 wrap muted t-sm" style={{ marginTop: 4 }}>
                 <span>{stu.adm}</span><span>·</span>
@@ -451,12 +664,39 @@ function Student360() {
           </div>
           <div className="row ai-center gap12 wrap">
             <StatTile icon="calendar" label="Attendance" value={stu.attendance + '%'} color={attColor(stu.attendance)} />
-            <StatTile icon="cap" label={`Rank · ${rank.rank}/${rank.classSize}`} value={report.pct + '%'} color="var(--brand-600)" />
+            <StatTile
+              icon="cap"
+              label={hasLiveMarks ? `Rank · ${rank.rank}/${rank.classSize}` : 'Exam %'}
+              value={hasLiveMarks ? `${report.pct}%` : '—'}
+              color="var(--brand-600)"
+            />
             <StatTile icon="rupee" label="Fee status" value={feeLabel[stu.feeStatus]} color={`var(--${feeTone[stu.feeStatus] === 'success' ? 'success' : feeTone[stu.feeStatus] === 'warning' ? 'warning' : 'danger'})`} />
             {editable && (
               <Btn variant="primary" icon="edit" onClick={() => app.go('school.sis.edit', { focus: stu.id })}>Edit</Btn>
             )}
-            <Btn variant="secondary" icon="message" onClick={() => toast.success('Message sent', `Notified ${guardian || 'guardian'}.`)}>Message</Btn>
+            <Btn
+              variant="secondary"
+              icon="message"
+              onClick={() => {
+                const emails = guardianEmailsFromStudent(stu)
+                if (!emails.length) {
+                  toast.danger('No email on file', `Add a guardian email for ${guardian || stu.name} before messaging.`)
+                  return
+                }
+                try {
+                  openMailCompose({
+                    to: emails,
+                    subject: `Regarding ${stu.name} · ${app.school.name}`,
+                    body: `Dear ${guardian || 'Parent / Guardian'},\n\n`,
+                  })
+                  toast.success('Opening mail', `Compose email to ${guardian || 'guardian'}.`)
+                } catch (err) {
+                  toast.danger('Could not open mail', err instanceof Error ? err.message : 'Invalid email.')
+                }
+              }}
+            >
+              Message
+            </Btn>
           </div>
         </div>
       </Card>
@@ -495,6 +735,22 @@ function Student360() {
             <Card>
               <CardHead title="Guardian / parents" icon="users" />
               <div style={{ marginTop: 4 }}>
+                {(fatherPhotoUrl || motherPhotoUrl) && (
+                  <div className="row ai-center gap16" style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
+                    {fatherPhotoUrl && (
+                      <div className="col ai-center gap6">
+                        <img src={fatherPhotoUrl} alt="Father" className="sm-upload-thumb is-photo" style={{ width: 64, height: 64 }} />
+                        <span className="t-xs muted">Father</span>
+                      </div>
+                    )}
+                    {motherPhotoUrl && (
+                      <div className="col ai-center gap6">
+                        <img src={motherPhotoUrl} alt="Mother" className="sm-upload-thumb is-photo" style={{ width: 64, height: 64 }} />
+                        <span className="t-xs muted">Mother</span>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <DetailRow label="Guardian" value={guardian} />
                 <DetailRow label="Phone" value={stu.phone} />
                 <DetailRow label="Father" value={stu.father?.name} />
@@ -511,7 +767,7 @@ function Student360() {
               <CardHead title="Fees & status" icon="rupee" />
               <div style={{ marginTop: 4 }}>
                 <DetailRow label="Fee status" value={feeLabel[stu.feeStatus]} />
-                <DetailRow label="Outstanding" value={fmtMoney(stu.feeDue)} />
+                <DetailRow label="Outstanding" value={fmtMoney(ledgerOutstanding)} />
                 <DetailRow label="Attendance" value={`${stu.attendance}%`} />
                 <DetailRow label="Status" value={stu.status} />
               </div>
@@ -523,18 +779,31 @@ function Student360() {
       {tab === 'overview' && (
         <div className="sm-grid-2 gap16">
           <Card>
-            <CardHead title="Performance by subject" sub="Latest term · marks out of 100" icon="cap" />
-            <Bars data={report.rows.map((r) => ({ label: r.subject.slice(0, 4), value: r.marks, color: attColor(r.marks) }))} h={150} valueFmt={(v) => v} />
+            <CardHead
+              title="Performance by subject"
+              sub={hasLiveMarks && latestExam ? `${latestExam.name} · marks out of 100` : 'Live exam marks only'}
+              icon="cap"
+            />
+            {hasLiveMarks ? (
+              <Bars data={report.rows.map((r) => ({ label: r.subject.slice(0, 4), value: r.marks, color: attColor(r.marks) }))} h={150} valueFmt={(v) => v} />
+            ) : (
+              <Empty icon="cap" title="No live marks" body="Enter marks under Exams → Marks entry. Sample scores are not shown." />
+            )}
           </Card>
           <Card>
             <CardHead title="Snapshot" icon="user" />
             <div className="col gap14" style={{ marginTop: 8 }}>
-              <div className="row ai-center jc-between"><span className="muted t-sm">Overall</span><span className="fw7">{report.pct}% · {report.grade}</span></div>
-              <div className="row ai-center jc-between"><span className="muted t-sm">Class rank</span><span className="fw7">{rank.rank} / {rank.classSize}</span></div>
-              <div className="row ai-center jc-between"><span className="muted t-sm">GPA</span><span className="fw7">{report.gpa}</span></div>
-              <div className="row ai-center jc-between"><span className="muted t-sm">Result</span><Badge tone={report.result === 'PASS' ? 'success' : 'danger'}>{report.result}</Badge></div>
-              <div className="row ai-center jc-between"><span className="muted t-sm">Attendance trend</span><Spark data={months.map((m) => m.value)} w={120} color={attColor(stu.attendance)} /></div>
-              <div className="row ai-center jc-between"><span className="muted t-sm">Outstanding fees</span><span className="fw7">{fmtMoney(stu.feeDue)}</span></div>
+              <div className="row ai-center jc-between"><span className="muted t-sm">Overall</span><span className="fw7">{hasLiveMarks ? `${report.pct}% · ${report.grade}` : '—'}</span></div>
+              <div className="row ai-center jc-between"><span className="muted t-sm">Class rank</span><span className="fw7">{hasLiveMarks ? `${rank.rank} / ${rank.classSize}` : '—'}</span></div>
+              <div className="row ai-center jc-between"><span className="muted t-sm">GPA</span><span className="fw7">{hasLiveMarks ? report.gpa : '—'}</span></div>
+              <div className="row ai-center jc-between"><span className="muted t-sm">Result</span>{hasLiveMarks ? <Badge tone={report.result === 'PASS' ? 'success' : 'danger'}>{report.result}</Badge> : <span className="fw7">—</span>}</div>
+              <div className="row ai-center jc-between">
+                <span className="muted t-sm">Attendance trend</span>
+                {months.length
+                  ? <Spark data={months.map((m) => m.value)} w={120} color={attColor(stu.attendance)} />
+                  : <span className="fw7 t-sm muted">{stu.attendance ? `${stu.attendance}%` : '—'}</span>}
+              </div>
+              <div className="row ai-center jc-between"><span className="muted t-sm">Outstanding fees</span><span className="fw7">{fmtMoney(ledgerOutstanding)}</span></div>
             </div>
           </Card>
         </div>
@@ -545,11 +814,20 @@ function Student360() {
           <div style={{ padding: 16 }}>
             <CardHead
               title="Subject-wise marks"
-              sub={`Overall ${report.pct}% · Grade ${report.grade} · Rank ${rank.rank}/${rank.classSize} · GPA ${report.gpa}`}
+              sub={academicsSub}
               icon="cap"
-              action={<Badge tone={report.result === 'PASS' ? 'success' : 'danger'}>{report.result}</Badge>}
+              action={hasLiveMarks ? <Badge tone={report.result === 'PASS' ? 'success' : 'danger'}>{report.result}</Badge> : undefined}
             />
           </div>
+          {!hasLiveMarks ? (
+            <div style={{ padding: '0 16px 16px' }}>
+              <Empty
+                icon="cap"
+                title="No live exam marks yet"
+                body="Enter marks under Exams → Marks entry (class-wise). Dummy sample scores are not shown."
+              />
+            </div>
+          ) : (
           <table className="sm-table">
             <thead>
               <tr><th>Subject</th><th className="ta-right">Marks</th><th className="ta-right">Max</th><th className="ta-center">Grade</th><th className="ta-center">Result</th></tr>
@@ -573,18 +851,93 @@ function Student360() {
               </tr>
             </tbody>
           </table>
+          )}
         </Card>
       )}
 
       {tab === 'attendance' && (
         <Card>
-          <CardHead title="Monthly attendance" sub={`Year average ${stu.attendance}%`} icon="calendar" />
-          <Bars data={months.map((m) => ({ label: m.label, value: m.value, color: attColor(m.value) }))} h={160} valueFmt={(v) => v + '%'} />
-          <div className="row ai-center gap20 wrap" style={{ marginTop: 16 }}>
-            <StatTile icon="check" label="Best month" value={Math.max(...months.map((m) => m.value)) + '%'} color="var(--success)" />
-            <StatTile icon="alert" label="Lowest month" value={Math.min(...months.map((m) => m.value)) + '%'} color="var(--warning)" />
-            <StatTile icon="trend" label="Trend" value={months[months.length - 1].value >= months[0].value ? 'Improving' : 'Declining'} color="var(--brand-600)" />
-          </div>
+          <CardHead
+            title="Monthly attendance"
+            sub={monthsQ.isLoading
+              ? 'Loading live marks…'
+              : months.length
+                ? `From class attendance marks · year average ${stu.attendance}%`
+                : `Year average ${stu.attendance}% · no monthly marks yet`}
+            icon="calendar"
+          />
+          {monthsQ.isLoading ? (
+            <div className="t-sm muted" style={{ padding: '24px 0' }}>Loading attendance…</div>
+          ) : months.length === 0 ? (
+            <Empty
+              icon="calendar"
+              title="No monthly attendance yet"
+              body="Mark students under Attendance. This chart uses real day marks only — sample months are not shown."
+            />
+          ) : (
+            <>
+              <Bars
+                data={monthAxis.map((m) => ({
+                  label: m.label,
+                  value: m.value,
+                  color: attColor(m.value),
+                  valueLabel: m.total ? `${m.value}%` : '—',
+                  empty: m.total === 0,
+                }))}
+                h={160}
+                activeIndex={openMonth ? monthAxis.findIndex((m) => m.key === openMonth) : undefined}
+                onBarClick={(i) => {
+                  const key = monthAxis[i]?.key
+                  if (key) setOpenMonth((cur) => (cur === key ? null : key))
+                }}
+              />
+              <div className="t-xs muted3" style={{ marginTop: 6 }}>Blank months have no marks yet. Click a month to see its daily marks.</div>
+              {markedMonths.length > 0 && (
+                <div className="row ai-center gap20 wrap" style={{ marginTop: 16 }}>
+                  <StatTile icon="check" label="Best month" value={Math.max(...markedMonths.map((m) => m.value)) + '%'} color="var(--success)" />
+                  <StatTile icon="alert" label="Lowest month" value={Math.min(...markedMonths.map((m) => m.value)) + '%'} color="var(--warning)" />
+                  <StatTile
+                    icon="trend"
+                    label="Trend"
+                    value={markedMonths[markedMonths.length - 1].value >= markedMonths[0].value ? 'Improving' : 'Declining'}
+                    color="var(--brand-600)"
+                  />
+                </div>
+              )}
+              {openMonth && (() => {
+                const m = months.find((x) => x.key === openMonth)
+                return (
+                  <div style={{ marginTop: 18, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+                    <div className="row ai-center jc-between gap12 wrap" style={{ marginBottom: 12 }}>
+                      <div className="row ai-center gap8">
+                        <span className="fw7">{m?.label} daily marks</span>
+                        {m && <Badge tone={attColor(m.value) === 'var(--success)' ? 'success' : m.value >= 75 ? 'warning' : 'danger'}>{m.present}/{m.total} present · {m.value}%</Badge>}
+                      </div>
+                      <Btn variant="ghost" size="sm" icon="x" onClick={() => setOpenMonth(null)}>Close</Btn>
+                    </div>
+                    {openMonthDays.length === 0 ? (
+                      <div className="t-sm muted">No day marks recorded for this month.</div>
+                    ) : (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 8 }}>
+                        {openMonthDays.map((d) => (
+                          <div
+                            key={d.date}
+                            className="row ai-center jc-between gap8"
+                            style={{ padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 10, opacity: d.status ? 1 : (d.weekend ? 0.5 : 0.7) }}
+                          >
+                            <span className="t-sm fw6">{fmtDayLabel(d.date)}</span>
+                            {d.status
+                              ? <Badge tone={dayStatusTone[d.status]} dot>{dayStatusLabel[d.status]}</Badge>
+                              : <span className="t-xs muted3">{d.weekend ? 'Weekend' : 'Blank'}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+            </>
+          )}
         </Card>
       )}
 
@@ -593,14 +946,27 @@ function Student360() {
           <div style={{ padding: 16 }}>
             <CardHead
               title="Fee ledger"
-              sub={`Outstanding ${fmtMoney(stu.feeDue)}`}
+              sub={invoicesQ.isLoading
+                ? 'Loading invoices…'
+                : `Outstanding ${fmtMoney(ledgerOutstanding)} · ${ledger.length} invoice${ledger.length === 1 ? '' : 's'}`}
               icon="rupee"
               action={<Badge tone={feeTone[stu.feeStatus]} dot>{feeLabel[stu.feeStatus]}</Badge>}
             />
           </div>
+          {invoicesQ.isLoading ? (
+            <div className="t-sm muted" style={{ padding: '0 16px 20px' }}>Loading fee invoices…</div>
+          ) : ledger.length === 0 ? (
+            <div style={{ padding: '0 16px 16px' }}>
+              <Empty
+                icon="rupee"
+                title="No invoices yet"
+                body="No fee invoices for this student. Generate invoices under Fees to see the live ledger here."
+              />
+            </div>
+          ) : (
           <table className="sm-table">
             <thead>
-              <tr><th>Invoice</th><th>Description</th><th className="ta-right">Amount</th><th className="ta-right">Paid</th><th className="ta-right">Balance</th><th>Date</th></tr>
+              <tr><th>Invoice</th><th>Description</th><th className="ta-right">Amount</th><th className="ta-right">Paid</th><th className="ta-right">Balance</th><th>Due date</th></tr>
             </thead>
             <tbody>
               {ledger.map((l) => {
@@ -618,6 +984,7 @@ function Student360() {
               })}
             </tbody>
           </table>
+          )}
         </Card>
       )}
 
@@ -642,7 +1009,16 @@ function Student360() {
               {docs.map((d) => (
                 <div key={d.key + d.fileName} className="row ai-center jc-between" style={{ padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 10 }}>
                   <div className="row ai-center gap12">
-                    <span className="sm-card-ic"><Icon name="doc" size={16} /></span>
+                    {d.dataUrl && isStoredImage(d) ? (
+                      <img
+                        src={d.dataUrl}
+                        alt={d.label}
+                        className="sm-upload-thumb is-photo"
+                        style={{ width: 52, height: 52, borderRadius: 10 }}
+                      />
+                    ) : (
+                      <span className="sm-card-ic"><Icon name="doc" size={16} /></span>
+                    )}
                     <div>
                       <div className="fw6">{d.label}</div>
                       <div className="t-xs muted">{d.fileName}{d.size ? ` · ${fmtSize(d.size)}` : ''}</div>
@@ -655,7 +1031,14 @@ function Student360() {
                       size="sm"
                       icon="eye"
                       onClick={() => {
-                        if (!openStoredDoc(d)) toast.info('Preview unavailable', 'Re-upload this file from Edit student to view it.')
+                        if (!openStoredDoc(d)) {
+                          toast.info(
+                            'Preview unavailable',
+                            d.dataUrl
+                              ? 'Popup blocked — try Download, or allow popups for this site.'
+                              : 'Re-upload this PDF (max ~2.5 MB) from Edit student, then View again.',
+                          )
+                        }
                       }}
                     >
                       View
@@ -665,7 +1048,9 @@ function Student360() {
                       size="sm"
                       icon="download"
                       onClick={() => {
-                        if (!downloadStoredDoc(d)) toast.info('Download unavailable', 'Re-upload this file from Edit student to download it.')
+                        if (!downloadStoredDoc(d)) {
+                          toast.info('Download unavailable', 'Re-upload this file from Edit student (PDF under ~2.5 MB).')
+                        }
                       }}
                     >
                       Download
@@ -680,24 +1065,38 @@ function Student360() {
 
       {tab === 'timeline' && (
         <Card>
-          <CardHead title="Activity timeline" sub="Recent events" icon="clock" />
-          <div className="col" style={{ marginTop: 8 }}>
-            {timeline.map((t, i) => (
-              <div key={i} className="row gap12" style={{ paddingBottom: 16 }}>
-                <div className="col ai-center" style={{ width: 12 }}>
-                  <span style={{ width: 10, height: 10, borderRadius: 99, background: t.tone, marginTop: 4, flex: '0 0 auto' }} />
-                  {i < timeline.length - 1 && <span style={{ width: 2, flex: 1, background: 'var(--border)', marginTop: 4 }} />}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div className="row ai-center jc-between">
-                    <span className="fw6">{t.title}</span>
-                    <span className="t-xs muted">{t.time}</span>
+          <CardHead
+            title="Activity timeline"
+            sub={timelineLoading ? 'Loading activity…' : `${timeline.length} event${timeline.length === 1 ? '' : 's'} · payments, invoices & attendance`}
+            icon="clock"
+          />
+          {timelineLoading ? (
+            <div className="t-sm muted" style={{ padding: '16px 0' }}>Loading activity…</div>
+          ) : timeline.length === 0 ? (
+            <Empty
+              icon="clock"
+              title="No activity yet"
+              body="Fee payments, invoices, and attendance marks for this student will appear here as they happen."
+            />
+          ) : (
+            <div className="col" style={{ marginTop: 8 }}>
+              {timeline.map((t, i) => (
+                <div key={t.id} className="row gap12" style={{ paddingBottom: 16 }}>
+                  <div className="col ai-center" style={{ width: 12 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: 99, background: t.tone, marginTop: 4, flex: '0 0 auto' }} />
+                    {i < timeline.length - 1 && <span style={{ width: 2, flex: 1, background: 'var(--border)', marginTop: 4 }} />}
                   </div>
-                  <div className="t-sm muted">{t.body}</div>
+                  <div style={{ flex: 1 }}>
+                    <div className="row ai-center jc-between">
+                      <span className="fw6">{t.title}</span>
+                      <span className="t-xs muted">{t.date}</span>
+                    </div>
+                    <div className="t-sm muted">{t.body}</div>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </Card>
       )}
     </div>

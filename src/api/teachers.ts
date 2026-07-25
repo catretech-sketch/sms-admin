@@ -1,16 +1,45 @@
 import { listRequest, request } from './client'
 import { snakeToCamel, camelToSnake } from './mapper'
+import { mergeTeacherExtras } from './teacherExtras'
 import type { Teacher, ListTeachersOpts } from '@/types'
 
 interface ListEnvelope { data: Record<string, unknown>[]; next_cursor: string | null }
+
+/** Normalize API subjects (array, JSON string, or comma-separated) to a string[]. */
+export function normalizeSubjects(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.flatMap((item) => normalizeSubjects(item))
+  }
+  if (typeof raw === 'string') {
+    const text = raw.trim()
+    if (!text) return []
+    if (text.startsWith('[')) {
+      try {
+        return normalizeSubjects(JSON.parse(text))
+      } catch {
+        /* fall through */
+      }
+    }
+    return text.split(',').map((s) => s.trim()).filter(Boolean)
+  }
+  return []
+}
 
 /** Map one wire record (snake_case) to the UI `Teacher` shape.
  *  Generic casing covers class_teacher/date_of_joining/avatar_hue;
  *  only dept/desig/attendance need an explicit rename. */
 export function toTeacher(wire: Record<string, unknown>): Teacher {
   const c = snakeToCamel<Record<string, unknown>>(wire)
-  const { department, designation, attendancePct, ...rest } = c
-  return { ...rest, dept: department, desig: designation, attendance: attendancePct } as unknown as Teacher
+  const { department, designation, attendancePct, employeeCode, subjects, ...rest } = c
+  const base = {
+    ...rest,
+    subjects: normalizeSubjects(subjects),
+    dept: department,
+    desig: designation,
+    attendance: attendancePct,
+    code: typeof employeeCode === 'string' ? employeeCode : undefined,
+  } as unknown as Teacher
+  return mergeTeacherExtras(base)
 }
 
 export async function listTeachers(opts: ListTeachersOpts = {}): Promise<Teacher[]> {
@@ -24,12 +53,45 @@ export async function listTeachers(opts: ListTeachersOpts = {}): Promise<Teacher
 
 export function fromTeacher(t: Teacher): Record<string, unknown> {
   const snake = camelToSnake(t) as Record<string, unknown>
-  const { dept, desig, attendance, ...rest } = snake
-  return { ...rest, department: dept, designation: desig, attendance_pct: attendance }
+  const { dept, desig, attendance, id, code, employee_code: _ec, ...rest } = snake
+  return {
+    ...rest,
+    department: dept,
+    designation: desig,
+    attendance_pct: attendance,
+    employee_code: t.code?.trim() || undefined,
+  }
+}
+
+export async function getTeacher(id: string): Promise<Teacher> {
+  const wire = await request<Record<string, unknown>>(`/teachers/${id}`)
+  return toTeacher(wire)
+}
+
+/** Body for PATCH /teachers/{id}. */
+export function fromTeacherUpdate(t: Teacher): Record<string, unknown> {
+  return {
+    name: t.name,
+    department: t.dept,
+    designation: t.desig,
+    subjects: t.subjects,
+    class_teacher: t.classTeacher,
+    phone: t.phone,
+    email: t.email,
+    status: t.status,
+  }
 }
 
 export async function createTeacher(t: Teacher): Promise<Teacher> {
   const wire = await request<Record<string, unknown>>('/teachers', { method: 'POST', body: fromTeacher(t) })
+  return toTeacher(wire)
+}
+
+export async function updateTeacher(id: string, t: Teacher): Promise<Teacher> {
+  const wire = await request<Record<string, unknown>>(`/teachers/${id}`, {
+    method: 'PATCH',
+    body: fromTeacherUpdate(t),
+  })
   return toTeacher(wire)
 }
 
