@@ -32,10 +32,10 @@ describe('useCreateClass', () => {
 })
 
 describe('useSubjects', () => {
-  it('resolves subject names', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: [{ name: 'English' }], next_cursor: null })))
+  it('resolves mapped subjects', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: [{ id: 's1', name: 'English' }], next_cursor: null })))
     const { result } = renderHook(() => useSubjects(), { wrapper: wrap(client()) })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(result.current.data).toEqual(['English'])
+    expect(result.current.data).toEqual([{ id: 's1', name: 'English' }])
   })
 })

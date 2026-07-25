@@ -78,3 +78,64 @@ export function compareClassesAscending(
   const nb = String(b.name || `${b.grade ?? ''}-${b.section ?? ''}`).trim()
   return na.localeCompare(nb, undefined, { numeric: true, sensitivity: 'base' })
 }
+
+/** Compact label for selected grades, e.g. Nursery–XII or VI, VII, VIII. */
+export function formatSelectedGrades(selected: Iterable<string>): string {
+  const set = new Set([...selected].map((g) => String(g).trim()).filter(Boolean))
+  const ordered = DEFAULT_GRADES.filter((g) => set.has(g))
+  if (!ordered.length) return ''
+  if (ordered.length === 1) return ordered[0]
+  const idxs = ordered.map((g) => DEFAULT_GRADES.indexOf(g))
+  const consecutive = idxs.every((idx, i) => i === 0 || idx === idxs[i - 1] + 1)
+  if (consecutive) return `${ordered[0]}–${ordered[ordered.length - 1]}`
+  return ordered.join(', ')
+}
+
+/** Exam create: board / curriculum options (school customer curriculum type). */
+export const EXAM_CURRICULUM_TYPES = ['CBSE', 'ICSE', 'State Board', 'IB', 'Other'] as const
+
+export type ExamCurriculumType = (typeof EXAM_CURRICULUM_TYPES)[number]
+
+/** Grades line for an exam: "Nursery–XII · CBSE". */
+export function formatExamGradesLabel(
+  selected: Iterable<string>,
+  curriculum?: string | null,
+): string {
+  const grades = formatSelectedGrades(selected)
+  const board = String(curriculum ?? '').trim()
+  if (!grades) return board
+  if (!board || board === 'Other') return grades
+  return `${grades} · ${board}`
+}
+
+/**
+ * Reverse of formatExamGradesLabel / formatSelectedGrades.
+ * "Nursery–XII · CBSE" → all grades Nursery…XII; "VI, VII, VIII" → those three.
+ */
+export function parseExamGrades(label: string | undefined | null): string[] {
+  const raw = String(label ?? '').trim()
+  if (!raw) return [...DEFAULT_GRADES]
+  const gradesPart = raw.split('·')[0]?.trim() || raw
+  if (!gradesPart) return [...DEFAULT_GRADES]
+
+  const range = /^(.+?)[–—-](.+)$/.exec(gradesPart)
+  if (range) {
+    const a = range[1].trim()
+    const b = range[2].trim()
+    const ia = DEFAULT_GRADES.findIndex((g) => g.toLowerCase() === a.toLowerCase())
+    const ib = DEFAULT_GRADES.findIndex((g) => g.toLowerCase() === b.toLowerCase())
+    if (ia >= 0 && ib >= 0 && ia <= ib) return DEFAULT_GRADES.slice(ia, ib + 1).map(String)
+  }
+
+  const parts = gradesPart.split(',').map((s) => s.trim()).filter(Boolean)
+  if (parts.length > 1) {
+    const matched = parts
+      .map((p) => DEFAULT_GRADES.find((g) => g.toLowerCase() === p.toLowerCase()))
+      .filter((g): g is typeof DEFAULT_GRADES[number] => !!g)
+    if (matched.length) return matched.map(String)
+  }
+
+  const single = DEFAULT_GRADES.find((g) => g.toLowerCase() === gradesPart.toLowerCase())
+  if (single) return [single]
+  return [...DEFAULT_GRADES]
+}

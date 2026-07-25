@@ -7,23 +7,40 @@ function jsonResponse(body: unknown, status = 200): Response {
 beforeEach(() => { localStorage.clear(); vi.restoreAllMocks() })
 
 describe('listClasses', () => {
-  it('maps teacher_id -> teacherId', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: [{ name: 'X-A', grade: 'X', section: 'A', teacher_id: 'T1', students: 40, room: 'R1' }], next_cursor: null })))
+  it('maps class_teacher_id / student_count to teacherId / students', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: [{ id: 'c1', name: 'X-A', grade: 'X', section: 'A', class_teacher_id: 'T1', student_count: 40, room: 'R1' }],
+      next_cursor: null,
+    })))
     const rows = await listClasses()
-    expect(rows[0]).toEqual({ name: 'X-A', grade: 'X', section: 'A', teacherId: 'T1', students: 40, room: 'R1' })
+    expect(rows[0]).toEqual({ id: 'c1', name: 'X-A', grade: 'X', section: 'A', teacherId: 'T1', students: 40, room: 'R1' })
+  })
+
+  it('maps subjects when the API returns them', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: [{
+        id: 'c1', name: 'VI-A', grade: 'VI', section: 'A', class_teacher_id: null,
+        student_count: 30, room: 'R1', subjects: ['Math', 'English'],
+      }],
+      next_cursor: null,
+    })))
+    const rows = await listClasses()
+    expect(rows[0].subjects).toEqual(['Math', 'English'])
   })
 })
 
 describe('createClass', () => {
-  it('POSTs /classes with teacherId -> teacher_id', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { name: 'X-B', grade: 'X', section: 'B', teacher_id: '', students: 0, room: 'R2' } }))
+  it('POSTs /classes with class_teacher_id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      data: { id: 'c2', name: 'X-B', grade: 'X', section: 'B', class_teacher_id: null, student_count: 0, room: 'R2' },
+    }))
     vi.stubGlobal('fetch', fetchMock)
     await createClass({ name: 'X-B', grade: 'X', section: 'B', teacherId: '', students: 0, room: 'R2' })
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toContain('/classes')
     expect((init as RequestInit).method).toBe('POST')
     const body = JSON.parse((init as RequestInit).body as string)
-    expect(body.teacher_id).toBe('')
-    expect(body.teacherId).toBeUndefined()
+    expect(body.class_teacher_id).toBeNull()
+    expect(body.teacher_id).toBeUndefined()
   })
 })
