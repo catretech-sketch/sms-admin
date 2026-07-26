@@ -28,6 +28,7 @@ export interface TimetableSyncTarget {
   subject: string | null
   classId: string
   className: string
+  teacherId: string | null
 }
 
 export interface TimetableSyncPlan {
@@ -64,7 +65,7 @@ export function planTimetableSync(
       if (!days[d]) continue // key from a day index this school doesn't use
       toCreate.push({
         day: days[d], period: p + 1, subject: cell.subject || null,
-        classId, className,
+        classId, className, teacherId: cell.teacherId || null,
       })
     }
   }

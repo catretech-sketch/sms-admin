@@ -897,6 +897,7 @@ function TimetableTab({ editable }: { editable: boolean }) {
       for (const t of plan.toCreate) {
         await createTimetableSlot({
           day: t.day, period: t.period, subject: t.subject, classId: t.classId, className: t.className,
+          teacherId: t.teacherId,
         })
       }
     } catch {

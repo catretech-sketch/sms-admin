@@ -11,6 +11,7 @@ export interface TimetableSlot {
   room: string | null
   startTime: string | null
   endTime: string | null
+  teacherName: string | null
 }
 
 export interface CreateTimetableSlotInput {
@@ -22,6 +23,7 @@ export interface CreateTimetableSlotInput {
   room?: string | null
   startTime?: string | null
   endTime?: string | null
+  teacherId?: string | null
 }
 
 export async function listTimetable(): Promise<TimetableSlot[]> {
@@ -41,6 +43,7 @@ export async function createTimetableSlot(input: CreateTimetableSlotInput): Prom
       room: input.room ?? null,
       start_time: input.startTime ?? null,
       end_time: input.endTime ?? null,
+      teacher_id: input.teacherId ?? null,
     },
   })
   return snakeToCamel<TimetableSlot>(wire)

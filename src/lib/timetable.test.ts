@@ -89,8 +89,20 @@ describe('planTimetableSync', () => {
     }
     const plan = planTimetableSync(localGrids, days, classIdFor, [])
     expect(plan.toCreate).toHaveLength(2)
-    expect(plan.toCreate).toContainEqual({ day: 'Mon', period: 1, subject: 'Math', classId: 'class-a', className: 'IX-A' })
-    expect(plan.toCreate).toContainEqual({ day: 'Tue', period: 3, subject: 'Sci', classId: 'class-a', className: 'IX-A' })
+    expect(plan.toCreate).toContainEqual({
+      day: 'Mon', period: 1, subject: 'Math', classId: 'class-a', className: 'IX-A', teacherId: 't1',
+    })
+    expect(plan.toCreate).toContainEqual({
+      day: 'Tue', period: 3, subject: 'Sci', classId: 'class-a', className: 'IX-A', teacherId: 't2',
+    })
+  })
+
+  it('carries a null teacherId when a cell has no teacher assigned', () => {
+    const localGrids: Grids = {
+      'IX-A': { [cellKey(0, 0)]: { subject: 'Math', teacherId: '' } },
+    }
+    const plan = planTimetableSync(localGrids, days, classIdFor, [])
+    expect(plan.toCreate[0].teacherId).toBeNull()
   })
 
   it('skips null cells and classes with no resolvable id', () => {
