@@ -20,8 +20,9 @@ import { addSchoolHouse, listSchoolHouses, removeSchoolHouse, renameSchoolHouse 
 import { getClassSubjects, setClassSubjects, saveClassSubjects, teachingPeriodCount, subjectsMatchPeriodsHint } from '@/api/classSubjects'
 import { useClassSubjectsMap } from '@/api/hooks/useClassSubjects'
 import { DEFAULT_GRADES, DEFAULT_SECTIONS } from '@/lib/defaultClasses'
-import { cellKey, clashingClass, clashingClasses, pickTeacher, conflictsFor, teacherLoads, clashingTeachers, teacherSchedule, subjectSchedule, type Cell, type Grid } from '@/lib/timetable'
+import { cellKey, clashingClass, clashingClasses, pickTeacher, conflictsFor, teacherLoads, clashingTeachers, teacherSchedule, subjectSchedule, planTimetableSync, type Cell, type Grid } from '@/lib/timetable'
 import { exportTimetablePdf, hasPrintableTimetable, type TimetablePrintView } from '@/lib/timetablePrint'
+import { listTimetable, createTimetableSlot, deleteTimetableSlot } from '@/api/timetable'
 import {
   activeSnapshot, loadPublishEnvelope, publishSnapshot, publishStatusOf, saveDraftSnapshot,
   statusLabel, statusTone, publishMetaLine, showPublishButton,
@@ -876,6 +877,31 @@ function TimetableTab({ editable }: { editable: boolean }) {
     const next = publishSnapshot('timetable', snap)
     setPubMeta(next)
     toast.success('Timetable published', 'Live routine is now available for attendance and teachers.')
+    void syncTimetableToBackend()
+  }
+
+  /* Best-effort backend reconciliation — localStorage publish above is the
+     source of truth for this UI, so a backend failure here must not block it. */
+  const syncTimetableToBackend = async () => {
+    try {
+      const classIdFor = (className: string) =>
+        (classesData ?? []).find((c) => (c.name || `${c.grade}-${c.section}`) === className)?.id ?? null
+      const remote = await listTimetable()
+      const plan = planTimetableSync(
+        grids,
+        DAYS,
+        classIdFor,
+        remote.map((r) => ({ id: r.id, day: r.day, period: r.period, classId: r.classId })),
+      )
+      for (const id of plan.toDeleteIds) await deleteTimetableSlot(id)
+      for (const t of plan.toCreate) {
+        await createTimetableSlot({
+          day: t.day, period: t.period, subject: t.subject, classId: t.classId, className: t.className,
+        })
+      }
+    } catch {
+      toast.danger('Backend sync failed', 'Timetable is published locally but may not be visible to the teacher app yet.')
+    }
   }
 
   useEffect(() => {

@@ -11,6 +11,75 @@ export type Grids = Record<string, Grid>
 /** Stable key for a 0-based day + 0-based period slot. */
 export const cellKey = (day: number, period: number): string => `${day}-${period}`
 
+// ─── Backend publish reconciliation ─────────────────────────────────────────
+// Pure diffing so it can be unit-tested without the API — the screen just
+// executes the plan (create each `toCreate`, delete each `toDeleteIds`).
+
+export interface RemoteTimetableSlot {
+  id: string
+  day: string
+  period: number // 1-based, matches the backend's CreateTimetableSlotRequest.Period
+  classId: string | null
+}
+
+export interface TimetableSyncTarget {
+  day: string
+  period: number // 1-based
+  subject: string | null
+  classId: string
+  className: string
+}
+
+export interface TimetableSyncPlan {
+  toCreate: TimetableSyncTarget[]
+  toDeleteIds: string[]
+}
+
+/**
+ * Diffs the local draft (`grids`, keyed by className, 0-based day/period cells)
+ * against what the backend currently has for the classes present in `grids`.
+ * Slots for classes NOT in `grids` are left alone (this reconciliation only
+ * owns the classes the admin is actively publishing). `classIdFor` resolves a
+ * grid's className key to its real backend class id — classes with no
+ * resolvable id are skipped (nothing to publish them against).
+ */
+export function planTimetableSync(
+  grids: Grids,
+  days: string[],
+  classIdFor: (className: string) => string | null,
+  remote: RemoteTimetableSlot[],
+): TimetableSyncPlan {
+  const toCreate: TimetableSyncTarget[] = []
+  const ownedClassIds = new Set<string>()
+
+  for (const [className, grid] of Object.entries(grids)) {
+    const classId = classIdFor(className)
+    if (!classId) continue
+    ownedClassIds.add(classId)
+    for (const [key, cell] of Object.entries(grid)) {
+      if (!cell) continue
+      const [dStr, pStr] = key.split('-')
+      const d = Number(dStr)
+      const p = Number(pStr)
+      if (!days[d]) continue // key from a day index this school doesn't use
+      toCreate.push({
+        day: days[d], period: p + 1, subject: cell.subject || null,
+        classId, className,
+      })
+    }
+  }
+
+  // Anything already on the backend for a class we own, that isn't in the
+  // fresh toCreate set, is stale (removed or changed) and must go — we always
+  // delete+recreate rather than update-in-place (no update endpoint exists,
+  // and the slot count/shape is small enough that this is cheap).
+  const toDeleteIds = remote
+    .filter((r) => r.classId && ownedClassIds.has(r.classId))
+    .map((r) => r.id)
+
+  return { toCreate, toDeleteIds }
+}
+
 /**
  * Every class OTHER than `exceptClass` in which `teacherId` already teaches at
  * this day+period. Empty array if none. An empty teacherId never clashes.

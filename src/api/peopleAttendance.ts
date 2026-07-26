@@ -1,9 +1,68 @@
-/* Daily teacher/staff roll-call until a dedicated API exists.
-   Persisted per tenant + date in localStorage. */
+/* Daily teacher/staff roll-call. localStorage is the fast synchronous cache the
+   UI reads/writes directly; `/v1/staff-attendance` is synced best-effort in the
+   background (fetch-and-merge on load, push-after-save on submit) so a slow or
+   unreachable backend never blocks the roster screen. */
+import { request } from './client'
+import { camelToSnake } from './mapper'
+import { ApiError } from './ApiError'
 import { tokenStore } from './auth/tokenStore'
 import type { AttendanceRecord, AttendanceStatus } from './attendance'
 
 export type PeopleAttGroup = 'teachers' | 'staff'
+
+/** `/v1/staff-attendance` uses the singular form for its `person_type` param. */
+function personTypeOf(group: PeopleAttGroup): 'teacher' | 'staff' {
+  return group === 'teachers' ? 'teacher' : 'staff'
+}
+
+function isMissingEndpoint(err: unknown): boolean {
+  return err instanceof ApiError && (err.status === 404 || err.status === 405)
+}
+
+function asStatus(v: unknown): AttendanceStatus {
+  const s = String(v ?? '').trim().toLowerCase()
+  if (s === 'late' || s === 'absent' || s === 'present') return s
+  return 'present'
+}
+
+/** Best-effort GET of a day's marks from the backend; null on any failure (caller keeps local cache). */
+export async function fetchRemotePeopleAttendance(
+  group: PeopleAttGroup,
+  date: string,
+): Promise<Record<string, AttendanceStatus> | null> {
+  try {
+    const rows = await request<Record<string, unknown>[] | null>('/staff-attendance', {
+      query: { person_type: personTypeOf(group), date },
+    })
+    const out: Record<string, AttendanceStatus> = {}
+    for (const row of rows ?? []) {
+      const id = row.person_id != null ? String(row.person_id) : ''
+      if (id) out[id] = asStatus(row.status)
+    }
+    return out
+  } catch (err) {
+    if (isMissingEndpoint(err)) return null
+    return null // best-effort — never block the roster screen on a backend hiccup
+  }
+}
+
+/** Best-effort push of a day's marks to the backend; swallows all failures. */
+export async function pushPeopleAttendance(
+  group: PeopleAttGroup,
+  date: string,
+  marks: Record<string, AttendanceStatus>,
+): Promise<void> {
+  const records = Object.entries(marks).map(([personId, status]) => ({ personId, status }))
+  if (!records.length) return
+  try {
+    await request<unknown>('/staff-attendance', {
+      method: 'POST',
+      body: camelToSnake({ personType: personTypeOf(group), date, records }),
+    })
+  } catch {
+    // best-effort — localStorage already has the authoritative save
+  }
+}
 
 function storageKey(group: PeopleAttGroup, date: string): string {
   const tenant = tokenStore.getTenantId() || 'default'

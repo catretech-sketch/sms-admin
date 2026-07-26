@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   cellKey, clashingClass, clashingClasses, teacherBusyElsewhere, pickTeacher, conflictsFor,
-  teacherLoads, clashingTeachers, teacherSchedule, subjectSchedule, type Grids,
+  teacherLoads, clashingTeachers, teacherSchedule, subjectSchedule, planTimetableSync,
+  type Grids, type RemoteTimetableSlot,
 } from './timetable'
 
 const grids: Grids = {
@@ -74,5 +75,51 @@ describe('teacher/subject schedule derivation', () => {
   it('returns {} when nothing matches', () => {
     expect(teacherSchedule({}, 'T1')).toEqual({})
     expect(subjectSchedule(g, 'Nonexistent')).toEqual({})
+  })
+})
+
+describe('planTimetableSync', () => {
+  const days = ['Mon', 'Tue', 'Wed']
+  const classIds: Record<string, string> = { 'IX-A': 'class-a', 'IX-B': 'class-b' }
+  const classIdFor = (className: string) => classIds[className] ?? null
+
+  it('emits a create target for every filled cell, 1-based period', () => {
+    const localGrids: Grids = {
+      'IX-A': { [cellKey(0, 0)]: { subject: 'Math', teacherId: 't1' }, [cellKey(1, 2)]: { subject: 'Sci', teacherId: 't2' } },
+    }
+    const plan = planTimetableSync(localGrids, days, classIdFor, [])
+    expect(plan.toCreate).toHaveLength(2)
+    expect(plan.toCreate).toContainEqual({ day: 'Mon', period: 1, subject: 'Math', classId: 'class-a', className: 'IX-A' })
+    expect(plan.toCreate).toContainEqual({ day: 'Tue', period: 3, subject: 'Sci', classId: 'class-a', className: 'IX-A' })
+  })
+
+  it('skips null cells and classes with no resolvable id', () => {
+    const localGrids: Grids = {
+      'IX-A': { [cellKey(0, 0)]: null },
+      Unmapped: { [cellKey(0, 0)]: { subject: 'Math', teacherId: 't1' } },
+    }
+    const plan = planTimetableSync(localGrids, days, classIdFor, [])
+    expect(plan.toCreate).toEqual([])
+  })
+
+  it('marks every remote slot belonging to an owned class as stale (delete+recreate)', () => {
+    const localGrids: Grids = {
+      'IX-A': { [cellKey(0, 0)]: { subject: 'Math', teacherId: 't1' } },
+    }
+    const remote: RemoteTimetableSlot[] = [
+      { id: 'r1', day: 'Mon', period: 1, classId: 'class-a' },
+      { id: 'r2', day: 'Tue', period: 1, classId: 'class-b' },
+      { id: 'r3', day: 'Mon', period: 1, classId: null },
+    ]
+    const plan = planTimetableSync(localGrids, days, classIdFor, remote)
+    expect(plan.toDeleteIds).toEqual(['r1'])
+  })
+
+  it('ignores keys for a day index the school does not use', () => {
+    const localGrids: Grids = {
+      'IX-A': { [cellKey(5, 0)]: { subject: 'Math', teacherId: 't1' } },
+    }
+    const plan = planTimetableSync(localGrids, days, classIdFor, [])
+    expect(plan.toCreate).toEqual([])
   })
 })

@@ -21,6 +21,7 @@ import { peoplePhotoUrl } from '@/api/peopleExtras'
 import {
   loadPeopleAttendance, savePeopleAttendance, effectivePeopleStatus,
   countPeoplePresent, PEOPLE_ATTENDANCE_CHANGED, type CheckInInfo,
+  fetchRemotePeopleAttendance, pushPeopleAttendance,
 } from '@/api/peopleAttendance'
 import { ClassWiseStudents } from './attendanceClassWise'
 import { listAllLocalAttendance, type AttendanceStatus } from '@/api/attendance'
@@ -182,6 +183,13 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
   useEffect(() => {
     setSaved(loadPeopleAttendance(group, date))
     setDraft({})
+    let cancelled = false
+    void fetchRemotePeopleAttendance(group, date).then((remote) => {
+      if (cancelled || !remote || !Object.keys(remote).length) return
+      savePeopleAttendance(group, date, { ...loadPeopleAttendance(group, date), ...remote })
+      setSaved(loadPeopleAttendance(group, date))
+    })
+    return () => { cancelled = true }
   }, [group, date])
 
   const appCheckIn = useMemo(() => {
@@ -272,6 +280,7 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
     savePeopleAttendance(group, date, marks)
     setSaved(marks)
     setDraft({})
+    void pushPeopleAttendance(group, date, marks)
     toast.success('Attendance saved', `${GROUP_NAME[group]} · ${date} · ${presentTotal}/${onRoll} present`)
   }
 

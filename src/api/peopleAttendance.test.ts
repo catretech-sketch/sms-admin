@@ -1,10 +1,18 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   loadPeopleAttendance, savePeopleAttendance,
   effectivePeopleStatus, countPeoplePresent, type CheckInInfo,
+  fetchRemotePeopleAttendance, pushPeopleAttendance,
 } from './peopleAttendance'
 
-beforeEach(() => { localStorage.clear() })
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+}
+function notFound(): Response {
+  return jsonResponse({ error: { code: 'not_found', message: 'x' } }, 404)
+}
+
+beforeEach(() => { localStorage.clear(); vi.restoreAllMocks() })
 
 describe('peopleAttendance', () => {
   it('saves and loads marks for a date', () => {
@@ -65,5 +73,56 @@ describe('countPeoplePresent', () => {
   it('counts staff via manual marks, defaulting unmarked to absent', () => {
     const staff = [{ id: 's1', name: 'X' }, { id: 's2', name: 'Y' }]
     expect(countPeoplePresent('staff', staff, { s2: 'present' })).toBe(1)
+  })
+})
+
+describe('fetchRemotePeopleAttendance', () => {
+  it('GETs /staff-attendance?person_type=&date= and maps person_id/status', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      data: [{ person_id: 't1', status: 'absent' }, { person_id: 't2', status: 'present' }],
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const marks = await fetchRemotePeopleAttendance('teachers', '2026-07-16')
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('/staff-attendance')
+    expect(url).toContain('person_type=teacher')
+    expect(url).toContain('date=2026-07-16')
+    expect(marks).toEqual({ t1: 'absent', t2: 'present' })
+  })
+
+  it('returns null (never throws) when the endpoint is missing', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(notFound())
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await fetchRemotePeopleAttendance('staff', '2026-07-16')).toBeNull()
+  })
+})
+
+describe('pushPeopleAttendance', () => {
+  it('POSTs /staff-attendance with personType + snake_case records', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: null }))
+    vi.stubGlobal('fetch', fetchMock)
+    await pushPeopleAttendance('staff', '2026-07-16', { s1: 'present', s2: 'absent' })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toContain('/staff-attendance')
+    expect((init as RequestInit).method).toBe('POST')
+    const body = JSON.parse((init as RequestInit).body as string)
+    expect(body.person_type).toBe('staff')
+    expect(body.date).toBe('2026-07-16')
+    expect(body.records).toEqual(
+      expect.arrayContaining([{ person_id: 's1', status: 'present' }, { person_id: 's2', status: 'absent' }]),
+    )
+  })
+
+  it('never throws, even when the backend call fails', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(notFound())
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(pushPeopleAttendance('teachers', '2026-07-16', { t1: 'present' })).resolves.toBeUndefined()
+  })
+
+  it('is a no-op with no marks', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await pushPeopleAttendance('teachers', '2026-07-16', {})
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
