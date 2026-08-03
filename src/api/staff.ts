@@ -24,7 +24,7 @@ export function toStaff(wire: Record<string, unknown>): Staff {
     role: roleStr,
     dept,
     cat,
-    attendance: attendancePct,
+    attendance: Number(attendancePct ?? 0),
     code: typeof employeeCode === 'string' ? employeeCode : undefined,
   } as unknown as Staff
   return mergeStaffExtras(base)
@@ -47,6 +47,7 @@ export function fromStaff(s: Staff): Record<string, unknown> {
     category: cat,
     attendance_pct: attendance,
     employee_code: s.code?.trim() || undefined,
+    email: s.email?.trim() || undefined,
   }
 }
 
@@ -66,6 +67,7 @@ export function fromStaffUpdate(s: Staff): Record<string, unknown> {
     shift: s.shift,
     route: s.route,
     status: s.status,
+    email: s.email?.trim() || undefined,
   }
 }
 

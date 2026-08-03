@@ -19,6 +19,7 @@ import type { SchoolClass } from '@/api/classes'
 import { listSchoolHouses } from '@/api/schoolHouses'
 import { required, validateAadhaar, validateEmail, validatePhone, validateFile } from '@/lib/validation'
 import { properName, properPlace } from '@/lib/properCase'
+import { toDateInputValue } from '@/lib/dateInput'
 import type { Student } from '@/types'
 
 function classOptionValue(c: SchoolClass): string {
@@ -83,7 +84,7 @@ function studentToForm(s: Student): Form {
     ...INITIAL_FORM,
     academicYear: s.academicYear || ACADEMIC_YEARS[0],
     adm: s.adm || '',
-    admissionDate: s.admissionDate || '',
+    admissionDate: toDateInputValue(s.admissionDate),
     roll: s.roll ? String(s.roll) : '',
     status: s.status === 'inactive' ? 'inactive' : 'active',
     firstName: first,
@@ -91,7 +92,7 @@ function studentToForm(s: Student): Form {
     cls: classKey,
     section: s.section || '',
     gender: s.gender || '',
-    dob: s.dob ? String(s.dob).slice(0, 10) : '',
+    dob: toDateInputValue(s.dob),
     bloodGroup: s.bloodGroup || '',
     house: s.house || '',
     religion: s.religion || '',

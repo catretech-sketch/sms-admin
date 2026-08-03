@@ -8,6 +8,7 @@ import type { Dispatch, ReactNode, SetStateAction } from 'react'
 import { Field, Input, Textarea, Select, FileUpload } from './forms'
 import type { SelectOption } from './forms'
 import { properName, properPlace } from '@/lib/properCase'
+import { toDateInputValue } from '@/lib/dateInput'
 
 export type FormState = Record<string, string>
 export type FileState = Record<string, File | null>
@@ -43,7 +44,9 @@ export function useFormKit(
   const txt = (key: string, label: ReactNode, opts: TxtOpts = {}) => (
     <Field label={label} required={opts.required} error={errors[key]}>
       <Input
-        icon={opts.icon} type={opts.type} value={f[key]} placeholder={opts.ph}
+        icon={opts.icon} type={opts.type}
+        value={opts.type === 'date' ? toDateInputValue(f[key]) : f[key]}
+        placeholder={opts.ph}
         error={!!errors[key]}
         onChange={(ev) => set(key, ev.target.value)}
         onBlur={opts.case

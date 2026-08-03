@@ -3,8 +3,10 @@
    ============================================================ */
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
-import { useCreateStaff, useUpdateStaff } from '@/api/hooks/useStaffMutations'
+import { tierIncludes } from '@/lib/gating'
+import { TierGate } from '@/components/shell/gates'
 import { useStaff, useStaffById } from '@/api/hooks/useStaff'
+import { useCreateStaff, useUpdateStaff } from '@/api/hooks/useStaffMutations'
 import { loadStaffExtras, persistStaffExtras } from '@/api/staffExtras'
 import { updateStaffPhoto } from '@/api/staff'
 import { upsertSalaryProfile, type SalaryStructure } from '@/api/payroll'
@@ -18,8 +20,10 @@ import {
   validateEmail, validatePhone, validateFile, passwordsMatch,
 } from '@/lib/validation'
 import { properName, properPlace } from '@/lib/properCase'
+import { toDateInputValue } from '@/lib/dateInput'
 import { STAFF_ROLES as STAFF_ROLE_KEYS } from '@/lib/salaryRoles'
-import { useSalaryStructures } from '@/api/hooks/usePayroll'
+import { useSalaryStructures, useSalaryProfiles } from '@/api/hooks/usePayroll'
+import { findSalaryProfile, findSalaryStructure, mergeSalaryDisplayFields, upsertInputFromForm } from '@/lib/salaryProfileForm'
 import type { Staff } from '@/types'
 
 /* ---------- option lists ---------- */
@@ -101,7 +105,7 @@ function staffToForm(s: Staff): Form {
     firstName: first,
     lastName: last,
     gender: s.gender,
-    dob: s.dob ? String(s.dob).slice(0, 10) : '',
+    dob: toDateInputValue(s.dob),
     bloodGroup: s.bloodGroup ?? '',
     maritalStatus: s.maritalStatus ?? '',
     phone: s.phone ?? '',
@@ -123,8 +127,8 @@ function staffToForm(s: Staff): Form {
     contractType: s.contractType ?? '',
     shift: s.shift ?? '',
     workLocation: s.workLocation ?? '',
-    dateOfJoining: s.dateOfJoining ? String(s.dateOfJoining).slice(0, 10) : '',
-    dateOfLeaving: s.dateOfLeaving ? String(s.dateOfLeaving).slice(0, 10) : '',
+    dateOfJoining: toDateInputValue(s.dateOfJoining),
+    dateOfLeaving: toDateInputValue(s.dateOfLeaving),
     status: s.status === 'inactive' ? 'inactive' : 'active',
     basicSalary: s.basicSalary ?? '',
     hra: s.hra ?? '',
@@ -157,6 +161,7 @@ function staffToForm(s: Staff): Form {
 
 function StaffFormScreen({ mode }: { mode: 'add' | 'edit' }) {
   const app = useApp()
+  const payrollEnabled = tierIncludes(app.plan, 'hr_payroll')
   const toast = useToast()
   const createStaff = useCreateStaff()
   const updateStaff = useUpdateStaff()
@@ -173,6 +178,7 @@ function StaffFormScreen({ mode }: { mode: 'add' | 'edit' }) {
   const { txt, sel, area, upload, fieldGrid } = useFormKit(f, setForm, files, setFiles, errors)
 
   const structuresQ = useSalaryStructures()
+  const profilesQ = useSalaryProfiles(payrollEnabled)
   const structFor = (role: string): SalaryStructure | undefined => {
     const key = role.trim().toLowerCase()
     if (!key) return undefined
@@ -224,7 +230,21 @@ function StaffFormScreen({ mode }: { mode: 'add' | 'edit' }) {
 
   useEffect(() => {
     if (mode !== 'edit' || !existing) return
-    setForm(staffToForm(existing))
+    if (payrollEnabled && (profilesQ.isLoading || structuresQ.isLoading)) return
+
+    const structure = payrollEnabled
+      ? findSalaryStructure(structuresQ.data, 'staff', existing.role ?? '')
+      : undefined
+    const profile = payrollEnabled
+      ? findSalaryProfile(profilesQ.data, 'staff', existing.id)
+      : undefined
+    const base = staffToForm(existing)
+    const salaryFields = payrollEnabled
+      ? mergeSalaryDisplayFields(profile, structure)
+      : {}
+    const form = payrollEnabled ? { ...base, ...salaryFields } : base
+
+    setForm(form)
     const ex = loadStaffExtras(existing.id)
     const next: Partial<Record<keyof typeof INITIAL_FILES, string>> = {}
     const map = Object.fromEntries(
@@ -237,7 +257,7 @@ function StaffFormScreen({ mode }: { mode: 'add' | 'edit' }) {
     }
     setSavedUrls(next)
     setHydrated(true)
-  }, [mode, existing])
+  }, [mode, existing, payrollEnabled, profilesQ.data, profilesQ.isLoading, structuresQ.data, structuresQ.isLoading])
 
   const deptOptions = useMemo(
     () => [
@@ -357,21 +377,19 @@ function StaffFormScreen({ mode }: { mode: 'add' | 'edit' }) {
     setSaving(true)
 
     const afterOk = (saved: Staff) => {
-      // Persist salary to the backend payroll master so HR & Payroll can run for real.
-      void upsertSalaryProfile('staff', saved.id, {
-        basicSalary: toAmount(staffMember.basicSalary),
-        hra: toAmount(staffMember.hra),
-        allowances: toAmount(staffMember.allowances),
-        epf: toAmount(staffMember.epf),
-        profTax: toAmount(staffMember.profTax),
-        otherDeductions: toAmount(staffMember.otherDeductions),
-        uan: staffMember.uan,
-        bankHolder: staffMember.bank?.holder,
-        bankAccount: staffMember.bank?.account,
-        bankName: staffMember.bank?.bank,
-        ifsc: staffMember.bank?.ifsc,
-        bankBranch: staffMember.bank?.branch,
-      }).catch(() => { /* best-effort; extras below keep a local copy */ })
+      const finish = async () => {
+        if (payrollEnabled) {
+          try {
+            await upsertSalaryProfile('staff', saved.id, upsertInputFromForm(f, structFor(f.role)))
+          } catch (err) {
+            setSaving(false)
+            toast.danger(
+              'Salary not saved',
+              err instanceof Error ? err.message : 'Payroll profile could not be saved. Try again.',
+            )
+            return
+          }
+        }
       // Photo goes to the real Users.PhotoUrl field (what the teacher app
       // reads) — not the extras/localStorage mock below, which only ever
       // remembered the file name. A newly-invited staff member with no linked
@@ -397,6 +415,8 @@ function StaffFormScreen({ mode }: { mode: 'add' | 'edit' }) {
         if (mode === 'edit') app.go('school.staff', { focus: saved.id })
         else app.go('school.staff')
       })
+      }
+      finish()
     }
 
     if (mode === 'edit' && existing) {
@@ -516,7 +536,8 @@ function StaffFormScreen({ mode }: { mode: 'add' | 'edit' }) {
           </>)}</div>
         </Card>
 
-        {/* ---- Salary components ---- */}
+        {/* ---- Salary components (Platinum) ---- */}
+        {payrollEnabled && (
         <Card>
           <CardHead
             title="Salary components"
@@ -538,6 +559,7 @@ function StaffFormScreen({ mode }: { mode: 'add' | 'edit' }) {
             {' '}· Leave blank to inherit the {f.role || 'role'} salary structure when payroll runs.
           </div>
         </Card>
+        )}
 
         <div className="sm-grid-2 gap16">
           {/* ---- Bank ---- */}
@@ -638,11 +660,21 @@ function StaffFormScreen({ mode }: { mode: 'add' | 'edit' }) {
 }
 
 function AddStaffScreen() {
-  return <StaffFormScreen mode="add" />
+  return (
+    <TierGate feature="staff_support" title="Staff & support"
+      blurb="Onboard non-teaching staff on the Platinum plan.">
+      <StaffFormScreen mode="add" />
+    </TierGate>
+  )
 }
 
 function EditStaffScreen() {
-  return <StaffFormScreen mode="edit" />
+  return (
+    <TierGate feature="staff_support" title="Staff & support"
+      blurb="Edit non-teaching staff on the Platinum plan.">
+      <StaffFormScreen mode="edit" />
+    </TierGate>
+  )
 }
 
 export const staffAddScreens: Record<string, ComponentType> = {

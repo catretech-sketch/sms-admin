@@ -31,6 +31,8 @@ import {
 } from '@/api/upgradeRequests'
 import { deleteMySchool } from '@/api/mySchools'
 import { deleteClient } from '@/api/clients'
+import { updateSchoolProfile } from '@/api/schoolProfile'
+import { validateGeofenceInput, RADIUS_PRESETS } from '@/lib/geofence'
 import { useQueryClient } from '@tanstack/react-query'
 
 const FEE_COLORS = ['#4f46e5', '#0ea5e9', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#14b8a6']
@@ -684,9 +686,12 @@ const MODULE_OPTIONS: { key: string; label: string; desc: string; tier: Tier }[]
   { key: 'exams', label: 'Exams & report cards', desc: 'Marks entry, results', tier: 'silver' },
   { key: 'fees', label: 'Fees & collection', desc: 'Invoicing, receipts', tier: 'silver' },
   { key: 'communication', label: 'Communication', desc: 'SMS, push, messenger', tier: 'silver' },
-  { key: 'hr_payroll', label: 'HR & payroll', desc: 'Staff salary runs', tier: 'gold' },
+  { key: 'operations', label: 'Operations', desc: 'Transport, hostel & sports', tier: 'platinum' },
+  { key: 'staff_support', label: 'Staff & support', desc: 'Non-teaching staff roster', tier: 'platinum' },
+  { key: 'hr_payroll', label: 'HR & payroll', desc: 'Staff salary runs', tier: 'platinum' },
   { key: 'analytics', label: 'Advanced analytics', desc: 'Weak-student insights', tier: 'gold' },
-  { key: 'transport_gps', label: 'Transport GPS', desc: 'Live bus tracking', tier: 'platinum' },
+  { key: 'attendance.geofence', label: 'Geo-fenced attendance', desc: 'GPS check-in / check-out for teachers & staff', tier: 'platinum' },
+  { key: 'transport.gps', label: 'Transport GPS', desc: 'Live bus tracking', tier: 'platinum' },
 ]
 
 type BillingCycle = 'monthly' | 'quarterly' | 'yearly'
@@ -723,6 +728,9 @@ interface WizardData {
   /** offline / online — pick a Catre published plan, then pay to activate */
   payChoice: 'offline' | 'online'
   modules: Set<string>
+  geofenceLat: string
+  geofenceLng: string
+  geofenceRadius: string
 }
 
 async function readImageDataUrl(file: File, kind: 'logo' | 'cover'): Promise<string> {
@@ -773,6 +781,7 @@ function CreateSchoolWizard() {
     adminName: app.user?.name ?? '', adminEmail: app.user?.email ?? '', adminPhone: '',
     strength: 800, tier: 'gold', planId: '', cycle: 'yearly', payChoice: 'offline',
     modules: new Set(['sis', 'attendance', 'exams', 'fees', 'communication']),
+    geofenceLat: '', geofenceLng: '', geofenceRadius: '250',
   })
 
   // Default to the first published plan once catalog loads.
@@ -989,6 +998,21 @@ function CreateSchoolWizard() {
       if (!tenantId) {
         toast.danger('Could not create school', 'No school id returned.')
         return
+      }
+
+      if (data.modules.has('attendance.geofence') && data.geofenceLat && data.geofenceLng) {
+        const lat = Number(data.geofenceLat)
+        const lng = Number(data.geofenceLng)
+        const radius = Number(data.geofenceRadius) || 250
+        if (!validateGeofenceInput(lat, lng, radius)) {
+          try {
+            await updateSchoolProfile(tenantId, {
+              lat, lng, geofence_radius_meters: radius, set_geofence: true,
+            }, app.isPlatform)
+          } catch {
+            /* fence can be set later in Attendance → Geo-fence */
+          }
+        }
       }
 
       try {
@@ -1260,6 +1284,81 @@ function CreateSchoolWizard() {
                 )
               })}
             </div>
+            {data.modules.has('attendance.geofence') && TIERS.indexOf('platinum') <= TIERS.indexOf(data.tier) && (
+              <Card pad style={{ marginTop: 4 }}>
+                <div className="t-md fw6 row ai-center gap8">
+                  <Icon name="pin" size={18} />
+                  Set school location (Platinum)
+                </div>
+                <div className="t-sm muted3" style={{ marginTop: 6, marginBottom: 12 }}>
+                  Optional — stand at the school gate, capture GPS, and pick a radius so teacher check-in works on day one.
+                </div>
+                <div className="col gap12">
+                  <div>
+                    <span className="t-xs muted3">Radius preset</span>
+                    <Segmented
+                      value={data.geofenceRadius}
+                      onChange={(v) => set('geofenceRadius', v)}
+                      options={RADIUS_PRESETS.map((m) => ({ value: String(m), label: `${m} m` }))}
+                    />
+                  </div>
+                  <div className="sm-grid-2 gap12">
+                    <Field label="Latitude"><Input value={data.geofenceLat} onChange={(e) => set('geofenceLat', e.target.value)} placeholder="12.971600" /></Field>
+                    <Field label="Longitude"><Input value={data.geofenceLng} onChange={(e) => set('geofenceLng', e.target.value)} placeholder="77.594600" /></Field>
+                  </div>
+                </div>
+                <div className="row ai-center gap8 wrap" style={{ marginTop: 12 }}>
+                  <Btn
+                    variant="primary"
+                    icon="pin"
+                    onClick={() => {
+                      if (!navigator.geolocation) {
+                        toast.danger('GPS unavailable', 'Enter coordinates manually or set up later in Attendance.')
+                        return
+                      }
+                      navigator.geolocation.getCurrentPosition(
+                        (pos) => {
+                          setData((d) => ({
+                            ...d,
+                            geofenceLat: String(pos.coords.latitude.toFixed(6)),
+                            geofenceLng: String(pos.coords.longitude.toFixed(6)),
+                          }))
+                          toast.success('Campus GPS captured', 'Will be saved when the school is created.')
+                        },
+                        () => toast.danger('Location denied', 'Allow GPS or set the fence later in Settings → Geo-fence.'),
+                        { enableHighAccuracy: true, timeout: 15000 },
+                      )
+                    }}
+                  >
+                    Set school location (GPS)
+                  </Btn>
+                  <Btn
+                    variant="secondary"
+                    icon="pin"
+                    onClick={() => {
+                      if (!navigator.geolocation) {
+                        toast.danger('GPS unavailable', 'Enter coordinates manually or set up later in Attendance.')
+                        return
+                      }
+                      navigator.geolocation.getCurrentPosition(
+                        (pos) => {
+                          setData((d) => ({
+                            ...d,
+                            geofenceLat: String(pos.coords.latitude.toFixed(6)),
+                            geofenceLng: String(pos.coords.longitude.toFixed(6)),
+                          }))
+                          toast.success('Campus GPS captured', 'Will be saved when the school is created.')
+                        },
+                        () => toast.danger('Location denied', 'Allow GPS or set the fence later in Settings → Geo-fence.'),
+                        { enableHighAccuracy: true, timeout: 15000 },
+                      )
+                    }}
+                  >
+                    Capture GPS only
+                  </Btn>
+                </div>
+              </Card>
+            )}
           </div>
         )}
 

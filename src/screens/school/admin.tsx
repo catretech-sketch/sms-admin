@@ -40,6 +40,9 @@ import type { RoleTemplateOverride } from '@/api/roleTemplates'
 import { useAuditLog } from '@/api/hooks/useAudit'
 import type { AuditEntry } from '@/api/audit'
 import { tierIncludes, caps, effectiveCaps, cellState, overrideCount, NEXT_CELL_STATE } from '@/lib/gating'
+import { canConfigureGeofence } from '@/lib/geofence'
+import { TierGate } from '@/components/shell/gates'
+import { CampusGeofenceSettings } from '@/components/school/CampusGeofenceSettings'
 import {
   PageHead, Tabs, Card, CardHead, Btn, Badge, TierPill, Avatar, Search, Select,
   Field, Input, Textarea, Toggle, Icon, Empty, DataTable, Spinner, Modal,
@@ -344,8 +347,10 @@ function SchoolReports() {
   const { data: staffRows = [] } = useStaff()
   const { data: feeSummary } = useFeeReportSummary()
   const { data: invoices = [] } = useFeeInvoices()
-  const { data: payroll } = usePayrollPreview(currentPeriod(), cat === 'finance')
-  const { data: fleet = [] } = useTransportFleet(cat === 'operations')
+  const payrollEnabled = tierIncludes(app.plan, 'hr_payroll')
+  const { data: payroll } = usePayrollPreview(currentPeriod(), cat === 'finance' && payrollEnabled)
+  const opsEnabled = tierIncludes(app.plan, 'operations')
+  const { data: fleet = [] } = useTransportFleet(cat === 'operations' && opsEnabled)
   const { data: exams = [] } = useExams()
   const academicExam = useMemo(() => pickExam(exams), [exams])
   const examId = cat === 'academic' ? (academicExam?.id ?? null) : null
@@ -365,9 +370,9 @@ function SchoolReports() {
   const categories: RptCat[] = useMemo(() => [
     { value: 'academic', label: 'Academic', icon: 'cap', reports: academicReports(students, academicExam, papers, marksMap) },
     { value: 'attendance', label: 'Attendance', icon: 'check', reports: attendanceReports(students, teacherRows, staffRows) },
-    { value: 'finance', label: 'Finance', icon: 'rupee', reports: financeReports(feeSummary, invoices, payroll, cur) },
-    { value: 'operations', label: 'Operations', icon: 'box', reports: operationsReports(fleet) },
-  ], [students, academicExam, papers, marksMap, teacherRows, staffRows, feeSummary, invoices, payroll, fleet, cur])
+    { value: 'finance', label: 'Finance', icon: 'rupee', reports: financeReports(feeSummary, invoices, payrollEnabled ? payroll : undefined, cur) },
+    { value: 'operations', label: 'Operations', icon: 'box', reports: opsEnabled ? operationsReports(fleet) : operationsReports([]) },
+  ], [students, academicExam, papers, marksMap, teacherRows, staffRows, feeSummary, invoices, payroll, payrollEnabled, fleet, opsEnabled, cur])
 
   const active = categories.find((c) => c.value === cat) ?? categories[0]
 
@@ -445,11 +450,11 @@ const LANG_OPTIONS = [
 ]
 
 /* Each visible plan feature maps to the gating key for its tier:
-   silver -> 'sis', gold -> 'hr_payroll', platinum -> 'transport.gps'. */
+   silver -> 'sis', gold -> 'analytics.weak_students', platinum -> 'hr_payroll'. */
 const FEATURE_GROUPS: { tier: Tier; key: string; features: string[] }[] = [
   { tier: 'silver', key: 'sis', features: ['SIS · Academics · Attendance', 'Examinations & report cards', 'Fees & online payments', 'Communication & complaints'] },
-  { tier: 'gold', key: 'hr_payroll', features: ['HR & Payroll', 'Weak-student analytics', 'Advanced reporting'] },
-  { tier: 'platinum', key: 'transport.gps', features: ['Geo-fenced attendance', 'Live GPS bus tracking', 'Dedicated support'] },
+  { tier: 'gold', key: 'analytics.weak_students', features: ['Weak-student analytics', 'Advanced reporting'] },
+  { tier: 'platinum', key: 'hr_payroll', features: ['Staff & support', 'Operations (transport · hostel · sports)', 'HR & Payroll', 'Geo-fenced attendance', 'Live GPS bus tracking', 'Dedicated support'] },
 ]
 
 function SettingsScreen() {
@@ -575,7 +580,16 @@ function SettingsScreen() {
           </div>
         </Card>
       </div>
-      <div style={{ marginTop: 16 }}>
+      <div style={{ marginTop: 16 }} className="col gap16">
+        {tierIncludes(app.plan, 'attendance.geofence') && (
+          <TierGate feature="attendance.geofence" title="Campus geo-fence">
+            <CampusGeofenceSettings
+              schoolName={app.school.name}
+              canConfigure={canConfigureGeofence(app.role)}
+              compact
+            />
+          </TierGate>
+        )}
         <IntegrationsCard canEdit={canEditProfile} />
       </div>
     </div>
@@ -937,7 +951,9 @@ function InviteModalContent({ onDone }: { onDone: () => void }) {
         <div className="row gap8 jc-end">
           <Btn variant="ghost" onClick={onDone}>Cancel</Btn>
           <Btn variant="secondary" icon="cap" onClick={() => { onDone(); app.go('school.teachers.add') }}>Onboard teacher</Btn>
-          <Btn variant="secondary" icon="briefcase" onClick={() => { onDone(); app.go('school.staff.add') }}>Onboard staff</Btn>
+          {tierIncludes(app.plan, 'staff_support') && (
+            <Btn variant="secondary" icon="briefcase" onClick={() => { onDone(); app.go('school.staff.add') }}>Onboard staff</Btn>
+          )}
           <Btn variant="primary" icon="check" onClick={submit} disabled={roleOptions.length === 0}>Send invite</Btn>
         </div>
       </div>

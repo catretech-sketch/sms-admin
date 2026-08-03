@@ -74,8 +74,8 @@ export async function notifyExamAudience(
       type: 'exam_results',
     },
     marks: {
-      title: `Marks entered — ${exam.name}${classSuffix}${opts?.subject ? ` · ${opts.subject}` : ''}`,
-      body: `${schoolName}: Marks for ${subjectBit} (${exam.name}, ${classBit}) are available in CRM. Parents and students see final report cards after results are published.`,
+      title: `Marks published — ${exam.name}${classSuffix}${opts?.subject ? ` · ${opts.subject}` : ''}`,
+      body: `${schoolName}: Marks for ${subjectBit} (${exam.name}, ${classBit}) are now available. Open the parent app to view your child's marks. Full report cards follow when results are published.`,
       type: 'exam_marks',
     },
     attendance: {

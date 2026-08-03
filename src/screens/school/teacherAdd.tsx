@@ -3,6 +3,7 @@
    ============================================================ */
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
+import { tierIncludes } from '@/lib/gating'
 import { useCreateTeacher, useUpdateTeacher } from '@/api/hooks/useTeacherMutations'
 import { useTeacher, useTeachers } from '@/api/hooks/useTeachers'
 import { loadTeacherExtras, persistTeacherExtras } from '@/api/teacherExtras'
@@ -19,8 +20,10 @@ import {
   validateEmail, validatePhone, validateFile, passwordsMatch,
 } from '@/lib/validation'
 import { properName, properPlace } from '@/lib/properCase'
+import { toDateInputValue } from '@/lib/dateInput'
 import { TEACHER_DESIGNATIONS } from '@/lib/salaryRoles'
-import { useSalaryStructures } from '@/api/hooks/usePayroll'
+import { useSalaryStructures, useSalaryProfiles } from '@/api/hooks/usePayroll'
+import { findSalaryProfile, findSalaryStructure, mergeSalaryDisplayFields, upsertInputFromForm } from '@/lib/salaryProfileForm'
 import type { Teacher } from '@/types'
 
 /* ---------- option lists ---------- */
@@ -100,7 +103,7 @@ function teacherToForm(t: Teacher): Form {
     firstName: first,
     lastName: last,
     gender: t.gender,
-    dob: t.dob ? String(t.dob).slice(0, 10) : '',
+    dob: toDateInputValue(t.dob),
     bloodGroup: t.bloodGroup ?? '',
     maritalStatus: t.maritalStatus ?? '',
     phone: t.phone ?? '',
@@ -123,8 +126,8 @@ function teacherToForm(t: Teacher): Form {
     prevSchool: t.prevSchool ?? '',
     prevSchoolAddress: t.prevSchoolAddress ?? '',
     prevSchoolPhone: t.prevSchoolPhone ?? '',
-    dateOfJoining: t.dateOfJoining ? String(t.dateOfJoining).slice(0, 10) : '',
-    dateOfLeaving: t.dateOfLeaving ? String(t.dateOfLeaving).slice(0, 10) : '',
+    dateOfJoining: toDateInputValue(t.dateOfJoining),
+    dateOfLeaving: toDateInputValue(t.dateOfLeaving),
     status: t.status === 'inactive' ? 'inactive' : 'active',
     employeeType: t.employeeType ?? '',
     department: t.dept ?? '',
@@ -170,6 +173,7 @@ function teacherToForm(t: Teacher): Form {
 
 function TeacherFormScreen({ mode }: { mode: 'add' | 'edit' }) {
   const app = useApp()
+  const payrollEnabled = tierIncludes(app.plan, 'hr_payroll')
   const toast = useToast()
   const createTeacher = useCreateTeacher()
   const updateTeacher = useUpdateTeacher()
@@ -186,6 +190,7 @@ function TeacherFormScreen({ mode }: { mode: 'add' | 'edit' }) {
   const { txt, sel, area, upload, fieldGrid } = useFormKit(f, setForm, files, setFiles, errors)
 
   const structuresQ = useSalaryStructures()
+  const profilesQ = useSalaryProfiles(payrollEnabled)
   const structFor = (designation: string): SalaryStructure | undefined => {
     const key = designation.trim().toLowerCase()
     if (!key) return undefined
@@ -237,7 +242,21 @@ function TeacherFormScreen({ mode }: { mode: 'add' | 'edit' }) {
 
   useEffect(() => {
     if (mode !== 'edit' || !existing) return
-    setForm(teacherToForm(existing))
+    if (payrollEnabled && (profilesQ.isLoading || structuresQ.isLoading)) return
+
+    const structure = payrollEnabled
+      ? findSalaryStructure(structuresQ.data, 'teacher', existing.desig ?? '')
+      : undefined
+    const profile = payrollEnabled
+      ? findSalaryProfile(profilesQ.data, 'teacher', existing.id)
+      : undefined
+    const base = teacherToForm(existing)
+    const salaryFields = payrollEnabled
+      ? mergeSalaryDisplayFields(profile, structure)
+      : {}
+    const form = payrollEnabled ? { ...base, ...salaryFields } : base
+
+    setForm(form)
     const ex = loadTeacherExtras(existing.id)
     const next: Partial<Record<keyof typeof INITIAL_FILES, string>> = {}
     const map = Object.fromEntries(
@@ -250,7 +269,7 @@ function TeacherFormScreen({ mode }: { mode: 'add' | 'edit' }) {
     }
     setSavedUrls(next)
     setHydrated(true)
-  }, [mode, existing])
+  }, [mode, existing, payrollEnabled, profilesQ.data, profilesQ.isLoading, structuresQ.data, structuresQ.isLoading])
 
   const classNames = useClassNames()
   const subjectOptions = useSubjectNames(f.subject)
@@ -426,22 +445,19 @@ function TeacherFormScreen({ mode }: { mode: 'add' | 'edit' }) {
       : []
 
     const afterOk = (saved: Teacher) => {
-      const finish = () => {
-        // Persist salary to the backend payroll master so HR & Payroll can run for real.
-        void upsertSalaryProfile('teacher', saved.id, {
-          basicSalary: toAmount(teacher.basicSalary),
-          hra: toAmount(teacher.hra),
-          allowances: toAmount(teacher.allowances),
-          epf: toAmount(teacher.epf),
-          profTax: toAmount(teacher.profTax),
-          otherDeductions: toAmount(teacher.otherDeductions),
-          uan: teacher.uan,
-          bankHolder: teacher.bank?.holder,
-          bankAccount: teacher.bank?.account,
-          bankName: teacher.bank?.bank,
-          ifsc: teacher.bank?.ifsc,
-          bankBranch: teacher.bank?.branch,
-        }).catch(() => { /* best-effort; extras below keep a local copy */ })
+      const finish = async () => {
+        if (payrollEnabled) {
+          try {
+            await upsertSalaryProfile('teacher', saved.id, upsertInputFromForm(f, structFor(f.designation)))
+          } catch (err) {
+            setSaving(false)
+            toast.danger(
+              'Salary not saved',
+              err instanceof Error ? err.message : 'Payroll profile could not be saved. Try again.',
+            )
+            return
+          }
+        }
         // Photo goes to the real Users.PhotoUrl field (what the teacher app
         // reads) — not the extras/localStorage mock below, which only ever
         // remembered the file name. A newly-invited teacher with no linked
@@ -671,7 +687,8 @@ function TeacherFormScreen({ mode }: { mode: 'add' | 'edit' }) {
             </>)}</div>
           </Card>
 
-          {/* ---- Salary components ---- */}
+          {/* ---- Salary components (Platinum) ---- */}
+          {payrollEnabled && (
           <Card>
             <CardHead
               title="Salary components"
@@ -693,6 +710,7 @@ function TeacherFormScreen({ mode }: { mode: 'add' | 'edit' }) {
               {' '}· Leave blank to inherit the {f.designation || 'role'} salary structure when payroll runs.
             </div>
           </Card>
+          )}
 
           {/* ---- Leave ---- */}
           <Card>

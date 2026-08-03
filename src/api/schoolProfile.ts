@@ -14,6 +14,10 @@ export interface UpdateSchoolProfileBody {
   image_url?: string | null
   set_logo?: boolean
   set_image?: boolean
+  lat?: number
+  lng?: number
+  geofence_radius_meters?: number
+  set_geofence?: boolean
 }
 
 /** School owner/admin — PATCH /me/schools/{id} */

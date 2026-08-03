@@ -4,12 +4,12 @@
 import { useApp } from '@/lib/hooks'
 import { Icon, Btn, Tip, TierPill } from '@/components/ui'
 import { SchoolMark } from '@/components/SchoolMark'
-import { tierIncludes, gateRole } from '@/lib/gating'
+import { tierIncludes, gateRole, requiredTier } from '@/lib/gating'
 import { useApprovals } from '@/api/hooks/useApprovals'
 import { approvalsForRole } from '@/api/approvals'
 import type { Tier, Role } from '@/types'
 
-interface NavItem { label: string; view: string; icon: string; lockTier?: Tier; adminOnly?: boolean; badge?: number }
+interface NavItem { label: string; view: string; icon: string; lockFeature?: string; adminOnly?: boolean; badge?: number }
 interface NavGroup { label?: string; items: NavItem[] }
 
 const OWNER_NAV: NavGroup[] = [
@@ -37,7 +37,7 @@ function schoolNav(role: Role, approvalCount: number): NavGroup[] {
     { label: 'People', items: [
       { label: 'Students (SIS)', view: 'school.sis', icon: 'users' },
       { label: 'Teachers', view: 'school.teachers', icon: 'cap' },
-      { label: 'Staff & support', view: 'school.staff', icon: 'briefcase' },
+      { label: 'Staff & support', view: 'school.staff', icon: 'briefcase', lockFeature: 'staff_support' },
       { label: 'Parents', view: 'school.parents', icon: 'user' },
     ] },
     { label: 'Academic', items: [
@@ -48,10 +48,11 @@ function schoolNav(role: Role, approvalCount: number): NavGroup[] {
     ] },
     { label: 'Operations', items: [
       { label: 'Fees', view: 'school.fees', icon: 'rupee' },
-      { label: 'HR & Payroll', view: 'school.hr', icon: 'wallet', lockTier: 'gold' },
+      { label: 'HR & Payroll', view: 'school.hr', icon: 'wallet', lockFeature: 'hr_payroll' },
       { label: 'Communication', view: 'school.comm', icon: 'message' },
-      { label: 'Operations', view: 'school.ops', icon: 'box' },
-      { label: 'Live bus tracking', view: 'school.gps', icon: 'bus' },
+      { label: 'Transport', view: 'school.transport', icon: 'bus', lockFeature: 'operations' },
+      { label: 'Live bus tracking', view: 'school.gps', icon: 'zap', lockFeature: 'transport.gps' },
+      { label: 'Hostel & sports', view: 'school.ops', icon: 'box', lockFeature: 'operations' },
     ] },
     { label: 'Administration', items: [
       { label: 'Reports', view: 'school.reports', icon: 'trend' },
@@ -64,7 +65,7 @@ function schoolNav(role: Role, approvalCount: number): NavGroup[] {
 export function Sidebar() {
   const app = useApp()
   const isOwner = app.consoleKind === 'owner'
-  const { data: approvalsData } = useApprovals(!isOwner)
+  const { data: approvalsData } = useApprovals({ status: 'pending', enabled: !isOwner })
   const approvalCount = isOwner ? 0 : approvalsForRole(approvalsData ?? [], app.role).length
   const groups = isOwner ? OWNER_NAV : schoolNav(app.role, approvalCount)
 
@@ -93,13 +94,13 @@ export function Sidebar() {
           <div className="sm-nav-group" key={gi}>
             {g.label && <div className="sm-nav-label">{g.label}</div>}
             {g.items.map((it) => {
-              const locked = it.lockTier && !tierIncludes(app.plan, it.lockTier === 'gold' ? 'hr_payroll' : 'transport.gps')
+              const locked = it.lockFeature && !tierIncludes(app.plan, it.lockFeature)
               return (
                 <button key={it.view} className={['sm-nav-item', app.view === it.view && 'on'].filter(Boolean).join(' ')} onClick={() => app.go(it.view)}>
                   <span className="sm-nav-ic"><Icon name={it.icon} size={17} /></span>
                   <span className="flex1" style={{ textAlign: 'left' }}>{it.label}</span>
                   {it.badge != null && <span className="sm-nav-badge">{it.badge}</span>}
-                  {locked && <Tip text={`${it.lockTier} feature`}><span className="sm-nav-lock"><Icon name="lock" size={13} /></span></Tip>}
+                  {locked && <Tip text={`${requiredTier(it.lockFeature)} feature`}><span className="sm-nav-lock"><Icon name="lock" size={13} /></span></Tip>}
                 </button>
               )
             })}
@@ -111,7 +112,7 @@ export function Sidebar() {
         <div className="sm-sidebar-foot">
           <div className="sm-upsell">
             <div className="t">Unlock more</div>
-            <div className="s">Upgrade for {app.plan === 'silver' ? 'HR, payroll & analytics' : 'live GPS & geo-fencing'}.</div>
+            <div className="s">Upgrade for {app.plan === 'silver' ? 'advanced analytics' : 'HR, payroll, live GPS & geo-fencing'}.</div>
             <Btn size="sm" variant={app.plan === 'silver' ? 'gold' : 'platinum'} icon="sparkle" style={{ width: '100%' }}
               onClick={() => app.upgrade(app.plan === 'silver' ? 'gold' : 'platinum')}>
               Upgrade plan

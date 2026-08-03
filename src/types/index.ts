@@ -253,6 +253,8 @@ export interface Teacher {
   status: ActiveStatus
   avatarHue: number
   top: boolean
+  /** Profile photo from linked Users row (shared across schools with same email). */
+  photoUrl?: string | null
   /* ---- optional onboarding detail (added via the Add Teacher form) ---- */
   dob?: string
   bloodGroup?: string
@@ -319,6 +321,8 @@ export interface Staff {
   attendance: number
   status: ActiveStatus
   avatarHue: number
+  /** Profile photo from linked Users row (shared across schools with same email). */
+  photoUrl?: string | null
   /* ---- optional onboarding detail (added via the Add Staff form) ---- */
   dob?: string
   bloodGroup?: string
@@ -405,6 +409,8 @@ export interface PaperSlot {
   inv2: string
 }
 
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected'
+
 export interface Approval {
   id: string
   type: string
@@ -418,6 +424,10 @@ export interface Approval {
   age: string
   priority: 'high' | 'medium' | 'low'
   forRoles: Role[]
+  status: ApprovalStatus
+  decidedNote?: string | null
+  appliedOn?: string | null
+  attachmentUrls?: string[]
 }
 
 export interface AppNotification {
@@ -473,4 +483,4 @@ export interface MonthValue { label: string; value: number }
 /* ---- Query option shapes ---- */
 export interface ListStudentsOpts { q?: string; grade?: string; status?: string; fee?: string }
 export interface ListTeachersOpts { q?: string; dept?: string; status?: string }
-export interface ListStaffOpts { q?: string; cat?: string }
+export interface ListStaffOpts { q?: string; cat?: string; enabled?: boolean }

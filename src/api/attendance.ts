@@ -155,11 +155,10 @@ export async function listAttendance(classId: string, date: string): Promise<Att
       query: { date: day },
     })
     const rows = (data ?? []).map((row) => toRecord(row))
-    if (rows.length) {
-      cacheLocalRecords(classId, day, rows)
-      return rows
-    }
-    return loadLocalDay(classId, day)
+    if (rows.length) cacheLocalRecords(classId, day, rows)
+    // Trust the server when the endpoint exists — an empty array means "not marked yet",
+    // not "fall back to stale browser storage" (teacher-app marks live on the server).
+    return rows
   } catch (err) {
     if (isMissingEndpoint(err)) return loadLocalDay(classId, day)
     throw err

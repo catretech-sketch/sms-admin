@@ -19,9 +19,10 @@ export const TIER_META: Record<Tier, TierMeta> = {
 export const FEATURE_TIER: Record<string, Tier> = {
   sis: 'silver', academics: 'silver', attendance: 'silver',
   exams: 'silver', fees: 'silver', communication: 'silver',
-  operations: 'silver', library: 'silver', transport: 'silver',
-  hostel: 'silver', sports: 'silver',
-  hr_payroll: 'gold', 'analytics.weak_students': 'gold', 'reporting.advanced': 'gold',
+  operations: 'platinum', library: 'platinum', transport: 'platinum',
+  hostel: 'platinum', sports: 'platinum',
+  'analytics.weak_students': 'gold', 'reporting.advanced': 'gold',
+  hr_payroll: 'platinum', staff_support: 'platinum',
   'attendance.geofence': 'platinum', 'transport.gps': 'platinum', 'support.dedicated': 'platinum',
 }
 
@@ -134,12 +135,12 @@ export const exams: Exam[] = [
 
 /* ---------- Approvals ---------- */
 export const approvals: Approval[] = [
-  { id: 'AP-3041', type: 'Report Card Publish', module: 'exams', cap: 'A', title: 'Publish Term-1 results — Grade X', detail: 'Grade X (4 sections · 168 students) Term 1 report cards ready to publish.', requester: 'Meera Krishnan', role: 'Class Teacher', amount: null, age: '2h', priority: 'high', forRoles: ['principal', 'vice_principal'] },
-  { id: 'AP-3038', type: 'Fee Waiver', module: 'fees', cap: 'A', title: 'Fee waiver — Kabir Sharma (Grade VIII-B)', detail: 'Hardship waiver request: ₹24,000 of Term-2 tuition. Counsellor recommended.', requester: 'Front Office', role: 'Accountant', amount: 24000, age: '4h', priority: 'medium', forRoles: ['principal'] },
-  { id: 'AP-3035', type: 'Leave Request', module: 'hr', cap: 'A', title: 'Leave — Rajesh Kumar (Mathematics)', detail: 'Casual leave 3 days (12–14 Jun). Substitute arranged.', requester: 'Rajesh Kumar', role: 'Teacher', amount: null, age: '5h', priority: 'low', forRoles: ['principal', 'vice_principal'] },
-  { id: 'AP-3030', type: 'Payroll Run', module: 'hr', cap: 'A', title: 'Approve payroll — May 2026', detail: '184 staff · gross ₹1.32 Cr · net ₹1.08 Cr. Prepared by Admin office.', requester: 'Admin Office', role: 'Administrator', amount: 13200000, age: '1d', priority: 'high', forRoles: ['principal'] },
-  { id: 'AP-3028', type: 'Attendance Correction', module: 'attendance', cap: 'A', title: 'Attendance correction — Grade IX-A (3 Jun)', detail: 'Mark 6 students present (late bus). Submitted by class teacher.', requester: 'Sunita Rao', role: 'Class Teacher', amount: null, age: '1d', priority: 'medium', forRoles: ['principal', 'vice_principal'] },
-  { id: 'AP-3024', type: 'Syllabus Change', module: 'academics', cap: 'A', title: 'Syllabus revision — Grade XII Physics', detail: 'Add Unit 9 (Modern Physics) to Term-2 plan.', requester: 'A. Banerjee', role: 'HOD Science', amount: null, age: '2d', priority: 'low', forRoles: ['vice_principal', 'principal'] },
+  { id: 'AP-3041', type: 'Report Card Publish', module: 'exams', cap: 'A', title: 'Publish Term-1 results — Grade X', detail: 'Grade X (4 sections · 168 students) Term 1 report cards ready to publish.', requester: 'Meera Krishnan', role: 'Class Teacher', amount: null, age: '2h', priority: 'high', forRoles: ['principal', 'vice_principal'], status: 'pending' },
+  { id: 'AP-3038', type: 'Fee Waiver', module: 'fees', cap: 'A', title: 'Fee waiver — Kabir Sharma (Grade VIII-B)', detail: 'Hardship waiver request: ₹24,000 of Term-2 tuition. Counsellor recommended.', requester: 'Front Office', role: 'Accountant', amount: 24000, age: '4h', priority: 'medium', forRoles: ['principal'], status: 'pending' },
+  { id: 'AP-3035', type: 'Leave Request', module: 'hr', cap: 'A', title: 'Leave — Rajesh Kumar (Mathematics)', detail: 'Casual leave 3 days (12–14 Jun). Substitute arranged.', requester: 'Rajesh Kumar', role: 'Teacher', amount: null, age: '5h', priority: 'low', forRoles: ['principal', 'vice_principal'], status: 'pending' },
+  { id: 'AP-3030', type: 'Payroll Run', module: 'hr', cap: 'A', title: 'Approve payroll — May 2026', detail: '184 staff · gross ₹1.32 Cr · net ₹1.08 Cr. Prepared by Admin office.', requester: 'Admin Office', role: 'Administrator', amount: 13200000, age: '1d', priority: 'high', forRoles: ['principal'], status: 'pending' },
+  { id: 'AP-3028', type: 'Attendance Correction', module: 'attendance', cap: 'A', title: 'Attendance correction — Grade IX-A (3 Jun)', detail: 'Mark 6 students present (late bus). Submitted by class teacher.', requester: 'Sunita Rao', role: 'Class Teacher', amount: null, age: '1d', priority: 'medium', forRoles: ['principal', 'vice_principal'], status: 'pending' },
+  { id: 'AP-3024', type: 'Syllabus Change', module: 'academics', cap: 'A', title: 'Syllabus revision — Grade XII Physics', detail: 'Add Unit 9 (Modern Physics) to Term-2 plan.', requester: 'A. Banerjee', role: 'HOD Science', amount: null, age: '2d', priority: 'low', forRoles: ['vice_principal', 'principal'], status: 'pending' },
 ]
 
 /* ---------- Notifications ---------- */

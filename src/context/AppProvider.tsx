@@ -290,9 +290,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // Load real tenant plan so school console gates match silver/gold/platinum.
     if (!platform) {
       await hydrateLiveSchools()
-      const savedSchool = opts?.restoreUi ? tokenStore.getUi()?.schoolId : undefined
+      const saved = opts?.restoreUi ? tokenStore.getUi() : null
+      const savedSchool = saved?.schoolId
       if (savedSchool && isTenantGuid(savedSchool)) {
         setSchoolId(savedSchool)
+        // Reload can restore SCC in the UI while the JWT still points at another owned school.
+        if (saved?.ownerViewingSchool && savedSchool !== profile.tenant_id) {
+          try {
+            await switchSchool(savedSchool)
+          } catch {
+            /* Roster APIs stay on the JWT tenant until the owner re-enters the school. */
+          }
+        }
       } else if (profile.tenant_id && isTenantGuid(profile.tenant_id)) {
         setSchoolId(profile.tenant_id)
       }
@@ -379,11 +388,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!isPlatform && status !== 'active') return false
 
     /* Real tenant UUIDs need a token switch — fail closed so JWT matches UI school. */
-    if (isTenantGuid(id) && !isPlatform) {
-      try {
-        await switchSchool(id)
-      } catch {
-        return false
+    if (isTenantGuid(id)) {
+      if (!isPlatform) {
+        try {
+          await switchSchool(id)
+        } catch {
+          return false
+        }
+      } else {
+        tokenStore.setTenantId(id)
       }
     }
     setSchoolId(id)

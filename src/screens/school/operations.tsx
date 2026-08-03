@@ -12,13 +12,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { UseQueryResult } from '@tanstack/react-query'
 import { useApp, useToast } from '@/lib/hooks'
+import { tierIncludes } from '@/lib/gating'
 import {
   PageHead, Tabs, Card, CardHead, Kpi, Btn, IconBtn, Badge, Avatar, Search,
   Select, Field, Input, Textarea, Modal, Icon, Empty, Checkbox, TierPill,
   Segmented, DataTable, type Column, type BadgeTone,
 } from '@/components/ui'
 import { TierGate } from '@/components/shell/gates'
-import { BusMap } from '@/components/maps/BusMap'
+import { FleetLiveMap } from '@/components/maps/RouteBuilderMap'
 import { useComplaints, useCreateComplaint, useUpdateComplaint } from '@/api/hooks/useComplaints'
 import { useThreads, useThreadMessages, useCreateThread, useSendMessage } from '@/api/hooks/useThreads'
 import { useMergedClassNames } from '@/api/hooks/useClasses'
@@ -28,6 +29,7 @@ import { useTeachers } from '@/api/hooks/useTeachers'
 import { useStaff } from '@/api/hooks/useStaff'
 import { collectAudienceContacts } from '@/lib/collectAudienceEmails'
 import { gradeRank } from '@/lib/defaultClasses'
+import { shouldPublishGps } from '@/lib/gpsThrottle'
 import {
   useTransportSummary, useTransportFleet,
   useBusStudents, useAssignStudentToBus, useUnassignStudentFromBus,
@@ -36,9 +38,9 @@ import {
   useCreateHostelBlock, useCreateHostelRoom, useCreateHostelResident,
   useSportsSummary, useSportsTeams, useSportsEvents, useSportsMedals,
   useCreateSportsTeam, useCreateSportsEvent, useCreateSportsMedal,
-  useUpdateBusLocation,
   useSendBusNotification,
-  useFleetWebSocket,
+  useStartBusTrip, usePingBusTrip, useEndBusTrip,
+  useFleetWebSocket, useFleetRouteStops,
 } from '@/api/hooks/useOperations'
 import type { FleetBus, TransportRoute, RouteStop, SportsMedal } from '@/api/operations'
 import type { Bus, Complaint } from '@/types'
@@ -1420,7 +1422,7 @@ function TransportTab() {
         </div>
         <BusFleet />
       </Card>
-      {app.plan === 'platinum' ? (
+      {tierIncludes(app.plan, 'transport.gps') ? (
         <Card style={{ background: 'linear-gradient(100deg,var(--success-bg),transparent)', borderColor: 'var(--success)' }}>
           <div className="row ai-center jc-between gap14 wrap">
             <div className="row ai-center gap12">
@@ -1431,7 +1433,7 @@ function TransportTab() {
               </div>
             </div>
             <div className="row gap10">
-              <Btn variant="primary" icon="pin" onClick={() => app.go('school.gps')}>Open live map</Btn>
+              <Btn variant="primary" icon="pin" onClick={() => app.go('school.transport')}>Open transport</Btn>
             </div>
           </div>
         </Card>
@@ -1995,36 +1997,66 @@ function BusNotifyModal({ bus, onClose }: { bus: FleetBus; onClose: () => void }
    ============================================================ */
 function DriverModePanel({ fleet }: { fleet: FleetBus[] }) {
   const toast = useToast()
-  const updateLocation = useUpdateBusLocation()
+  const startTrip = useStartBusTrip()
+  const pingTrip = usePingBusTrip()
+  const endTrip = useEndBusTrip()
   const [driverBusId, setDriverBusId] = useState('')
   const [tracking, setTracking] = useState(false)
   const [lastPush, setLastPush] = useState<string | null>(null)
   const watchRef = useRef<number | null>(null)
+  const lastSampleRef = useRef<{ lat: number; lng: number; at: number } | null>(null)
+  const pendingPingRef = useRef<{ lat: number; lng: number; speedKmh?: number; at: string } | null>(null)
+
+  const flushPing = () => {
+    const ping = pendingPingRef.current
+    if (!ping || !driverBusId) return
+    pendingPingRef.current = null
+    pingTrip.mutate({
+      busId: driverBusId,
+      pings: [{ lat: ping.lat, lng: ping.lng, speedKmh: ping.speedKmh, at: ping.at }],
+    })
+    setLastPush(new Date().toLocaleTimeString())
+  }
 
   const start = () => {
     if (!driverBusId) { toast.danger('Select a bus', 'Pick your bus before starting.'); return }
     if (!navigator.geolocation) { toast.danger('GPS unavailable', 'Your browser does not support geolocation.'); return }
-    setTracking(true)
-    watchRef.current = navigator.geolocation.watchPosition(
-      (pos) => {
-        updateLocation.mutate({
-          busId: driverBusId,
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          speedKmh: pos.coords.speed != null ? Math.round(pos.coords.speed * 3.6) : undefined,
-          status: 'on_route',
-        })
-        setLastPush(new Date().toLocaleTimeString())
+    startTrip.mutate({ busId: driverBusId, direction: 'pickup' }, {
+      onSuccess: () => {
+        lastSampleRef.current = null
+        pendingPingRef.current = null
+        setTracking(true)
+        watchRef.current = navigator.geolocation.watchPosition(
+          (pos) => {
+            const sample = { lat: pos.coords.latitude, lng: pos.coords.longitude, at: Date.now() }
+            if (!shouldPublishGps(lastSampleRef.current, sample)) return
+            lastSampleRef.current = sample
+            pendingPingRef.current = {
+              lat: sample.lat,
+              lng: sample.lng,
+              speedKmh: pos.coords.speed != null ? Math.round(pos.coords.speed * 3.6) : undefined,
+              at: new Date(sample.at).toISOString(),
+            }
+            flushPing()
+          },
+          (err) => { toast.danger('GPS error', err.message); setTracking(false) },
+          { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 },
+        )
       },
-      (err) => { toast.danger('GPS error', err.message); setTracking(false) },
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 },
-    )
+      onError: (e) => toast.danger('Could not start trip', e.message),
+    })
   }
 
   const stop = () => {
     if (watchRef.current != null) { navigator.geolocation.clearWatch(watchRef.current); watchRef.current = null }
     setTracking(false)
-    if (driverBusId) updateLocation.mutate({ busId: driverBusId, status: 'idle' })
+    lastSampleRef.current = null
+    pendingPingRef.current = null
+    if (driverBusId) {
+      endTrip.mutate({ busId: driverBusId }, {
+        onError: (e) => toast.danger('Could not end trip', e.message),
+      })
+    }
   }
 
   useEffect(() => () => { if (watchRef.current != null) navigator.geolocation.clearWatch(watchRef.current) }, [])
@@ -2044,8 +2076,8 @@ function DriverModePanel({ fleet }: { fleet: FleetBus[] }) {
             </Field>
           </div>
           {!tracking
-            ? <Btn variant="primary" icon="zap" onClick={start}>Start tracking</Btn>
-            : <Btn variant="danger" icon="x" onClick={stop}>Stop tracking</Btn>}
+            ? <Btn variant="primary" icon="zap" onClick={start} disabled={startTrip.isPending}>Start tracking</Btn>
+            : <Btn variant="danger" icon="x" onClick={stop} disabled={endTrip.isPending}>Stop tracking</Btn>}
           {tracking && (
             <div className="row ai-center gap8">
               <span className="sm-dot-live" />
@@ -2064,15 +2096,14 @@ function DriverModePanel({ fleet }: { fleet: FleetBus[] }) {
 }
 
 /* ============================================================
-   LIVE GPS BUS TRACKING
-   List is open on all plans; the live map is Platinum-gated.
+   LIVE GPS BUS TRACKING — Platinum only
    ============================================================ */
-function GpsScreen() {
-  const app = useApp()
+function GpsScreenBody() {
   const { connected: wsConnected } = useFleetWebSocket()
-  // When WS is live, poll every 30 s as a fallback; otherwise keep 5 s polling.
+  // When SignalR is live, poll every 30 s as a fallback; otherwise keep 5 s polling.
   const fleetQ = useTransportFleet(true, wsConnected ? 30_000 : 5_000)
   const fleet = fleetQ.data ?? []
+  const routeStopsByRouteId = useFleetRouteStops(fleet)
 
   const onRoute = fleet.filter((b) => b.status === 'on_route').length
   const delayed = fleet.filter((b) => b.status === 'delayed').length
@@ -2083,11 +2114,9 @@ function GpsScreen() {
     <div>
       <PageHead title="Live bus tracking"
         sub="GPS fleet monitoring · live speed & next stop"
-        actions={app.plan !== 'platinum'
-          ? <Btn variant="platinum" icon="sparkle" onClick={() => app.upgrade('platinum')}>Upgrade to Platinum</Btn>
-          : wsConnected
-            ? <Badge tone="success" soft dot>Live · WebSocket</Badge>
-            : <Badge tone="warning" soft dot>Live · polling</Badge>} />
+        actions={wsConnected
+          ? <Badge tone="success" soft dot>Live · SignalR</Badge>
+          : <Badge tone="warning" soft dot>Live · polling</Badge>} />
       <div className="col gap16">
         <div className="sm-kpi-grid" style={{ gridTemplateColumns: 'repeat(4,1fr)' }}>
           <Kpi icon="bus" label="Vehicles" value={fleet.length} />
@@ -2100,16 +2129,22 @@ function GpsScreen() {
 
         <DriverModePanel fleet={fleet} />
 
-        <TierGate feature="transport.gps" title="Live GPS bus tracking"
-          blurb="Track every bus on a live map with real-time positions, speed and parent ETA sharing. Available on the Platinum plan.">
-          <Card>
-            <CardHead title="Live map" sub="Real-time vehicle positions" icon="pin"
-              action={located.length > 0 ? <Badge tone="success" soft dot>{located.length} live</Badge> : <Badge tone="neutral" soft>No live GPS</Badge>} />
-            <BusMap buses={fleet} />
-          </Card>
-        </TierGate>
+        <Card>
+          <CardHead title="Live map" sub="Real-time vehicle positions" icon="pin"
+            action={located.length > 0 ? <Badge tone="success" soft dot>{located.length} live</Badge> : <Badge tone="neutral" soft>No live GPS</Badge>} />
+          <FleetLiveMap fleet={fleet} routeStopsByRouteId={routeStopsByRouteId} />
+        </Card>
       </div>
     </div>
+  )
+}
+
+function GpsScreen() {
+  return (
+    <TierGate feature="transport.gps" title="Live GPS bus tracking"
+      blurb="Track every bus on a live map with real-time positions, speed and parent ETA sharing. Available on the Platinum plan.">
+      <GpsScreenBody />
+    </TierGate>
   )
 }
 
@@ -2117,6 +2152,15 @@ function GpsScreen() {
 import type { ComponentType } from 'react'
 export const opsScreens: Record<string, ComponentType> = {
   'school.comm': CommunicationScreen,
-  'school.ops': OperationsScreen,
+  'school.ops': OperationsScreenGated,
   'school.gps': GpsScreen,
+}
+
+function OperationsScreenGated() {
+  return (
+    <TierGate feature="operations" title="Operations"
+      blurb="Transport fleet, hostel, sports and library operations. Available on the Platinum plan.">
+      <OperationsScreen />
+    </TierGate>
+  )
 }

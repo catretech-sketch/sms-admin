@@ -104,3 +104,18 @@ describe('listAttendance local fallback', () => {
     expect(rows[0]).toMatchObject({ classId: 'c1', studentId: 's1', status: 'present', date: '2026-07-16' })
   })
 })
+
+describe('listAttendance empty server', () => {
+  it('returns an empty list when the server has no marks (no local fallback)', async () => {
+    localStorage.setItem('sms_attendance:default', JSON.stringify([{
+      id: 'local-c1-2026-07-16-s1',
+      classId: 'c1',
+      studentId: 's1',
+      date: '2026-07-16',
+      status: 'present',
+    }]))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: [] })))
+    const rows = await listAttendance('c1', '2026-07-16')
+    expect(rows).toEqual([])
+  })
+})

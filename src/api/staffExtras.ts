@@ -94,7 +94,9 @@ export function mergeStaffExtras(s: Staff): Staff {
     bloodGroup: ex.bloodGroup ?? s.bloodGroup,
     maritalStatus: ex.maritalStatus ?? s.maritalStatus,
     altPhone: ex.altPhone ?? s.altPhone,
-    email: ex.email ?? s.email,
+    // Email now comes from the Staff API (backend field, synced to the linked
+    // Users/login row) — prefer it over the legacy localStorage-only extra.
+    email: s.email ?? ex.email,
     fatherName: ex.fatherName ?? s.fatherName,
     motherName: ex.motherName ?? s.motherName,
     aadhaar: ex.aadhaar ?? s.aadhaar,

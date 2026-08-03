@@ -1,21 +1,29 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import {
-  useQuery, useMutation, useQueryClient,
+  useQuery, useMutation, useQueryClient, useQueries,
   type UseQueryResult, type UseMutationResult,
 } from '@tanstack/react-query'
+import * as signalR from '@microsoft/signalr'
+import { snakeToCamel } from '../mapper'
+import { useApp } from '@/lib/hooks'
+import { tierIncludes } from '@/lib/gating'
 import { queryKeys } from '../queryKeys'
 import { config } from '../config'
 import { tokenStore } from '../auth/tokenStore'
 import {
-  getLibrarySummary, getTransportSummary, getTransportFleet,
-  listBusStudents, assignStudentToBus, unassignStudentFromBus, updateBusLocation, sendBusNotification,
-  createBus, listTransportRoutes, createRoute, listRouteStops,
+  getLibrarySummary, getTransportSummary, getTransportFleet, listTransportBuses,
+  listBusStudents, assignStudentToBus, unassignStudentFromBus,
+  updateBusLocation, sendBusNotification, startBusTrip, pingBusTrip, endBusTrip,
+  createRouteStop, updateRouteStop, deleteRouteStop, reorderRouteStops,
+  createBus, updateBus, listTransportRoutes, createRoute, listRouteStops,
   getHostelSummary, listHostelBlocks, createHostelBlock, listHostelRooms, createHostelRoom,
   listHostelResidents, createHostelResident,
   getSportsSummary, listSportsTeams, createSportsTeam, listSportsEvents, createSportsEvent,
   listSportsMedals, createSportsMedal,
-  type LibrarySummary, type TransportSummary, type FleetBus, type StudentBusAssignment,
-  type TransportRoute, type CreateBusInput, type CreateRouteInput, type RouteStop, type BusLocationInput, type SendBusNotificationInput,
+  type LibrarySummary, type TransportSummary, type FleetBus, type TransportBus, type StudentBusAssignment,
+  type TransportRoute, type CreateBusInput, type UpdateBusInput, type CreateRouteInput, type RouteStop,
+  type BusLocationInput, type SendBusNotificationInput, type TripPingInput, type TripSummary,
+  type CreateRouteStopInput,
   type HostelSummary, type SportsSummary,
   type HostelBlock, type HostelRoom, type HostelResident,
   type SportsTeam, type SportsEvent, type SportsMedal,
@@ -23,20 +31,29 @@ import {
   type CreateSportsTeamInput, type CreateSportsEventInput, type CreateSportsMedalInput,
 } from '../operations'
 
+function useOperationsTier(): boolean {
+  const app = useApp()
+  return tierIncludes(app.plan, 'operations')
+}
+
 /* ---------- Library ---------- */
 export function useLibrarySummary(): UseQueryResult<LibrarySummary> {
-  return useQuery({ queryKey: queryKeys.operations.librarySummary, queryFn: getLibrarySummary })
+  const ops = useOperationsTier()
+  return useQuery({ queryKey: queryKeys.operations.librarySummary, queryFn: getLibrarySummary, enabled: ops })
 }
 
 /* ---------- Transport ---------- */
 export function useTransportSummary(): UseQueryResult<TransportSummary> {
-  return useQuery({ queryKey: queryKeys.operations.transportSummary, queryFn: getTransportSummary })
+  const ops = useOperationsTier()
+  return useQuery({ queryKey: queryKeys.operations.transportSummary, queryFn: getTransportSummary, enabled: ops })
 }
 /**
  * Live fleet board. Polls every `refetchMs` (default 5s) while mounted so
  * positions / speed / status stay current without a manual refresh.
  */
-export function useTransportFleet(enabled = true, refetchMs = 5000): UseQueryResult<FleetBus[]> {
+export function useTransportFleet(poll = true, refetchMs = 5000): UseQueryResult<FleetBus[]> {
+  const ops = useOperationsTier()
+  const enabled = poll && ops
   return useQuery({
     queryKey: queryKeys.operations.transportFleet,
     queryFn: getTransportFleet,
@@ -48,10 +65,11 @@ export function useTransportFleet(enabled = true, refetchMs = 5000): UseQueryRes
 
 /** Students assigned to a bus (admin roster). Disabled until a bus is selected. */
 export function useBusStudents(busId: string | null): UseQueryResult<StudentBusAssignment[]> {
+  const ops = useOperationsTier()
   return useQuery({
     queryKey: queryKeys.operations.busStudents(busId ?? ''),
     queryFn: () => listBusStudents(busId as string),
-    enabled: !!busId,
+    enabled: ops && !!busId,
   })
 }
 
@@ -93,73 +111,103 @@ export function useSendBusNotification(): UseMutationResult<{ reach: number }, E
   })
 }
 
+export function useStartBusTrip(): UseMutationResult<void, Error, { busId: string; direction?: string }> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ busId, direction }) => startBusTrip(busId, direction),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportFleet })
+    },
+  })
+}
+
+export function usePingBusTrip(): UseMutationResult<void, Error, { busId: string; pings: TripPingInput[] }> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ busId, pings }) => pingBusTrip(busId, pings),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportFleet })
+    },
+  })
+}
+
+export function useEndBusTrip(): UseMutationResult<TripSummary, Error, { busId: string }> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ busId }) => endBusTrip(busId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportFleet })
+    },
+  })
+}
+
 /**
- * WebSocket subscription for live fleet updates.
- * Connects to `{apiBase}/transport/fleet/live` (ws:// or wss://).
- * When connected, it writes incoming messages directly into the
- * transportFleet query cache — no HTTP round-trip needed.
- * Falls back gracefully: if the backend doesn't support WS, the caller
- * can fall back to polling (check the returned `connected` flag).
- * Reconnects with exponential back-off (1 s → 2 s → … → 30 s).
+ * SignalR subscription for live fleet updates (TransportFleetHub).
+ * Writes incoming snapshots into the transportFleet query cache.
+ * Falls back to HTTP polling when disconnected.
  */
 export function useFleetWebSocket(enabled = true): { connected: boolean } {
+  const ops = useOperationsTier()
   const qc = useQueryClient()
   const [connected, setConnected] = useState(false)
-  const wsRef = useRef<WebSocket | null>(null)
+  const connRef = useRef<signalR.HubConnection | null>(null)
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const backoffRef = useRef(1000)
   const activeRef = useRef(true)
 
   useEffect(() => {
-    if (!enabled) return
+    if (!enabled || !ops) return
     activeRef.current = true
     backoffRef.current = 1000
 
-    const wsBase = config.apiBaseUrl.replace(/^http/, 'ws')
-    const endpoint = wsBase + '/transport/fleet/live'
+    const hubBase = config.apiBaseUrl.replace(/\/v1\/?$/, '')
+    const hubUrl = `${hubBase}/hubs/transport`
+
+    function scheduleReconnect() {
+      if (!activeRef.current) return
+      retryRef.current = setTimeout(() => {
+        backoffRef.current = Math.min(backoffRef.current * 2, 30_000)
+        connect()
+      }, backoffRef.current)
+    }
 
     function connect() {
       if (!activeRef.current) return
       const token = tokenStore.getAccess()
-      const url = token ? `${endpoint}?token=${encodeURIComponent(token)}` : endpoint
-      const ws = new WebSocket(url)
-      wsRef.current = ws
+      const connection = new signalR.HubConnectionBuilder()
+        .withUrl(hubUrl, {
+          accessTokenFactory: () => token ?? '',
+          skipNegotiation: true,
+          transport: signalR.HttpTransportType.WebSockets,
+        })
+        .withAutomaticReconnect([0, 2000, 5000, 10_000, 30_000])
+        .configureLogging(signalR.LogLevel.Warning)
+        .build()
 
-      ws.onopen = () => {
-        setConnected(true)
-        backoffRef.current = 1000
-      }
+      connection.on('fleet_update', (wire: unknown) => {
+        const rows = Array.isArray(wire)
+          ? wire.map((w) => snakeToCamel<FleetBus>(w as Record<string, unknown>))
+          : []
+        qc.setQueryData(queryKeys.operations.transportFleet, rows)
+      })
 
-      ws.onmessage = (ev) => {
-        try {
-          const msg = JSON.parse(ev.data as string) as { type: string; data: unknown }
-          if (msg.type === 'fleet_update' && Array.isArray(msg.data)) {
-            qc.setQueryData(queryKeys.operations.transportFleet, msg.data)
-          } else if (msg.type === 'bus_update' && msg.data && typeof msg.data === 'object') {
-            qc.setQueryData<FleetBus[]>(queryKeys.operations.transportFleet, (prev) => {
-              const update = msg.data as FleetBus
-              if (!prev) return [update]
-              const idx = prev.findIndex((b) => b.busId === update.busId)
-              if (idx === -1) return [...prev, update]
-              const next = [...prev]
-              next[idx] = update
-              return next
-            })
-          }
-        } catch { /* ignore malformed messages */ }
-      }
-
-      ws.onclose = () => {
+      connection.onreconnected(() => setConnected(true))
+      connection.onclose(() => {
         setConnected(false)
-        wsRef.current = null
-        if (!activeRef.current) return
-        retryRef.current = setTimeout(() => {
-          backoffRef.current = Math.min(backoffRef.current * 2, 30_000)
-          connect()
-        }, backoffRef.current)
-      }
+        connRef.current = null
+        scheduleReconnect()
+      })
 
-      ws.onerror = () => { ws.close() }
+      connRef.current = connection
+      connection.start()
+        .then(() => {
+          setConnected(true)
+          backoffRef.current = 1000
+        })
+        .catch(() => {
+          setConnected(false)
+          scheduleReconnect()
+        })
     }
 
     connect()
@@ -167,12 +215,61 @@ export function useFleetWebSocket(enabled = true): { connected: boolean } {
     return () => {
       activeRef.current = false
       if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null }
-      if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); wsRef.current = null }
+      const c = connRef.current
+      connRef.current = null
+      if (c) c.stop().catch(() => {})
       setConnected(false)
     }
-  }, [enabled, qc])
+  }, [enabled, ops, qc])
 
   return { connected }
+}
+
+export function useTransportBuses(): UseQueryResult<TransportBus[]> {
+  const ops = useOperationsTier()
+  return useQuery({
+    queryKey: queryKeys.operations.transportBuses,
+    queryFn: listTransportBuses,
+    enabled: ops,
+  })
+}
+
+export function useUpdateBus(): UseMutationResult<TransportBus, Error, { busId: string } & UpdateBusInput> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ busId, ...input }) => updateBus(busId, input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportBuses })
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportFleet })
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportSummary })
+    },
+  })
+}
+
+/** Route stops for every distinct routeId present in the live fleet board. */
+export function useFleetRouteStops(fleet: FleetBus[]): Record<string, RouteStop[]> {
+  const ops = useOperationsTier()
+  const routeIds = useMemo(
+    () => [...new Set(fleet.map((b) => b.routeId).filter(Boolean))] as string[],
+    [fleet],
+  )
+  const queries = useQueries({
+    queries: routeIds.map((id) => ({
+      queryKey: queryKeys.operations.transportRouteStops(id),
+      queryFn: () => listRouteStops(id),
+      enabled: ops && !!id,
+      staleTime: 60_000,
+    })),
+  })
+  const stopsSnapshots = queries.map((q) => q.data)
+  return useMemo(() => {
+    const out: Record<string, RouteStop[]> = {}
+    routeIds.forEach((id, i) => {
+      const data = stopsSnapshots[i]
+      if (data) out[id] = data
+    })
+    return out
+  }, [routeIds, stopsSnapshots])
 }
 
 export function useCreateBus(): UseMutationResult<FleetBus, Error, CreateBusInput> {
@@ -181,18 +278,21 @@ export function useCreateBus(): UseMutationResult<FleetBus, Error, CreateBusInpu
     mutationFn: createBus,
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: queryKeys.operations.transportFleet })
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportBuses })
       void qc.invalidateQueries({ queryKey: queryKeys.operations.transportSummary })
     },
   })
 }
 export function useTransportRoutes(): UseQueryResult<TransportRoute[]> {
-  return useQuery({ queryKey: queryKeys.operations.transportRoutes, queryFn: listTransportRoutes })
+  const ops = useOperationsTier()
+  return useQuery({ queryKey: queryKeys.operations.transportRoutes, queryFn: listTransportRoutes, enabled: ops })
 }
 export function useRouteStops(routeId: string | null): UseQueryResult<RouteStop[]> {
+  const ops = useOperationsTier()
   return useQuery({
     queryKey: queryKeys.operations.transportRouteStops(routeId ?? ''),
     queryFn: () => listRouteStops(routeId as string),
-    enabled: !!routeId,
+    enabled: ops && !!routeId,
   })
 }
 export function useCreateRoute(): UseMutationResult<TransportRoute, Error, CreateRouteInput> {
@@ -206,18 +306,66 @@ export function useCreateRoute(): UseMutationResult<TransportRoute, Error, Creat
   })
 }
 
+export function useCreateRouteStop(): UseMutationResult<RouteStop, Error, { routeId: string; input: CreateRouteStopInput }> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ routeId, input }) => createRouteStop(routeId, input),
+    onSuccess: (_r, { routeId }) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportRouteStops(routeId) })
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportRoutes })
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportSummary })
+    },
+  })
+}
+
+export function useUpdateRouteStop(): UseMutationResult<RouteStop, Error, { routeId: string; stopId: string; input: CreateRouteStopInput }> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ routeId, stopId, input }) => updateRouteStop(routeId, stopId, input),
+    onSuccess: (_r, { routeId }) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportRouteStops(routeId) })
+    },
+  })
+}
+
+export function useDeleteRouteStop(): UseMutationResult<void, Error, { routeId: string; stopId: string }> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ routeId, stopId }) => deleteRouteStop(routeId, stopId),
+    onSuccess: (_r, { routeId }) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportRouteStops(routeId) })
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportRoutes })
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportSummary })
+    },
+  })
+}
+
+export function useReorderRouteStops(): UseMutationResult<void, Error, { routeId: string; stopIds: string[] }> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ routeId, stopIds }) => reorderRouteStops(routeId, stopIds),
+    onSuccess: (_r, { routeId }) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportRouteStops(routeId) })
+    },
+  })
+}
+
 /* ---------- Hostel ---------- */
 export function useHostelSummary(): UseQueryResult<HostelSummary> {
-  return useQuery({ queryKey: queryKeys.operations.hostelSummary, queryFn: getHostelSummary })
+  const ops = useOperationsTier()
+  return useQuery({ queryKey: queryKeys.operations.hostelSummary, queryFn: getHostelSummary, enabled: ops })
 }
 export function useHostelBlocks(): UseQueryResult<HostelBlock[]> {
-  return useQuery({ queryKey: queryKeys.operations.hostelBlocks, queryFn: listHostelBlocks })
+  const ops = useOperationsTier()
+  return useQuery({ queryKey: queryKeys.operations.hostelBlocks, queryFn: listHostelBlocks, enabled: ops })
 }
 export function useHostelRooms(): UseQueryResult<HostelRoom[]> {
-  return useQuery({ queryKey: queryKeys.operations.hostelRooms, queryFn: listHostelRooms })
+  const ops = useOperationsTier()
+  return useQuery({ queryKey: queryKeys.operations.hostelRooms, queryFn: listHostelRooms, enabled: ops })
 }
 export function useHostelResidents(): UseQueryResult<HostelResident[]> {
-  return useQuery({ queryKey: queryKeys.operations.hostelResidents, queryFn: listHostelResidents })
+  const ops = useOperationsTier()
+  return useQuery({ queryKey: queryKeys.operations.hostelResidents, queryFn: listHostelResidents, enabled: ops })
 }
 
 export function useCreateHostelBlock(): UseMutationResult<HostelBlock, Error, CreateHostelBlockInput> {
@@ -254,16 +402,20 @@ export function useCreateHostelResident(): UseMutationResult<HostelResident, Err
 
 /* ---------- Sports ---------- */
 export function useSportsSummary(): UseQueryResult<SportsSummary> {
-  return useQuery({ queryKey: queryKeys.operations.sportsSummary, queryFn: getSportsSummary })
+  const ops = useOperationsTier()
+  return useQuery({ queryKey: queryKeys.operations.sportsSummary, queryFn: getSportsSummary, enabled: ops })
 }
 export function useSportsTeams(): UseQueryResult<SportsTeam[]> {
-  return useQuery({ queryKey: queryKeys.operations.sportsTeams, queryFn: listSportsTeams })
+  const ops = useOperationsTier()
+  return useQuery({ queryKey: queryKeys.operations.sportsTeams, queryFn: listSportsTeams, enabled: ops })
 }
 export function useSportsEvents(): UseQueryResult<SportsEvent[]> {
-  return useQuery({ queryKey: queryKeys.operations.sportsEvents, queryFn: listSportsEvents })
+  const ops = useOperationsTier()
+  return useQuery({ queryKey: queryKeys.operations.sportsEvents, queryFn: listSportsEvents, enabled: ops })
 }
 export function useSportsMedals(): UseQueryResult<SportsMedal[]> {
-  return useQuery({ queryKey: queryKeys.operations.sportsMedals, queryFn: listSportsMedals })
+  const ops = useOperationsTier()
+  return useQuery({ queryKey: queryKeys.operations.sportsMedals, queryFn: listSportsMedals, enabled: ops })
 }
 
 export function useCreateSportsTeam(): UseMutationResult<SportsTeam, Error, CreateSportsTeamInput> {

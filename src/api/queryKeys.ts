@@ -1,26 +1,33 @@
+import { tokenStore } from './auth/tokenStore'
 import type { ListStudentsOpts, ListTeachersOpts, ListStaffOpts } from '@/types'
+
+/** JWT / X-Tenant-Id scope — keeps React Query caches per school after switch-school. */
+function tenantScope(): string {
+  return tokenStore.getTenantId() ?? 'none'
+}
 
 export const queryKeys = {
   students: {
     all: ['students'] as const,
-    list: (opts: ListStudentsOpts = {}) => ['students', 'list', opts] as const,
-    detail: (id: string) => ['students', 'detail', id] as const,
+    list: (opts: ListStudentsOpts = {}) => ['students', 'list', tenantScope(), opts] as const,
+    detail: (id: string) => ['students', 'detail', tenantScope(), id] as const,
   },
   teachers: {
     all: ['teachers'] as const,
-    list: (opts: ListTeachersOpts = {}) => ['teachers', 'list', opts] as const,
-    detail: (id: string) => ['teachers', 'detail', id] as const,
+    list: (opts: ListTeachersOpts = {}) => ['teachers', 'list', tenantScope(), opts] as const,
+    detail: (id: string) => ['teachers', 'detail', tenantScope(), id] as const,
   },
   staff: {
     all: ['staff'] as const,
-    list: (opts: ListStaffOpts = {}) => ['staff', 'list', opts] as const,
-    detail: (id: string) => ['staff', 'detail', id] as const,
+    list: (opts: ListStaffOpts = {}) => ['staff', 'list', tenantScope(), opts] as const,
+    detail: (id: string) => ['staff', 'detail', tenantScope(), id] as const,
   },
   notifications: {
     all: ['notifications'] as const,
   },
   approvals: {
     all: ['approvals'] as const,
+    list: (status = 'pending') => ['approvals', 'list', status] as const,
   },
   users: {
     all: ['users'] as const,
@@ -43,7 +50,8 @@ export const queryKeys = {
   },
   attendance: {
     forClass: (classId: string, date = '') => ['attendance', classId, date] as const,
-    principal: (date = '') => ['attendance', 'principal', date] as const,
+    principal: (date = '') => ['attendance', 'principal', tenantScope(), date] as const,
+    schoolLocation: ['attendance', 'schoolLocation', tenantScope()] as const,
     studentMonths: (studentId: string, classId = '') => ['attendance', 'studentMonths', studentId, classId] as const,
   },
   exams: {
@@ -60,6 +68,9 @@ export const queryKeys = {
   },
   announcements: {
     all: ['announcements'] as const,
+  },
+  assignments: {
+    all: ['assignments'] as const,
   },
   feePayments: {
     all: ['feePayments'] as const,
@@ -87,6 +98,7 @@ export const queryKeys = {
     librarySummary: ['operations', 'library', 'summary'] as const,
     transportSummary: ['operations', 'transport', 'summary'] as const,
     transportFleet: ['operations', 'transport', 'fleet'] as const,
+    transportBuses: ['operations', 'transport', 'buses'] as const,
     transportRoutes: ['operations', 'transport', 'routes'] as const,
     busStudents: (busId: string) => ['operations', 'transport', 'busStudents', busId] as const,
     transportRouteStops: (routeId: string) => ['operations', 'transport', 'routeStops', routeId] as const,

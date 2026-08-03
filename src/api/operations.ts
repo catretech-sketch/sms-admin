@@ -1,40 +1,8 @@
 import { request } from './client'
 import { snakeToCamel, camelToSnake } from './mapper'
-import type { BusStatus } from '@/types'
 
 /* ---------- KPI summaries ---------- */
 export interface LibrarySummary { catalogue: number; members: number; issued: number; finesDue: number }
-export interface TransportSummary { vehicles: number; routes: number; students: number; stops: number }
-
-/* ---------- Live fleet board (GET /v1/transport/fleet) ---------- */
-export interface FleetBus {
-  busId: string
-  routeId?: string | null
-  busNo: string
-  routeName?: string | null
-  driver?: string | null
-  driverPhone?: string | null
-  stopCount: number
-  studentsRiding: number
-  status: BusStatus
-  lat?: number | null
-  lng?: number | null
-  speedKmh?: number | null
-  nextStopName?: string | null
-  lastPingAt?: string | null
-}
-/* ---------- Student → bus roster (admin) ---------- */
-export interface StudentBusAssignment {
-  studentId: string
-  studentName: string
-  initials: string
-  admissionNo: string
-  busId: string
-  busNo: string
-  routeName?: string | null
-  stopId?: string | null
-  stopName?: string | null
-}
 
 export interface HostelSummary { blocks: number; rooms: number; residents: number; occupancyPct: number }
 export interface SportsSummary { teams: number; events: number; athletes: number; medals: number }
@@ -65,91 +33,18 @@ export async function getLibrarySummary(): Promise<LibrarySummary> {
   return asObj<LibrarySummary>(await request<Record<string, unknown>>('/library/summary'))
 }
 
-/* ---------- Transport ---------- */
-export interface CreateBusInput { busNo: string; routeName?: string | null; driver?: string | null; driverPhone?: string | null }
-export interface TransportRoute { id: string; name: string; stops: number }
-export interface CreateRouteInput { name: string; stops?: number }
-
-export async function getTransportSummary(): Promise<TransportSummary> {
-  return asObj<TransportSummary>(await request<Record<string, unknown>>('/transport/summary'))
-}
-export async function getTransportFleet(): Promise<FleetBus[]> {
-  return asList<FleetBus>(await request<Record<string, unknown>[]>('/transport/fleet'))
-}
-export async function createBus(input: CreateBusInput): Promise<FleetBus> {
-  const busNo = input.busNo.trim()
-  if (!busNo) throw new Error('Bus number is required')
-  const body = camelToSnake({ busNo, routeName: input.routeName?.trim() || null, driver: input.driver?.trim() || null, driverPhone: input.driverPhone?.trim() || null })
-  return asObj<FleetBus>(await request<Record<string, unknown>>('/transport/buses', { method: 'POST', body }))
-}
-export async function listTransportRoutes(): Promise<TransportRoute[]> {
-  return asList<TransportRoute>(await request<Record<string, unknown>[]>('/transport/routes'))
-}
-export async function createRoute(input: CreateRouteInput): Promise<TransportRoute> {
-  const name = input.name.trim()
-  if (!name) throw new Error('Route name is required')
-  const body = camelToSnake({ name, stops: Math.max(1, (input.stops ?? 1) | 0) })
-  return asObj<TransportRoute>(await request<Record<string, unknown>>('/transport/routes', { method: 'POST', body }))
-}
-
-export interface RouteStop {
-  id: string
-  routeId: string
-  name: string
-  sequence: number
-  lat?: number | null
-  lng?: number | null
-}
-
-export async function listRouteStops(routeId: string): Promise<RouteStop[]> {
-  if (!routeId) return []
-  return asList<RouteStop>(await request<Record<string, unknown>[]>(`/transport/routes/${routeId}/stops`))
-}
-
-export async function listBusStudents(busId: string): Promise<StudentBusAssignment[]> {
-  if (!busId) throw new Error('Pick a bus')
-  return asList<StudentBusAssignment>(await request<Record<string, unknown>[]>(`/transport/buses/${busId}/students`))
-}
-export async function assignStudentToBus(busId: string, studentId: string, stopId?: string | null): Promise<void> {
-  if (!busId) throw new Error('Pick a bus')
-  if (!studentId) throw new Error('Pick a student')
-  await request<void>(`/transport/buses/${busId}/students/${studentId}`, {
-    method: 'PUT', body: camelToSnake({ stopId: stopId || null }),
-  })
-}
-export async function unassignStudentFromBus(busId: string, studentId: string): Promise<void> {
-  if (!busId || !studentId) throw new Error('Missing bus or student')
-  await request<void>(`/transport/buses/${busId}/students/${studentId}`, { method: 'DELETE' })
-}
-
-export interface BusLocationInput {
-  lat?: number
-  lng?: number
-  speedKmh?: number
-  status?: BusStatus
-}
-
-export async function updateBusLocation(busId: string, input: BusLocationInput): Promise<void> {
-  if (!busId) throw new Error('Bus ID required')
-  await request<void>(`/transport/buses/${busId}/location`, {
-    method: 'PUT',
-    body: camelToSnake(input),
-  })
-}
-
-export interface SendBusNotificationInput {
-  eventType: 'departed' | 'approaching' | 'arrived'
-  stopId?: string | null
-  channels: ('push' | 'sms')[]
-}
-
-export async function sendBusNotification(busId: string, input: SendBusNotificationInput): Promise<{ reach: number }> {
-  if (!busId) throw new Error('Bus ID required')
-  return request<{ reach: number }>(`/transport/buses/${busId}/notify`, {
-    method: 'POST',
-    body: camelToSnake(input),
-  })
-}
+/* ---------- Transport (re-exported from transport module) ---------- */
+export {
+  getTransportSummary, getTransportFleet, listTransportBuses, createBus, updateBus,
+  listTransportRoutes, createRoute,
+  listRouteStops, listBusStudents, assignStudentToBus, unassignStudentFromBus,
+  updateBusLocation, sendBusNotification, startBusTrip, pingBusTrip, endBusTrip,
+  createRouteStop, updateRouteStop, deleteRouteStop, reorderRouteStops,
+  type TransportSummary, type FleetBus, type TransportBus, type StudentBusAssignment,
+  type CreateBusInput, type UpdateBusInput, type TransportRoute, type CreateRouteInput, type RouteStop,
+  type BusLocationInput, type SendBusNotificationInput, type TripPingInput, type TripSummary,
+  type CreateRouteStopInput,
+} from './transport'
 
 /* ---------- Hostel ---------- */
 export async function getHostelSummary(): Promise<HostelSummary> {

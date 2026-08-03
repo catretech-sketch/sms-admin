@@ -5,13 +5,13 @@ import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import {
   Card, CardHead, Kpi, PageHead, Badge, Btn, Icon, Avatar,
-  Donut, Bars, LineChart, Legend, Empty,
+  Donut, Bars, LineChart, Legend, Empty, Modal, Field, Textarea, Segmented,
 } from '@/components/ui'
 import type { BadgeTone } from '@/components/ui'
 import { SchoolPhoto } from '@/components/SchoolMark'
 import { grades } from '@/data/mockDb'
 import { useApprovals } from '@/api/hooks/useApprovals'
-import { approvalsForRole } from '@/api/approvals'
+import { approvalsForRole, type ApprovalFilter } from '@/api/approvals'
 import { useActOnApproval } from '@/api/hooks/useApprovalMutations'
 import { useStudents } from '@/api/hooks/useStudents'
 import { useTeachers } from '@/api/hooks/useTeachers'
@@ -25,7 +25,8 @@ import {
   type CheckInInfo,
 } from '@/api/peopleAttendance'
 import { fmtMoney, fmtNum } from '@/lib/format'
-import type { Approval, Role } from '@/types'
+import { principalStaffToCheckInMap } from '@/lib/geoAttendanceDemo'
+import type { Approval, ApprovalStatus, Role } from '@/types'
 
 /* ---------- small helpers ---------- */
 const STAGES = [
@@ -95,16 +96,12 @@ function SchoolDashboard() {
     ? Math.round((studentsPresent / studentTotal) * 100)
     : (attQ.data ? Math.round(Number(attQ.data.overallPct) || 0) : Math.round(s.attendance || 0))
 
-  /* Teachers: teacher-app check-in OR CRM Attendance mark — same rule as the Attendance roster. */
+  /* Teachers & staff: app check-in OR CRM mark — same rule as Attendance roster. */
   const teachersPresent = useMemo(() => {
     const teachers = teachersQ.data ?? []
     if (!teachers.length) return 0
     const marks = loadPeopleAttendance('teachers', today)
-    const checkIn = new Map<string, CheckInInfo>()
-    for (const row of attQ.data?.staff ?? []) {
-      checkIn.set(row.teacherId, { checkedIn: row.checkedIn, at: row.checkInAt })
-      checkIn.set(row.name.toLowerCase(), { checkedIn: row.checkedIn, at: row.checkInAt })
-    }
+    const checkIn = attQ.isSuccess ? principalStaffToCheckInMap(attQ.data?.staff ?? []) : new Map<string, CheckInInfo>()
     return countPeoplePresent(
       'teachers',
       teachers.map((t) => ({ id: t.id, name: t.name })),
@@ -115,13 +112,18 @@ function SchoolDashboard() {
 
   const teacherRate = liveTeachers ? Math.round((teachersPresent / liveTeachers) * 100) : 0
 
-  /* Support staff: CRM Attendance · Staff tab marks for today */
   const supportPresent = useMemo(() => {
     const staff = staffQ.data ?? []
     if (!staff.length) return 0
     const marks = loadPeopleAttendance('staff', today)
-    return countPeoplePresent('staff', staff.map((p) => ({ id: p.id, name: p.name })), marks)
-  }, [staffQ.data, today, peopleAttTick])
+    const checkIn = attQ.isSuccess ? principalStaffToCheckInMap(attQ.data?.staff ?? []) : new Map<string, CheckInInfo>()
+    return countPeoplePresent(
+      'staff',
+      staff.map((p) => ({ id: p.id, name: p.name })),
+      marks,
+      { checkIn, principalKnown: attQ.isSuccess },
+    )
+  }, [staffQ.data, attQ.data, attQ.isSuccess, today, peopleAttTick])
 
   const supportRate = liveSupport ? Math.round((supportPresent / liveSupport) * 100) : 0
 
@@ -505,70 +507,249 @@ const PRIORITY_TONE: Record<Approval['priority'], BadgeTone> = {
   low: 'neutral',
 }
 
-function ApprovalsInbox() {
-  const app = useApp()
-  const toast = useToast()
-  const [acted, setActed] = useState<Set<string>>(new Set())
-  const actOn = useActOnApproval()
+const STATUS_TONE: Record<ApprovalStatus, BadgeTone> = {
+  pending: 'warning',
+  approved: 'success',
+  rejected: 'danger',
+}
 
-  const { data: approvalsData } = useApprovals()
-  const list = approvalsForRole(approvalsData ?? [], app.role).filter((a) => !acted.has(a.id))
+const STATUS_LABEL: Record<ApprovalStatus, string> = {
+  pending: 'Pending',
+  approved: 'Approved',
+  rejected: 'Rejected',
+}
 
-  const act = (a: Approval, kind: 'approve' | 'reject') => {
-    setActed((prev) => new Set(prev).add(a.id))
-    actOn.mutate({ id: a.id, status: kind === 'approve' ? 'approved' : 'rejected' })
-    if (kind === 'approve') toast.success('Approved', `${a.title} — ${a.id}`)
-    else toast.danger('Rejected', `${a.title} — ${a.id}`)
-  }
+const TAB_META: Record<ApprovalFilter, { sub: string; emptyTitle: string; emptyBody: string }> = {
+  pending: {
+    sub: 'Pending your action',
+    emptyTitle: 'All caught up',
+    emptyBody: 'No approvals pending your action.',
+  },
+  approved: {
+    sub: 'Approved requests',
+    emptyTitle: 'No approved requests',
+    emptyBody: 'Approved leave and workflow items will appear here.',
+  },
+  rejected: {
+    sub: 'Rejected requests',
+    emptyTitle: 'No rejected requests',
+    emptyBody: 'Rejected items and their notes are kept here for reference.',
+  },
+  all: {
+    sub: 'Full approval track record',
+    emptyTitle: 'No approval history',
+    emptyBody: 'Pending, approved, and rejected requests will show here.',
+  },
+}
 
+function ApprovalCard({
+  a,
+  currency,
+  showActions,
+  onApprove,
+  onReject,
+}: {
+  a: Approval
+  currency: string
+  showActions: boolean
+  onApprove: (a: Approval) => void
+  onReject: (a: Approval) => void
+}) {
   return (
-    <div className="col gap20">
-      <PageHead title="Approvals" sub="Pending your action" />
+    <Card>
+      <div className="row ai-center jc-between gap12 wrap">
+        <div className="row ai-center gap8 wrap">
+          <Badge tone={STATUS_TONE[a.status]} dot>{STATUS_LABEL[a.status]}</Badge>
+          <Badge tone={PRIORITY_TONE[a.priority]} solid={a.priority === 'high'}>
+            {a.priority} priority
+          </Badge>
+          <Badge tone="neutral" icon="layers">{a.type}</Badge>
+          <span className="t-xs muted3">{a.id}</span>
+        </div>
+        <span className="t-xs muted3 row ai-center gap6">
+          <Icon name="clock" size={13} />{a.age}{a.age ? ' ago' : ''}
+        </span>
+      </div>
 
-      {list.length === 0 ? (
-        <Empty icon="checkCircle" title="All caught up" body="No approvals pending your action." />
-      ) : (
-        <div className="col gap16">
-          {list.map((a) => (
-            <Card key={a.id}>
-              <div className="row ai-center jc-between gap12 wrap">
-                <div className="row ai-center gap8 wrap">
-                  <Badge tone={PRIORITY_TONE[a.priority]} solid={a.priority === 'high'}>
-                    {a.priority} priority
-                  </Badge>
-                  <Badge tone="neutral" icon="layers">{a.type}</Badge>
-                  <span className="t-xs muted3">{a.id}</span>
-                </div>
-                <span className="t-xs muted3 row ai-center gap6">
-                  <Icon name="clock" size={13} />{a.age} ago
-                </span>
-              </div>
+      <div className="sm-card-title" style={{ marginTop: 12 }}>{a.title}</div>
+      <div className="t-sm muted" style={{ marginTop: 4 }}>{a.detail}</div>
 
-              <div className="sm-card-title" style={{ marginTop: 12 }}>{a.title}</div>
-              <div className="t-sm muted" style={{ marginTop: 4 }}>{a.detail}</div>
-
-              <div className="row ai-center jc-between gap12 wrap" style={{ marginTop: 14 }}>
-                <div className="row ai-center gap10">
-                  <Avatar name={a.requester} size={32} />
-                  <div>
-                    <div className="t-md" style={{ fontWeight: 600 }}>{a.requester}</div>
-                    <div className="t-xs muted3">{a.role}</div>
-                  </div>
-                  {a.amount != null && (
-                    <Badge tone="info" icon="rupee" style={{ marginLeft: 6 }}>
-                      {fmtMoney(a.amount, app.school.currency)}
-                    </Badge>
-                  )}
-                </div>
-                <div className="row ai-center gap8">
-                  <Btn variant="secondary" icon="x" onClick={() => act(a, 'reject')}>Reject</Btn>
-                  <Btn variant="primary" icon="check" onClick={() => act(a, 'approve')}>Approve</Btn>
-                </div>
-              </div>
-            </Card>
+      {a.attachmentUrls && a.attachmentUrls.length > 0 && (
+        <div className="row gap8 wrap" style={{ marginTop: 10 }}>
+          {a.attachmentUrls.map((url, i) => (
+            <a key={i} href={url} target="_blank" rel="noopener noreferrer">
+              <img
+                src={url}
+                alt={`Attachment ${i + 1}`}
+                style={{ width: 56, height: 56, borderRadius: 8, objectFit: 'cover', display: 'block' }}
+              />
+            </a>
           ))}
         </div>
       )}
+
+      {a.decidedNote && a.status !== 'pending' && (
+        <div className="t-sm" style={{
+          marginTop: 10, padding: '10px 12px', borderRadius: 10,
+          background: a.status === 'rejected' ? 'var(--danger-bg)' : 'var(--success-bg)',
+          color: a.status === 'rejected' ? 'var(--danger)' : 'var(--success)',
+        }}>
+          <span className="fw6">{a.status === 'rejected' ? 'Rejection note: ' : 'Decision note: '}</span>
+          {a.decidedNote}
+        </div>
+      )}
+
+      <div className="row ai-center jc-between gap12 wrap" style={{ marginTop: 14 }}>
+        <div className="row ai-center gap10">
+          <Avatar name={a.requester} size={32} />
+          <div>
+            <div className="t-md" style={{ fontWeight: 600 }}>{a.requester}</div>
+            <div className="t-xs muted3">{a.role || 'Requester'}</div>
+          </div>
+          {a.amount != null && (
+            <Badge tone="info" icon="rupee" style={{ marginLeft: 6 }}>
+              {fmtMoney(a.amount, currency)}
+            </Badge>
+          )}
+        </div>
+        {showActions && a.status === 'pending' && (
+          <div className="row ai-center gap8">
+            <Btn variant="secondary" icon="x" onClick={() => onReject(a)}>Reject</Btn>
+            <Btn variant="primary" icon="check" onClick={() => onApprove(a)}>Approve</Btn>
+          </div>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+function ApprovalsInbox() {
+  const app = useApp()
+  const toast = useToast()
+  const [tab, setTab] = useState<ApprovalFilter>('pending')
+  const [acted, setActed] = useState<Set<string>>(new Set())
+  const [rejecting, setRejecting] = useState<Approval | null>(null)
+  const [rejectNote, setRejectNote] = useState('')
+  const [rejectErr, setRejectErr] = useState('')
+  const actOn = useActOnApproval()
+
+  const { data: approvalsData, isLoading } = useApprovals({ status: tab })
+  const list = approvalsForRole(approvalsData ?? [], app.role).filter((a) => !acted.has(a.id))
+  const meta = TAB_META[tab]
+
+  const approve = (a: Approval) => {
+    setActed((prev) => new Set(prev).add(a.id))
+    actOn.mutate(
+      { id: a.id, status: 'approved' },
+      {
+        onSuccess: () => toast.success('Approved', `${a.title} — ${a.id}`),
+        onError: () => setActed((prev) => { const next = new Set(prev); next.delete(a.id); return next }),
+      },
+    )
+  }
+
+  const openReject = (a: Approval) => {
+    setRejecting(a)
+    setRejectNote('')
+    setRejectErr('')
+  }
+
+  const closeReject = () => {
+    if (actOn.isPending) return
+    setRejecting(null)
+    setRejectNote('')
+    setRejectErr('')
+  }
+
+  const confirmReject = () => {
+    if (!rejecting) return
+    const note = rejectNote.trim()
+    if (!note) {
+      setRejectErr('Add a short reason for rejection')
+      return
+    }
+    setRejectErr('')
+    setActed((prev) => new Set(prev).add(rejecting.id))
+    actOn.mutate(
+      { id: rejecting.id, status: 'rejected', decidedNote: note },
+      {
+        onSuccess: () => {
+          toast.danger('Rejected', `${rejecting.title} — ${rejecting.id}`)
+          setRejecting(null)
+          setRejectNote('')
+        },
+        onError: () => setActed((prev) => { const next = new Set(prev); next.delete(rejecting.id); return next }),
+      },
+    )
+  }
+
+  const showActions = tab === 'pending' || tab === 'all'
+
+  return (
+    <div className="col gap20">
+      <PageHead title="Approvals" sub={meta.sub} />
+
+      <Segmented
+        value={tab}
+        onChange={(v) => setTab(v as ApprovalFilter)}
+        options={[
+          { value: 'pending', label: 'Pending' },
+          { value: 'approved', label: 'Approved' },
+          { value: 'rejected', label: 'Rejected' },
+          { value: 'all', label: 'All' },
+        ]}
+      />
+
+      {isLoading ? (
+        <Empty icon="inbox" title="Loading…" body="Fetching approval records." />
+      ) : list.length === 0 ? (
+        <Empty icon="checkCircle" title={meta.emptyTitle} body={meta.emptyBody} />
+      ) : (
+        <div className="col gap16">
+          {list.map((a) => (
+            <ApprovalCard
+              key={a.id}
+              a={a}
+              currency={app.school.currency}
+              showActions={showActions}
+              onApprove={approve}
+              onReject={openReject}
+            />
+          ))}
+        </div>
+      )}
+
+      <Modal
+        open={rejecting != null}
+        onClose={closeReject}
+        size="sm"
+        icon="x"
+        title="Reject approval"
+        sub={rejecting?.title}
+        footer={(
+          <div className="row ai-center jc-end gap8">
+            <Btn variant="secondary" onClick={closeReject} disabled={actOn.isPending}>Cancel</Btn>
+            <Btn variant="danger" icon="x" onClick={confirmReject} disabled={actOn.isPending}>
+              {actOn.isPending ? 'Rejecting…' : 'Reject'}
+            </Btn>
+          </div>
+        )}
+      >
+        <Field
+          label="Rejection note"
+          required
+          hint="This note is saved on the request and visible to the requester."
+          error={rejectErr}
+        >
+          <Textarea
+            rows={4}
+            placeholder="Reason for rejection…"
+            value={rejectNote}
+            onChange={(e) => { setRejectNote(e.target.value); if (rejectErr) setRejectErr('') }}
+            autoFocus
+          />
+        </Field>
+      </Modal>
     </div>
   )
 }

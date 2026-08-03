@@ -65,12 +65,12 @@ describe('notifyExamAudience', () => {
   it('notifies marks and attendance for one class', async () => {
     const { createAnnouncement } = await import('@/api/announcements')
     await notifyExamAudience(exam, 'Demo School', 'marks', {
-      email: false, sms: false, app: true,
+      email: true, sms: false, app: true,
     }, 'parents', { classLabel: 'VI-A', subject: 'Math' })
     expect(createAnnouncement).toHaveBeenCalledWith(expect.objectContaining({
       type: 'exam_marks',
-      title: expect.stringContaining('Math'),
-      channels: ['app'],
+      title: expect.stringMatching(/Marks published.*Math/i),
+      channels: ['email', 'app'],
       emails: ['parent@school.test'],
       phones: ['9876543210'],
     }))

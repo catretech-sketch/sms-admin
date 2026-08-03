@@ -120,6 +120,7 @@ function ClassPanel({
   summaryPresent,
   summaryTotal,
   summaryPct,
+  summaryMarked,
   localCount,
 }: {
   cls: SchoolClass
@@ -131,6 +132,7 @@ function ClassPanel({
   summaryPresent?: number
   summaryTotal?: number
   summaryPct?: number
+  summaryMarked?: number
   localCount?: LocalCount
 }) {
   const toast = useToast()
@@ -171,14 +173,14 @@ function ClassPanel({
   if (open) {
     total = Math.max(roster.length, summaryTotal && summaryTotal > 0 ? summaryTotal : 0)
     present = rosterPresent
-    marked = fromServer || (localCount != null && localCount.total > 0) || hasDraft
+    marked = fromServer || (summaryMarked ?? 0) > 0 || hasDraft
+  } else if ((summaryMarked ?? 0) > 0 || (summaryPresent != null && summaryPresent > 0) || (summaryTotal != null && summaryTotal > 0)) {
+    total = Math.max(roster.length, summaryTotal ?? 0)
+    present = summaryPresent ?? 0
+    marked = true
   } else if (localCount != null && localCount.total > 0) {
     total = Math.max(roster.length, localCount.total)
     present = localCount.present
-    marked = true
-  } else if (summaryTotal != null && summaryTotal > 0) {
-    total = Math.max(roster.length, summaryTotal)
-    present = summaryPresent ?? 0
     marked = true
   } else {
     total = roster.length
@@ -338,10 +340,10 @@ function ClassPanel({
   )
 }
 
-type ClassSummary = { present: number; total: number; pct: number }
+type ClassSummary = { present: number; total: number; pct: number; marked?: number }
 
 /** Present/total + whether the section is actually marked for the day.
-    Priority: local saved marks → principal summary → unmarked (roll only). */
+    Priority: principal summary (server / teacher app) → local saved marks → unmarked. */
 function sectionCounts(
   cls: SchoolClass,
   summaryById: Map<string, ClassSummary>,
@@ -349,13 +351,14 @@ function sectionCounts(
   localByClass: Map<string, LocalCount>,
 ): { present: number; total: number; marked: boolean } {
   const rosterSize = students.filter((s) => studentMatchesClass(s, cls)).length
+  const classKey = cls.id?.toLowerCase() ?? ''
+  const sum = summaryById.get(classKey)
+  if (sum && (sum.marked ?? 0) > 0) {
+    return { present: sum.present, total: Math.max(rosterSize, sum.total), marked: true }
+  }
   const local = localByClass.get(cls.id!)
   if (local && local.total > 0) {
     return { present: local.present, total: Math.max(rosterSize, local.total), marked: true }
-  }
-  const sum = summaryById.get(cls.id!)
-  if (sum && sum.total > 0) {
-    return { present: sum.present, total: Math.max(rosterSize, sum.total), marked: true }
   }
   return { present: 0, total: rosterSize, marked: false }
 }
@@ -475,7 +478,7 @@ function GradeGroup({
         <div className="sm-att-class-body">
           <div className="sm-att-class-list" style={{ padding: 12, gap: 8 }}>
             {sections.map((c) => {
-              const sum = summaryById.get(c.id!)
+              const sum = summaryById.get(c.id!.toLowerCase())
               return (
                 <ClassPanel
                   key={c.id}
@@ -488,6 +491,7 @@ function GradeGroup({
                   summaryPresent={sum?.present}
                   summaryTotal={sum?.total}
                   summaryPct={sum?.pct}
+                  summaryMarked={sum?.marked}
                   localCount={localByClass.get(c.id!)}
                 />
               )
@@ -1200,9 +1204,14 @@ export function ClassWiseStudents({ editable, leadership }: { editable: boolean;
   )
 
   const summaryById = useMemo(() => {
-    const m = new Map<string, { present: number; total: number; pct: number }>()
+    const m = new Map<string, { present: number; total: number; pct: number; marked: number }>()
     for (const row of principalQ.data?.classes ?? []) {
-      m.set(row.classId, { present: row.present, total: row.total, pct: Number(row.pct) || 0 })
+      m.set(String(row.classId).toLowerCase(), {
+        present: row.present,
+        total: row.total,
+        pct: Number(row.pct) || 0,
+        marked: row.marked ?? 0,
+      })
     }
     return m
   }, [principalQ.data])

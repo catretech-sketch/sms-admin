@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { listApprovals, actOnApproval } from './approvals'
+import { listApprovals, actOnApproval, mapWireToApproval, approvalsForRole } from './approvals'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -9,18 +9,67 @@ beforeEach(() => { localStorage.clear(); vi.restoreAllMocks() })
 
 describe('listApprovals', () => {
   it('maps for_roles -> forRoles and returns the list', async () => {
-    const wire = { data: [{ id: 'A1', type: 'leave', module: 'hr', cap: 'hr.approve', title: 'Leave', detail: '2 days', requester: 'Asha', role: 'teacher', amount: null, age: '3h', priority: 'high', for_roles: ['principal', 'admin'] }], next_cursor: null }
+    const wire = { data: [{ id: 'A1', type: 'leave', module: 'hr', cap: 'hr.approve', title: 'Leave', detail: '2 days', requester: 'Asha', role: 'teacher', amount: null, age: '3h', priority: 'high', status: 'pending', for_roles: ['principal', 'admin'] }], next_cursor: null }
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(wire)))
     const rows = await listApprovals()
     expect(rows[0]).toMatchObject({ id: 'A1', priority: 'high', forRoles: ['principal', 'admin'], amount: null })
     expect((rows[0] as unknown as Record<string, unknown>).for_roles).toBeUndefined()
   })
 
-  it('requests /approvals', async () => {
+  it('requests /approvals with status filter', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: [], next_cursor: null }))
     vi.stubGlobal('fetch', fetchMock)
-    await listApprovals()
+    await listApprovals('approved')
     expect(fetchMock.mock.calls[0][0]).toContain('/approvals')
+    expect(fetchMock.mock.calls[0][0]).toContain('status=approved')
+  })
+})
+
+describe('mapWireToApproval', () => {
+  it('maps leave rows without for_roles to principal inbox items', () => {
+    const row = mapWireToApproval({
+      id: 'b1f2c3d4-e5f6-7890-abcd-ef1234567890',
+      type: 'casual',
+      from_date: '2026-05-20',
+      to_date: '2026-05-21',
+      reason: 'Personal work',
+      substitute: 'Cover arranged',
+      priority: 'high',
+      status: 'pending',
+      applied_on: '2026-05-18T10:00:00Z',
+      requester_name: 'Rajesh Kumar',
+    })
+    expect(row).toMatchObject({
+      id: 'b1f2c3d4-e5f6-7890-abcd-ef1234567890',
+      type: 'Leave Request',
+      requester: 'Rajesh Kumar',
+      priority: 'high',
+      status: 'pending',
+      forRoles: ['principal', 'vice_principal'],
+    })
+    expect(row.detail).toContain('Personal work')
+    expect(approvalsForRole([row], 'principal')).toHaveLength(1)
+  })
+
+  it('maps attachment_urls JSON on leave rows', () => {
+    const row = mapWireToApproval({
+      id: 'x',
+      type: 'casual',
+      status: 'pending',
+      requester_name: 'Asha',
+      applied_on: '2026-05-18T10:00:00Z',
+      attachment_urls: '["https://example.com/a.jpg","https://example.com/b.jpg"]',
+    })
+    expect(row.attachmentUrls).toEqual(['https://example.com/a.jpg', 'https://example.com/b.jpg'])
+  })
+
+  it('maps decided_note on rejected leave rows', () => {
+    const row = mapWireToApproval({
+      id: 'x', type: 'casual', status: 'rejected', decided_note: 'No cover arranged',
+      requester_name: 'Asha', applied_on: '2026-05-18T10:00:00Z',
+    })
+    expect(row.status).toBe('rejected')
+    expect(row.decidedNote).toBe('No cover arranged')
   })
 })
 
@@ -33,5 +82,16 @@ describe('actOnApproval', () => {
     expect(url).toContain('/approvals/A1')
     expect((init as RequestInit).method).toBe('PATCH')
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({ status: 'approved' })
+  })
+
+  it('PATCHes decided_note when rejecting with a note', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { ok: true } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await actOnApproval('A1', 'rejected', 'Not enough cover arranged')
+    const [, init] = fetchMock.mock.calls[0]
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      status: 'rejected',
+      decided_note: 'Not enough cover arranged',
+    })
   })
 })

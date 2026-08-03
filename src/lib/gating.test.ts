@@ -23,13 +23,21 @@ describe('gating', () => {
   it('tierIncludes respects tier order', () => {
     expect(tierIncludes('silver', 'sis')).toBe(true)
     expect(tierIncludes('silver', 'hr_payroll')).toBe(false)
-    expect(tierIncludes('gold', 'hr_payroll')).toBe(true)
+    expect(tierIncludes('gold', 'hr_payroll')).toBe(false)
     expect(tierIncludes('gold', 'transport.gps')).toBe(false)
+    expect(tierIncludes('platinum', 'hr_payroll')).toBe(true)
+    expect(tierIncludes('silver', 'operations')).toBe(false)
+    expect(tierIncludes('platinum', 'operations')).toBe(true)
+    expect(tierIncludes('platinum', 'staff_support')).toBe(true)
+    expect(tierIncludes('gold', 'staff_support')).toBe(false)
     expect(tierIncludes('platinum', 'transport.gps')).toBe(true)
+    expect(tierIncludes('silver', 'attendance.geofence')).toBe(false)
+    expect(tierIncludes('gold', 'attendance.geofence')).toBe(false)
+    expect(tierIncludes('platinum', 'attendance.geofence')).toBe(true)
   })
   it('requiredTier defaults to silver for unknown features', () => {
     expect(requiredTier('nonexistent')).toBe('silver')
-    expect(requiredTier('hr_payroll')).toBe('gold')
+    expect(requiredTier('hr_payroll')).toBe('platinum')
   })
   it('can() reads the permission matrix', () => {
     expect(can('admin', 'sis', 'E')).toBe(true)

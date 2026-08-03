@@ -34,9 +34,14 @@ export function toTeacher(wire: Record<string, unknown>): Teacher {
   const base = {
     ...rest,
     subjects: normalizeSubjects(subjects),
-    dept: department,
-    desig: designation,
-    attendance: attendancePct,
+    dept: String(department ?? ''),
+    desig: String(designation ?? ''),
+    attendance: Number(attendancePct ?? 0),
+    exp: Number(c.exp ?? 0),
+    rating: Number(c.rating ?? 0),
+    result: Number(c.result ?? 0),
+    load: Number(c.load ?? 0),
+    top: Boolean(c.top),
     code: typeof employeeCode === 'string' ? employeeCode : undefined,
   } as unknown as Teacher
   return mergeTeacherExtras(base)

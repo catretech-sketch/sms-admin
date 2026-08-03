@@ -25,7 +25,7 @@ describe('useNotifications', () => {
 
 describe('useApprovals', () => {
   it('resolves the approvals list with forRoles mapped', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: [{ id: 'A1', type: 't', module: 'm', cap: 'c', title: 'T', detail: 'D', requester: 'R', role: 'teacher', amount: null, age: '2h', priority: 'low', for_roles: ['admin'] }], next_cursor: null })))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: [{ id: 'A1', type: 't', module: 'm', cap: 'c', title: 'T', detail: 'D', requester: 'R', role: 'teacher', amount: null, age: '2h', priority: 'low', status: 'pending', for_roles: ['admin'] }], next_cursor: null })))
     const { result } = renderHook(() => useApprovals(), { wrapper: makeWrapper() })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(result.current.data?.[0]).toMatchObject({ id: 'A1', forRoles: ['admin'] })

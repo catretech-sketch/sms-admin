@@ -152,6 +152,26 @@ export async function deleteExamPaper(id: string): Promise<void> {
   await request(`/exam-papers/${id}`, { method: 'DELETE' })
 }
 
+export interface NotifyExamMarksResult {
+  parentReach: number
+  studentReach: number
+  emailsSent: number
+}
+
+/** Email + app announcements for parents and students (same pipeline as teacher publish). */
+export async function notifyExamMarksPublished(examPaperId: string): Promise<NotifyExamMarksResult> {
+  const wire = await request<Record<string, unknown>>(
+    `/exam-papers/${examPaperId}/notify-marks`,
+    { method: 'POST', body: {} },
+  )
+  const c = snakeToCamel<Record<string, unknown>>(wire)
+  return {
+    parentReach: typeof c.parentReach === 'number' ? c.parentReach : 0,
+    studentReach: typeof c.studentReach === 'number' ? c.studentReach : 0,
+    emailsSent: typeof c.emailsSent === 'number' ? c.emailsSent : 0,
+  }
+}
+
 /** UI datesheet row — maps to/from API exam papers. */
 export function paperToSlot(p: ExamPaper): import('@/types').PaperSlot {
   return {

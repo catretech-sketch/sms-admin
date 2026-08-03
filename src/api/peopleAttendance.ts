@@ -131,6 +131,21 @@ export function countMarkedPresent(
 export interface CheckInInfo {
   checkedIn: boolean
   at?: string | null
+  checkOutAt?: string | null
+}
+
+/** Normalize person id/name keys for punch lookup maps. */
+export function normalizePersonKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[{}]/g, '')
+}
+
+export function lookupStaffCheckIn(
+  checkIn: Map<string, CheckInInfo>,
+  person: { id: string; name: string },
+): CheckInInfo | undefined {
+  return checkIn.get(normalizePersonKey(person.id))
+    ?? checkIn.get(person.id)
+    ?? checkIn.get(normalizePersonKey(person.name))
 }
 
 export interface EffectiveStatusOpts {
@@ -156,9 +171,14 @@ export function effectivePeopleStatus(
   const mark = marks[person.id]
   if (mark) return mark
   if (group === 'teachers' && opts.checkIn) {
-    const hit = opts.checkIn.get(person.id) ?? opts.checkIn.get(person.name.toLowerCase())
-    if (hit?.checkedIn) return 'present'
-    if (opts.principalKnown && hit && !hit.checkedIn) return 'absent'
+    const hit = lookupStaffCheckIn(opts.checkIn, person)
+    if (hit?.checkedIn || hit?.at) return 'present'
+    if (opts.principalKnown && hit && !hit.checkedIn && !hit.at) return 'absent'
+  }
+  if (group === 'staff' && opts.checkIn) {
+    const hit = lookupStaffCheckIn(opts.checkIn, person)
+    if (hit?.checkedIn || hit?.at) return 'present'
+    if (opts.principalKnown && hit && !hit.checkedIn && !hit.at) return 'absent'
   }
   if (group === 'staff') return 'absent'
   return 'present'

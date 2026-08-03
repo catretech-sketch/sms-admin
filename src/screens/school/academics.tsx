@@ -1,15 +1,14 @@
 /* ============================================================
    SchoolMate — Academics hub
    Tabs: Classes & sections · Timetable builder · Periods ·
-   Subjects · Homework. Frontend-only, mock data, fully
-   interactive (click-to-place timetable, auto-generate, etc).
+   Subjects · Homework. Timetable is interactive; homework is live API.
    ============================================================ */
 import { Fragment, createContext, useContext, useEffect, useMemo, useState, type ComponentType, type Dispatch, type SetStateAction, type ReactNode } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import { can } from '@/lib/gating'
 import {
   PageHead, Tabs, Segmented, Card, CardHead, Btn, Badge, Select, Field, Input,
-  Modal, Icon, Empty, DataTable, Checkbox, type Column, type BadgeTone, DemoBadge,
+  Modal, Icon, Empty, DataTable, Checkbox, type Column, type BadgeTone,
 } from '@/components/ui'
 import type { Teacher } from '@/types'
 import { useClasses, useClassNames, useCreateClass, useUpdateClass, useEnsureDefaultClasses } from '@/api/hooks/useClasses'
@@ -27,6 +26,8 @@ import {
   activeSnapshot, loadPublishEnvelope, publishSnapshot, publishStatusOf, saveDraftSnapshot,
   statusLabel, statusTone, publishMetaLine, showPublishButton,
 } from '@/lib/academicsPublish'
+import { useAssignments, useCreateAssignment } from '@/api/hooks/useAssignments'
+import { homeworkStatusLabel } from '@/api/assignments'
 import { AcademicsActionsProvider, useAcademicsActions } from './academicsActions'
 
 /* ---------- shared helpers / constants ---------- */
@@ -1636,23 +1637,73 @@ function SubjectsTab({ editable }: { editable: boolean }) {
 }
 
 /* ============================================================
-   5 · Homework tracker
+   5 · Homework tracker (live GET /assignments)
    ============================================================ */
-interface Hw { id: number; cls: string; subject: string; title: string; due: string; status: string; teacher: string; source: 'teacher_app' | 'admin' }
-const hwTone: Record<string, BadgeTone> = { Assigned: 'brand', Submitted: 'info', Graded: 'success', Overdue: 'danger' }
+interface Hw {
+  id: string
+  cls: string
+  subject: string
+  title: string
+  due: string
+  status: string
+  teacher: string
+  source: 'teacher_app' | 'admin'
+  submissions: string
+}
+const hwTone: Record<string, BadgeTone> = {
+  Active: 'brand',
+  'Due soon': 'info',
+  Overdue: 'danger',
+  Closed: 'success',
+}
 const sourceBadge = (s: 'teacher_app' | 'admin') =>
   s === 'teacher_app' ? <Badge tone="info">Teacher app</Badge> : <Badge tone="neutral">Admin</Badge>
+
 function HomeworkTab({ editable }: { editable: boolean }) {
   const toast = useToast()
   const app = useApp()
+  const { data: classes = [] } = useClasses()
   const classList = useClassNames()
+  const { data: teachers = [] } = useTeachers()
   const subjectNames = useSubjectNames()
-  const [rows, setRows] = useState<Hw[]>([])
+  const { data: assignments = [], isLoading, isError } = useAssignments()
+  const createMut = useCreateAssignment()
   const [open, setOpen] = useState(false)
   const [cls, setCls] = useState('')
   const [subject, setSubject] = useState('')
   const [title, setTitle] = useState('')
   const [due, setDue] = useState('2026-06-15')
+
+  const classLabel = (c: { name: string; grade: string; section: string }) =>
+    (c.name || `${c.grade}-${c.section}`).trim()
+
+  const classIdFor = (label: string) =>
+    classes.find((c) => classLabel(c) === label)?.id
+
+  const teacherNameForClass = (label: string) => {
+    const c = classes.find((cl) => classLabel(cl) === label)
+    if (!c?.teacherId) return 'Teacher'
+    const t = teachers.find((te) => te.id === c.teacherId)
+    return t?.name ?? 'Teacher'
+  }
+
+  const rows: Hw[] = useMemo(() =>
+    assignments.map((a) => {
+      const clsName = a.className ?? '—'
+      const label = homeworkStatusLabel(a.status)
+      return {
+        id: a.id,
+        cls: clsName,
+        subject: a.subject ?? '—',
+        title: a.title,
+        due: a.dueDate ?? '—',
+        status: label,
+        teacher: a.source === 'admin' ? (app.user?.name ?? 'Admin') : teacherNameForClass(clsName),
+        source: a.source,
+        submissions: a.totalStudents > 0 ? `${a.submissionsCount}/${a.totalStudents}` : '—',
+      }
+    }),
+  [assignments, app.user?.name, classes, teachers])
 
   useEffect(() => {
     if (!cls && classList.length) setCls(classList[0])
@@ -1664,12 +1715,26 @@ function HomeworkTab({ editable }: { editable: boolean }) {
     else if (subject && subjectNames.length && !subjectNames.includes(subject)) setSubject(subjectNames[0])
   }, [subjectNames, subject])
 
-  const add = () => {
+  const add = async () => {
     if (!classList.length) { toast.danger('No classes', 'Add a class in Academics → Classes first.'); return }
     if (!cls) { toast.danger('Class required', 'Select a class.'); return }
     if (!title.trim()) { toast.danger('Title required', 'Enter a homework title.'); return }
-    setRows((r) => [{ id: Date.now(), cls, subject, title: title.trim(), due, status: 'Assigned', teacher: app.user?.name ?? 'Admin', source: 'admin' }, ...r])
-    toast.success('Homework assigned', `${subject} → ${cls}.`); setTitle(''); setOpen(false)
+    const classId = classIdFor(cls)
+    if (!classId) { toast.danger('Class not found', 'Re-select a class from the list.'); return }
+    try {
+      await createMut.mutateAsync({
+        title: title.trim(),
+        classId,
+        className: cls,
+        subject,
+        dueDate: due,
+      })
+      toast.success('Homework assigned', `${subject} → ${cls}.`)
+      setTitle('')
+      setOpen(false)
+    } catch (e) {
+      toast.danger('Could not assign', e instanceof Error ? e.message : 'Request failed')
+    }
   }
 
   const cols: Column<Hw>[] = [
@@ -1680,22 +1745,42 @@ function HomeworkTab({ editable }: { editable: boolean }) {
     ) },
     { key: 'title', label: 'Title', sortValue: (r) => r.title },
     { key: 'due', label: 'Due', sortValue: (r) => r.due, render: (r) => <span className="muted">{r.due}</span> },
-    { key: 'status', label: 'Status', align: 'center', sortValue: (r) => r.status, render: (r) => <Badge tone={hwTone[r.status] ?? 'neutral'} dot>{r.status}</Badge> },
+    {
+      key: 'submissions', label: 'Submissions', align: 'center', sortValue: (r) => r.submissions,
+      render: (r) => <span className="t-sm muted">{r.submissions}</span>,
+    },
+    {
+      key: 'status', label: 'Status', align: 'center', sortValue: (r) => r.status,
+      render: (r) => <Badge tone={hwTone[r.status] ?? 'neutral'} dot>{r.status}</Badge>,
+    },
   ]
+
+  const empty = isError
+    ? <Empty icon="clipboard" title="Could not load homework" body="Check your connection and try again." />
+    : <Empty icon="clipboard" title="No homework yet" body="Assign homework or create it in the teacher app." />
 
   return (
     <Card pad={false}>
       <div className="row ai-center jc-between gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
-        <div className="row ai-center gap10">
-          <div><div className="fw6">Homework tracker</div><div className="t-sm muted">{rows.length} assignments</div></div>
-          <DemoBadge />
+        <div>
+          <div className="fw6">Homework tracker</div>
+          <div className="t-sm muted">
+            {isLoading ? 'Loading…' : `${rows.length} assignment${rows.length === 1 ? '' : 's'}`}
+          </div>
         </div>
         {editable && <Btn variant="primary" icon="plus" onClick={() => setOpen(true)}>Assign homework</Btn>}
       </div>
       <DataTable<Hw> columns={cols} rows={rows} rowKey={(r) => r.id} pageSize={10} initialSort={{ key: 'due', dir: 'asc' }}
-        empty={<Empty icon="clipboard" title="No homework yet" body="Assign homework to track it here." />} />
+        empty={empty} />
       <Modal open={open} onClose={() => setOpen(false)} icon="clipboard" title="Assign homework"
-        footer={<div className="row gap8 jc-end"><Btn variant="ghost" onClick={() => setOpen(false)}>Cancel</Btn><Btn variant="primary" icon="check" onClick={add}>Assign</Btn></div>}>
+        footer={
+          <div className="row gap8 jc-end">
+            <Btn variant="ghost" onClick={() => setOpen(false)}>Cancel</Btn>
+            <Btn variant="primary" icon="check" onClick={() => void add()} disabled={createMut.isPending}>
+              {createMut.isPending ? 'Assigning…' : 'Assign'}
+            </Btn>
+          </div>
+        }>
         <div className="sm-grid-2 gap12">
           <Field label="Class"><Select options={classList} value={cls} onChange={(e) => setCls(e.target.value)} /></Field>
           <Field label="Subject"><Select options={subjectNames} value={subject} onChange={(e) => setSubject(e.target.value)} /></Field>

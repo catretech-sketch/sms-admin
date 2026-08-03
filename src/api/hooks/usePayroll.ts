@@ -10,8 +10,12 @@ import {
 } from '../payroll'
 import { queryKeys } from '../queryKeys'
 
-export function useSalaryProfiles(): UseQueryResult<SalaryProfile[]> {
-  return useQuery({ queryKey: queryKeys.payroll.salaryProfiles, queryFn: () => listSalaryProfiles() })
+export function useSalaryProfiles(enabled = true): UseQueryResult<SalaryProfile[]> {
+  return useQuery({
+    queryKey: queryKeys.payroll.salaryProfiles,
+    queryFn: () => listSalaryProfiles(),
+    enabled,
+  })
 }
 
 export function useSalaryStructures(): UseQueryResult<SalaryStructure[]> {

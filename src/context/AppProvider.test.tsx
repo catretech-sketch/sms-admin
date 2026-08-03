@@ -132,7 +132,39 @@ describe('AppProvider auth', () => {
     expect(tokenStore.getAccess()).toBe('a-new')
   })
 
+  it('re-aligns JWT tenant when owner reloads inside another school console', async () => {
+    const jwtTenant = '05ABE07A-C068-4EE5-A185-CE59B20AEC5D'
+    const sccTenant = '4D941F97-AD14-467E-A47A-EDC4AAAFC759'
+    tokenStore.set({ access_token: 'old', refresh_token: 'r-keep' })
+    tokenStore.setEmail('owner@example.com')
+    tokenStore.setUi({
+      schoolId: sccTenant,
+      consoleKind: 'school',
+      ownerViewingSchool: true,
+      view: 'school.attendance',
+    })
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { access_token: 'a-new', refresh_token: 'r-new' } }))
+      .mockResolvedValueOnce(jsonResponse({
+        data: { id: 'u1', tenant_id: jwtTenant, roles: ['school.owner'], is_platform: false },
+      }))
+      .mockResolvedValueOnce(jsonResponse({ data: [] }))
+      .mockResolvedValueOnce(jsonResponse({
+        data: { access_token: 'scc-access', refresh_token: 'scc-refresh' },
+      })))
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.sessionRestoring).toBe(false))
+    await waitFor(() => expect(result.current.loggedIn).toBe(true))
+    expect(result.current.schoolId).toBe(sccTenant)
+    expect(tokenStore.getTenantId()).toBe(sccTenant)
+    expect(tokenStore.getAccess()).toBe('scc-access')
+  })
+
   it('enterSchool uses the portfolio school plan for feature gating', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        data: { access_token: 'school-access', refresh_token: 'school-refresh' },
+      })))
     const { result } = renderHook(() => useApp(), { wrapper })
     const goldSchool = {
       id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',

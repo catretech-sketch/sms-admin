@@ -22,7 +22,7 @@ import { useStaff } from '@/api/hooks/useStaff'
 import { useStudents } from '@/api/hooks/useStudents'
 import { studentParentLabel } from '@/api/students'
 import {
-  listPeopleDocs, peoplePhotoUrl, openStoredDoc, downloadStoredDoc, isStoredImage,
+  listPeopleDocs, resolvePeoplePhoto, openStoredDoc, downloadStoredDoc, isStoredImage,
 } from '@/api/peopleExtras'
 import { openMailCompose } from '@/lib/composeMail'
 
@@ -117,7 +117,7 @@ function TeacherProfile({ teacher, onClose, onMessage }: { teacher: Teacher | nu
   const app = useApp()
   const toast = useToast()
   if (!teacher) return null
-  const photoUrl = peoplePhotoUrl('teacher', teacher.id)
+  const photoUrl = resolvePeoplePhoto('teacher', teacher.id, teacher.photoUrl)
   return (
     <Drawer
       open={!!teacher} onClose={onClose} icon="user"
@@ -194,7 +194,7 @@ function StaffProfile({ staff, onClose, onMessage }: { staff: Staff | null; onCl
   const app = useApp()
   const toast = useToast()
   if (!staff) return null
-  const photoUrl = peoplePhotoUrl('staff', staff.id)
+  const photoUrl = resolvePeoplePhoto('staff', staff.id, staff.photoUrl)
   return (
     <Drawer
       open={!!staff} onClose={onClose} icon="briefcase"
@@ -247,8 +247,8 @@ function TeachersScreen() {
   const [profile, setProfile] = useState<Teacher | null>(null)
 
   const editable = can(app.role, 'sis', 'E')
-  const { data: teachersData } = useTeachers()
-  const teachers = teachersData ?? []
+  const teachersQ = useTeachers()
+  const teachers = teachersQ.data ?? []
 
   const message = (t: Teacher) => {
     const email = (t.email || '').trim()
@@ -293,7 +293,7 @@ function TeachersScreen() {
       key: 'name', label: 'Teacher', sortValue: (t) => t.name,
       render: (t) => (
         <div className="row ai-center gap10">
-          <Avatar name={t.name} hue={t.avatarHue} size={34} src={peoplePhotoUrl('teacher', t.id)} />
+          <Avatar name={t.name} hue={t.avatarHue} size={34} src={resolvePeoplePhoto('teacher', t.id, t.photoUrl)} />
           <div>
             <div className="row ai-center gap6">
               <span className="fw6">{t.name}</span>
@@ -332,8 +332,8 @@ function TeachersScreen() {
     {
       key: 'rating', label: 'Rating', align: 'right', sortValue: (t) => t.rating,
       render: (t) => (
-        <span className="row ai-center gap4 fw6" style={{ justifyContent: 'flex-end' }}>
-          <span style={{ color: 'var(--gold)' }}><Icon name="sparkle" size={13} /></span>{t.rating.toFixed(1)}
+          <span className="row ai-center gap4 fw6" style={{ justifyContent: 'flex-end' }}>
+          <span style={{ color: 'var(--gold)' }}><Icon name="sparkle" size={13} /></span>{(t.rating ?? 0).toFixed(1)}
         </span>
       ),
     },
@@ -368,19 +368,28 @@ function TeachersScreen() {
       />
 
       {/* Top performers */}
+      {teachersQ.isError && (
+        <div className="t-sm" style={{ padding: 12, marginBottom: 12, borderRadius: 10, background: 'var(--danger-bg)', color: 'var(--danger)' }}>
+          Could not load teachers. <button type="button" className="sm-gate-link" onClick={() => teachersQ.refetch()}>Retry</button>
+        </div>
+      )}
       <div className="sm-card-sub" style={{ marginBottom: 10, fontWeight: 600 }}>Top performers</div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 16 }}>
-        {topPerformers.map((t) => (
+        {teachersQ.isLoading ? (
+          <div className="t-sm muted" style={{ padding: 16 }}><Spinner /> Loading teachers…</div>
+        ) : topPerformers.length === 0 ? (
+          <div className="t-sm muted" style={{ padding: 16 }}>No teachers yet — add one from Add teacher.</div>
+        ) : topPerformers.map((t) => (
           <Card key={t.id} hover>
             <div className="row ai-center gap12">
-              <Avatar name={t.name} hue={t.avatarHue} size={44} src={peoplePhotoUrl('teacher', t.id)} />
+              <Avatar name={t.name} hue={t.avatarHue} size={44} src={resolvePeoplePhoto('teacher', t.id, t.photoUrl)} />
               <div style={{ minWidth: 0 }}>
                 <div className="fw7" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.name}</div>
                 <div className="t-xs muted">{t.dept}</div>
               </div>
             </div>
             <div className="row ai-center jc-between" style={{ marginTop: 12 }}>
-              <span className="row ai-center gap4 fw7"><span style={{ color: 'var(--gold)' }}><Icon name="sparkle" size={14} /></span>{t.rating.toFixed(1)}</span>
+              <span className="row ai-center gap4 fw7"><span style={{ color: 'var(--gold)' }}><Icon name="sparkle" size={14} /></span>{(t.rating ?? 0).toFixed(1)}</span>
               <Badge tone="success">{t.result}% result</Badge>
             </div>
           </Card>
@@ -394,6 +403,9 @@ function TeachersScreen() {
           <Select options={[{ value: 'all', label: 'All status' }, { value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }]} value={status} onChange={(e) => setStatus(e.target.value)} />
         </div>
 
+        {teachersQ.isLoading ? (
+          <div className="row ai-center gap10" style={{ padding: 24 }}><Spinner /><span className="t-sm muted">Loading teachers…</span></div>
+        ) : (
         <DataTable<Teacher>
           columns={columns}
           rows={rows}
@@ -403,6 +415,7 @@ function TeachersScreen() {
           onRowClick={(t) => setProfile(t)}
           empty={<Empty icon="cap" title="No teachers match" body="Try adjusting the search or filters." />}
         />
+        )}
       </Card>
 
       <TeacherProfile teacher={profile} onClose={() => setProfile(null)} onMessage={(t) => { message(t); setProfile(null) }} />
@@ -429,8 +442,8 @@ function StaffScreen() {
   const [profile, setProfile] = useState<Staff | null>(null)
 
   const editable = can(app.role, 'sis', 'E')
-  const { data: staffData } = useStaff()
-  const roster = staffData ?? []
+  const staffQ = useStaff()
+  const roster = staffQ.data ?? []
 
   const message = (s: Staff) => {
     const email = (s.email || '').trim()
@@ -478,7 +491,7 @@ function StaffScreen() {
       key: 'name', label: 'Staff', sortValue: (s) => s.name,
       render: (s) => (
         <div className="row ai-center gap10">
-          <Avatar name={s.name} hue={s.avatarHue} size={34} src={peoplePhotoUrl('staff', s.id)} />
+          <Avatar name={s.name} hue={s.avatarHue} size={34} src={resolvePeoplePhoto('staff', s.id, s.photoUrl)} />
           <div>
             <div className="fw6">{s.name}</div>
             <div className="t-xs muted">{s.code || s.id} · {s.gender === 'M' ? 'Male' : 'Female'}</div>
@@ -534,6 +547,12 @@ function StaffScreen() {
           : <Badge tone="neutral" icon="eye">View only</Badge>}
       />
 
+      {staffQ.isError && (
+        <div className="t-sm" style={{ padding: 12, marginBottom: 12, borderRadius: 10, background: 'var(--danger-bg)', color: 'var(--danger)' }}>
+          Could not load staff. Staff & support requires Platinum. <button type="button" className="sm-gate-link" onClick={() => staffQ.refetch()}>Retry</button>
+        </div>
+      )}
+
       {/* Category summary */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 16, marginBottom: 16 }}>
         {CATS.map((c) => (
@@ -555,6 +574,9 @@ function StaffScreen() {
           <Select options={[{ value: 'all', label: 'All categories' }, ...CATS.map((c) => ({ value: c.value, label: c.label }))]} value={cat} onChange={(e) => setCat(e.target.value)} />
         </div>
 
+        {staffQ.isLoading ? (
+          <div className="row ai-center gap10" style={{ padding: 24 }}><Spinner /><span className="t-sm muted">Loading staff…</span></div>
+        ) : (
         <DataTable<Staff>
           columns={columns}
           rows={rows}
@@ -564,6 +586,7 @@ function StaffScreen() {
           onRowClick={(s) => setProfile(s)}
           empty={<Empty icon="users" title="No staff match" body="Try adjusting the search or category." />}
         />
+        )}
       </Card>
 
       <StaffProfile staff={profile} onClose={() => setProfile(null)} onMessage={(s) => { message(s); setProfile(null) }} />

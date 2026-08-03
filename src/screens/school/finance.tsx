@@ -2068,7 +2068,7 @@ function SalaryStructureTab() {
 
 function PayrollScreen() {
   return (
-    <TierGate feature="hr_payroll" title="HR & Payroll" blurb="HR & Payroll is part of the Gold plan.">
+    <TierGate feature="hr_payroll" title="HR & Payroll" blurb="HR & Payroll is part of the Platinum plan.">
       <PayrollBody />
     </TierGate>
   )

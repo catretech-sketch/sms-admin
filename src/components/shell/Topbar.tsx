@@ -22,7 +22,7 @@ export function Topbar() {
   const { data: notifData } = useNotifications()
   const notifications = notifData ?? []
   const unread = notifications.filter((n) => n.unread).length
-  const { data: approvalsData } = useApprovals(!isOwner)
+  const { data: approvalsData } = useApprovals({ status: 'pending', enabled: !isOwner })
   const pendingApprovals = isOwner ? 0 : approvalsForRole(approvalsData ?? [], app.role).length
 
   return (

@@ -1,6 +1,7 @@
 import { request, listRequest } from './client'
 import { snakeToCamel } from './mapper'
 import { mergeStudentExtras } from './studentExtras'
+import { toDateInputValue } from '@/lib/dateInput'
 import type { Student, ListStudentsOpts } from '@/types'
 
 interface ListEnvelope { data: Record<string, unknown>[]; next_cursor: string | null }
@@ -22,6 +23,7 @@ export function toStudent(wire: Record<string, unknown>): Student {
   const guardian = cleanName(guardianName ?? rest.guardian)
   const phone = String(guardianPhone ?? rest.phone ?? '').trim()
   const attendance = Number(attendancePct ?? rest.attendance ?? 0)
+  const dob = toDateInputValue(c.dob) || undefined
   const base = {
     ...rest,
     adm: admissionNo,
@@ -29,6 +31,7 @@ export function toStudent(wire: Record<string, unknown>): Student {
     guardian,
     phone,
     attendance,
+    dob,
   } as unknown as Student
   return mergeStudentExtras(base)
 }
@@ -80,7 +83,7 @@ export function fromStudent(s: Student): Record<string, unknown> {
     guardian_phone: guardianPhone,
     house: s.house || null,
     avatar_hue: s.avatarHue ?? 0,
-    dob: s.dob || null,
+    dob: toDateInputValue(s.dob) || null,
     email: s.email || null,
     address: s.address || null,
   }

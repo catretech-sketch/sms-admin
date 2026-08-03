@@ -18,7 +18,7 @@ import {
   saveExamPaperAttendance,
 } from '@/api/examAttendance'
 import { loadExamClassIds } from '@/api/examClasses'
-import { paperToSlot, slotToCreateInput, slotToUpdateInput, createExamPaper, updateExamPaper, deleteExamPaper, listExamPapers } from '@/api/examPapers'
+import { paperToSlot, slotToCreateInput, slotToUpdateInput, createExamPaper, updateExamPaper, deleteExamPaper, listExamPapers, notifyExamMarksPublished } from '@/api/examPapers'
 import { queryKeys } from '@/api/queryKeys'
 import { getClassSubjects, listClassSubjects } from '@/api/classSubjects'
 import { useClassSubjectsMap } from '@/api/hooks/useClassSubjects'
@@ -2419,7 +2419,6 @@ function MarksEntryTab() {
   const [examId, setExamId] = useState('')
   const [cls, setCls] = useState('')
   const [paperId, setPaperId] = useState('')
-  const [notifyParents, setNotifyParents] = useState(true)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -2507,25 +2506,17 @@ function MarksEntryTab() {
       }
       const progress = Math.max(exam.marksEntered, Math.round((100 * 1) / Math.max(1, papers.length || exam.subjects)))
       await updateExam.mutateAsync({ id: examId, patch: { status: 'marks_entry', marksEntered: Math.min(100, progress) } })
-      let notifyBit = 'CRM Student 360 & report cards update now'
-      if (notifyParents) {
-        try {
-          const res = await notifyExamAudience(
-            exam,
-            app.school.name,
-            'marks',
-            { email: false, sms: false, app: true },
-            'parents',
-            { classLabel: cls, subject: paper.subject },
-          )
-          notifyBit = `App notify · ${res.reach || res.emails || res.phones || 0} parents · final cards after Publish results`
-        } catch (err) {
-          const reason = err instanceof Error ? err.message : 'notify failed'
-          toast.info('Marks saved · parent notify failed', reason)
-          notifyBit = 'Saved in CRM · parent notify failed'
-        }
+      let notifyBit = 'CRM updated'
+      try {
+        const res = await notifyExamMarksPublished(paper.id)
+        const reach = Math.max(res.parentReach, res.studentReach, res.emailsSent)
+        notifyBit = `${res.emailsSent} email · parent + student app · ${reach} reached`
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : 'notify failed'
+        toast.info('Marks saved · parent notify failed', reason)
+        notifyBit = 'saved · email/app notify failed'
       }
-      toast.success('Marks saved', `${roster.length} · ${cls} · ${paper.subject} · ${notifyBit}`)
+      toast.success('Marks published', `${roster.length} · ${cls} · ${paper.subject} · ${notifyBit}`)
     } catch (err) {
       toast.danger('Could not save marks', err instanceof Error ? err.message : 'Please try again.')
     } finally {
@@ -2570,7 +2561,7 @@ function MarksEntryTab() {
           <div className="row ai-center gap20 wrap" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
             <span className="t-sm">Class average <span className="fw7">{avg}%</span> · Grade <Badge tone={gradeTone(gradeFor(avg))}>{gradeFor(avg)}</Badge></span>
             <span className="t-sm">Passing <span className="fw7">{passCount}/{roster.length}</span></span>
-            <span className="t-xs muted">Teachers enter here · parents see report cards after Publish results</span>
+            <span className="t-xs muted">Save sends parent email + student/parent app for this class</span>
           </div>
           <table className="sm-table">
             <thead>
@@ -2604,19 +2595,11 @@ function MarksEntryTab() {
           </table>
           <div className="row ai-center jc-between gap12 wrap" style={{ padding: 16, borderTop: '1px solid var(--border)' }}>
             {editable ? (
-              <label className="row ai-center gap8 t-sm" style={{ cursor: 'pointer', flex: '1 1 auto', minWidth: 180 }}>
-                <input
-                  type="checkbox"
-                  checked={notifyParents}
-                  onChange={(e) => setNotifyParents(e.target.checked)}
-                  style={{ width: 16, height: 16, flexShrink: 0 }}
-                />
-                <span>Notify class parents on app</span>
-              </label>
+              <span className="t-sm muted">Parents get <span className="fw6">email</span> · parent + student <span className="fw6">app</span> on save.</span>
             ) : <span />}
             {editable
               ? <Btn variant="primary" icon="check" disabled={saving || upsertGrade.isPending} onClick={() => void save()}>
-                  {saving || upsertGrade.isPending ? 'Saving…' : 'Save marks'}
+                  {saving || upsertGrade.isPending ? 'Publishing…' : 'Save & notify parents'}
                 </Btn>
               : <Badge tone="neutral" icon="eye">View only</Badge>}
           </div>

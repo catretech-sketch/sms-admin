@@ -59,10 +59,10 @@ function personKind(line: PayrollLine): string {
 
 function logoMarkup(meta: PayslipMeta, brand: string): string {
   if (meta.logoUrl) {
-    return `<img class="logo" src="${esc(meta.logoUrl)}" alt="${esc(meta.schoolName)} logo" />`
+    return `<div class="logo-shell"><img class="logo" src="${esc(meta.logoUrl)}" alt="${esc(meta.schoolName)} logo" decoding="sync" /></div>`
   }
   const initials = esc((meta.logoInitials || meta.schoolName || '?').slice(0, 3).toUpperCase())
-  return `<div class="logo badge" style="background:${brand}">${initials}</div>`
+  return `<div class="logo-shell badge" style="background:${brand}"><span class="logo-initials">${initials}</span></div>`
 }
 
 /** Printable, PDF-ready payslip for a single person from a payroll run line. */
@@ -85,12 +85,14 @@ export function buildPayslipHtml(line: PayrollLine, meta: PayslipMeta): string {
 <style>
   *{box-sizing:border-box}
   @page{size:A4;margin:14mm}
-  html,body{background:#f1f5f9}
+  html,body{background:#f1f5f9;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body{font:13px/1.5 system-ui,Segoe UI,Roboto,sans-serif;color:#0f172a;margin:0;padding:24px}
-  .sheet{max-width:720px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden}
-  .head{display:flex;align-items:center;gap:14px;padding:20px 24px;border-bottom:3px solid ${brand}}
-  .logo{width:56px;height:56px;border-radius:12px;object-fit:cover;flex:0 0 auto}
-  .logo.badge{display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:20px;letter-spacing:.02em}
+  .sheet{max-width:720px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(15,23,42,.06)}
+  .head{display:flex;align-items:center;gap:16px;padding:22px 24px;border-bottom:3px solid ${brand}}
+  .logo-shell{flex:0 0 auto;width:64px;height:64px;border-radius:14px;background:#fff;border:1px solid #e8ecf4;box-shadow:0 2px 10px rgba(15,23,42,.08);padding:8px;display:flex;align-items:center;justify-content:center}
+  .logo-shell.badge{border:none;padding:0}
+  .logo{width:100%;height:100%;object-fit:contain;object-position:center;display:block}
+  .logo-initials{color:#fff;font-weight:800;font-size:22px;letter-spacing:.04em;line-height:1}
   .head .info{flex:1;min-width:0}
   h1{font-size:20px;margin:0 0 2px;line-height:1.2}
   .muted{color:#64748b;font-size:12px}
@@ -113,7 +115,7 @@ export function buildPayslipHtml(line: PayrollLine, meta: PayslipMeta): string {
   .foot{padding:14px 24px;border-top:1px solid #eef2f7;color:#94a3b8;font-size:11px}
   .toolbar{max-width:720px;margin:0 auto 14px;text-align:right}
   .toolbar button{padding:9px 18px;border-radius:8px;border:1px solid ${brand};background:${brand};color:#fff;cursor:pointer;font-weight:700;font-size:13px}
-  @media print{ html,body{background:#fff} body{padding:0} .sheet{border:none;border-radius:0;max-width:none} .toolbar{display:none} }
+  @media print{ html,body{background:#fff} body{padding:0} .sheet{border:none;border-radius:0;max-width:none;box-shadow:none} .toolbar{display:none} }
 </style></head><body>
   <div class="toolbar"><button onclick="window.print()">Print / Save as PDF</button></div>
   <div class="sheet">

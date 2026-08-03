@@ -59,6 +59,16 @@ export function peoplePhotoUrl(kind: PeopleKind, personId: string): string | und
   return listPeopleDocs(kind, personId).find((d) => d.key === 'photo' && d.dataUrl)?.dataUrl
 }
 
+/** Prefer API photo (Users.PhotoUrl, synced across schools); fall back to local upload. */
+export function resolvePeoplePhoto(
+  kind: PeopleKind,
+  personId: string,
+  apiPhotoUrl?: string | null,
+): string | undefined {
+  if (apiPhotoUrl) return apiPhotoUrl
+  return peoplePhotoUrl(kind, personId)
+}
+
 /** Persist uploaded files for a teacher/staff id (merge with prior uploads and field extras). */
 export async function persistPeopleFiles(
   kind: PeopleKind,

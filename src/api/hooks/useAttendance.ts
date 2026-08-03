@@ -10,6 +10,8 @@ export function useClassAttendance(
     queryKey: queryKeys.attendance.forClass(classId ?? '', date),
     queryFn: () => listAttendance(classId!, date),
     enabled: Boolean(classId && date),
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
   })
 }
 
@@ -32,6 +34,7 @@ export function useSaveAttendance(): UseMutationResult<
       }))
       qc.setQueryData(key, optimistic)
       await qc.invalidateQueries({ queryKey: ['attendance'] })
+      await qc.invalidateQueries({ queryKey: queryKeys.attendance.principal(vars.date) })
     },
   })
 }

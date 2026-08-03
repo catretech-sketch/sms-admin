@@ -2,25 +2,24 @@
    SchoolMate — Attendance
    Students: class-wise (day/month) — marks from CRM + teacher app.
    Teachers: check-ins from teacher app + present/absent edit.
-   Staff: photos + present/absent. Geo-fence: Platinum preview.
+   Staff: photos + present/absent. Geo-fence: Platinum campus setup + live punches.
    ============================================================ */
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
-import { can } from '@/lib/gating'
+import { can, tierIncludes } from '@/lib/gating'
 import {
   PageHead, Card, CardHead, Btn, Badge, Avatar, Search, Select, Segmented, Input,
   Icon, Empty, DataTable, type Column, type BadgeTone,
-  DemoBadge,
 } from '@/components/ui'
-import { TierGate, RestrictedScreen } from '@/components/shell/gates'
+import { RestrictedScreen } from '@/components/shell/gates'
 import { useStudents } from '@/api/hooks/useStudents'
 import { useTeachers } from '@/api/hooks/useTeachers'
 import { useStaff } from '@/api/hooks/useStaff'
 import { usePrincipalAttendance } from '@/api/hooks/usePrincipalAttendance'
-import { peoplePhotoUrl } from '@/api/peopleExtras'
+import { resolvePeoplePhoto } from '@/api/peopleExtras'
 import {
   loadPeopleAttendance, savePeopleAttendance, effectivePeopleStatus,
-  countPeoplePresent, PEOPLE_ATTENDANCE_CHANGED, type CheckInInfo,
+  countPeoplePresent, PEOPLE_ATTENDANCE_CHANGED,
   fetchRemotePeopleAttendance, pushPeopleAttendance,
 } from '@/api/peopleAttendance'
 import { ClassWiseStudents } from './attendanceClassWise'
@@ -28,7 +27,11 @@ import { listAllLocalAttendance, type AttendanceStatus } from '@/api/attendance'
 import { listAllLocalPeopleAttendance } from '@/api/peopleAttendance'
 import { buildStudentRegisterRows, registerToCsv, type RegisterRow } from '@/lib/attendanceExport'
 import { downloadTextFile } from '@/lib/feeExport'
+import {
+  resolveGeoAttendancePeople, geoPeopleToCheckInMap, principalStaffToCheckInMap,
+} from '@/lib/geoAttendanceDemo'
 import type { Teacher, Staff, Role } from '@/types'
+import { GeoFencePanel } from './geoFencePanel'
 
 type Group = 'students' | 'teachers' | 'staff' | 'geo'
 type AttStatus = AttendanceStatus
@@ -44,12 +47,12 @@ function canMarkAttendance(role: Role): boolean {
   return can(role, 'attendance', 'E')
 }
 
-const GROUP_OPTS_ALL = [
+const GROUP_OPTS_ALL_BASE = [
   { value: 'students', label: 'Students' },
   { value: 'teachers', label: 'Teachers' },
   { value: 'staff', label: 'Staff' },
   { value: 'geo', label: 'Geo-fence' },
-]
+] as const
 
 const GROUP_OPTS_TEACHER = [
   { value: 'students', label: 'Students' },
@@ -72,19 +75,71 @@ function todayIso(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+/** Wall-clock punch time from the teacher app (e.g. "10:16 AM"). */
+function formatCheckInTime(at: string | null | undefined): string {
+  if (!at) return '—'
+  const s = at.trim()
+  const d = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)
+    ? new Date(`${s}Z`)
+    : new Date(s)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+function PunchTimeCell({ at }: { at?: string | null }) {
+  if (!at) return <span className="t-sm muted3">—</span>
+  return (
+    <span className="t-sm fw6" style={{ color: 'var(--brand-600)' }}>
+      <Icon name="clock" size={13} style={{ marginRight: 4, verticalAlign: -2 }} />
+      {formatCheckInTime(at)}
+    </span>
+  )
+}
+
+function useGeoAttendance(date: string) {
+  const app = useApp()
+  const geoFence = tierIncludes(app.plan, 'attendance.geofence')
+  const teachersQ = useTeachers()
+  const staffQ = useStaff()
+  const principalQ = usePrincipalAttendance(date, geoFence)
+
+  return useMemo(() => {
+    const people = resolveGeoAttendancePeople(
+      teachersQ.data ?? [],
+      staffQ.data ?? [],
+      principalQ.data?.staff ?? [],
+      principalQ.isSuccess,
+      geoFence,
+    )
+    const staffRows = principalQ.data?.staff ?? []
+    return {
+      geoFence,
+      people,
+      checkIn: geoFence && principalQ.isSuccess
+        ? principalStaffToCheckInMap(staffRows)
+        : geoPeopleToCheckInMap(people),
+      principalKnown: geoFence && principalQ.isSuccess,
+      loading: geoFence && (teachersQ.isLoading || staffQ.isLoading || principalQ.isLoading),
+    }
+  }, [
+    geoFence, teachersQ.data, staffQ.data, staffQ.isLoading, teachersQ.isLoading,
+    principalQ.data, principalQ.isSuccess, principalQ.isLoading, date,
+  ])
+}
+
 /* ============================================================
    Summary cards — live headcount + today's present count
    ============================================================ */
 function SummaryCard({ group, tone, active, onClick }: {
   group: 'students' | 'teachers' | 'staff'; tone: string; active: boolean; onClick: () => void
 }) {
+  const today = todayIso()
+  const geo = useGeoAttendance(today)
   const studentsQ = useStudents()
   const teachersQ = useTeachers()
   const staffQ = useStaff()
-  const today = todayIso()
-  const principalQ = usePrincipalAttendance(today, group === 'students' || group === 'teachers')
+  const principalQ = usePrincipalAttendance(today, group === 'students' || geo.geoFence)
 
-  // Re-read local teacher/staff marks after a roster save.
   const [tick, setTick] = useState(0)
   useEffect(() => {
     if (group === 'students') return
@@ -109,23 +164,27 @@ function SummaryCard({ group, tone, active, onClick }: {
     if (group === 'students') return principalQ.data?.presentTotal ?? 0
     const roster = (group === 'teachers' ? teachersQ.data : staffQ.data) ?? []
     const marks = loadPeopleAttendance(group, today)
-    const checkIn = new Map<string, CheckInInfo>()
-    for (const s of principalQ.data?.staff ?? []) {
-      checkIn.set(s.teacherId, { checkedIn: s.checkedIn, at: s.checkInAt })
-      checkIn.set(s.name.toLowerCase(), { checkedIn: s.checkedIn, at: s.checkInAt })
-    }
     return countPeoplePresent(
       group,
       roster.map((p) => ({ id: p.id, name: p.name })),
       marks,
-      { checkIn, principalKnown: principalQ.isSuccess },
+      geo.geoFence ? { checkIn: geo.checkIn, principalKnown: geo.principalKnown } : {},
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [group, today, teachersQ.data, staffQ.data, principalQ.data, principalQ.isSuccess, tick])
+  }, [group, today, teachersQ.data, staffQ.data, principalQ.data, principalQ.isSuccess, tick, geo.checkIn, geo.geoFence, geo.principalKnown])
+
+  const studentMarked = useMemo(() => {
+    if (group !== 'students') return 0
+    return (principalQ.data?.classes ?? []).reduce((n, c) => n + (c.marked ?? 0), 0)
+  }, [group, principalQ.data])
 
   const rate = group === 'students'
     ? (total > 0 ? Math.round((present / total) * 100) : Math.round(Number(principalQ.data?.overallPct) || 0))
     : (total ? Math.round((present / total) * 100) : 0)
+
+  const footnote = group === 'students' && studentMarked > 0
+    ? `${present} present · ${Math.max(0, studentMarked - present)} absent · ${Math.max(0, total - studentMarked)} unmarked`
+    : `${present} of ${total} present`
 
   return (
     <Card hover onClick={onClick} style={active ? { borderColor: tone, boxShadow: `0 0 0 1px ${tone}` } : undefined}>
@@ -141,14 +200,12 @@ function SummaryCard({ group, tone, active, onClick }: {
         </div>
         <Icon name="chevRight" size={18} style={{ color: 'var(--text-3)' }} />
       </div>
-      <div className="t-sm muted" style={{ marginTop: 10 }}>
-        Today · live
-      </div>
+      <div className="t-sm muted" style={{ marginTop: 10 }}>Today · live</div>
       <div className="row ai-center gap8" style={{ marginTop: 10 }}>
         <div className="sm-meter" style={{ flex: 1, width: 'auto' }}>
           <span style={{ width: `${rate}%`, background: tone }} />
         </div>
-        <span className="t-xs muted3" style={{ whiteSpace: 'nowrap' }}>{present} of {total} present</span>
+        <span className="t-xs muted3" style={{ whiteSpace: 'nowrap' }}>{footnote}</span>
       </div>
     </Card>
   )
@@ -167,9 +224,11 @@ interface PersonRow {
   status: AttStatus
   appCheckIn?: boolean
   checkInAt?: string | null
+  checkOutAt?: string | null
 }
 
 function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editable: boolean }) {
+  const geoFence = tierIncludes(useApp().plan, 'attendance.geofence')
   const toast = useToast()
   const teachersQ = useTeachers()
   const staffQ = useStaff()
@@ -178,7 +237,7 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
   const [filter, setFilter] = useState<'all' | AttStatus>('all')
   const [draft, setDraft] = useState<Record<string, AttStatus>>({})
   const [saved, setSaved] = useState<Record<string, AttStatus>>({})
-  const principalQ = usePrincipalAttendance(date, group === 'teachers')
+  const geo = useGeoAttendance(date)
 
   useEffect(() => {
     setSaved(loadPeopleAttendance(group, date))
@@ -192,14 +251,7 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
     return () => { cancelled = true }
   }, [group, date])
 
-  const appCheckIn = useMemo(() => {
-    const m = new Map<string, CheckInInfo>()
-    for (const s of principalQ.data?.staff ?? []) {
-      m.set(s.teacherId, { checkedIn: s.checkedIn, at: s.checkInAt })
-      m.set(s.name.toLowerCase(), { checkedIn: s.checkedIn, at: s.checkInAt })
-    }
-    return m
-  }, [principalQ.data])
+  const appCheckIn = geo.checkIn
 
   const statusOf = (id: string, name: string): AttStatus => {
     if (draft[id]) return draft[id]
@@ -207,38 +259,45 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
       group,
       { id, name },
       saved,
-      { checkIn: appCheckIn, principalKnown: principalQ.isSuccess },
+      geo.geoFence ? { checkIn: appCheckIn, principalKnown: geo.principalKnown } : {},
     )
   }
 
   const all = useMemo((): PersonRow[] => {
     if (group === 'teachers') {
       return (teachersQ.data ?? []).map((t: Teacher) => {
-        const hit = appCheckIn.get(t.id) ?? appCheckIn.get(t.name.toLowerCase())
+        const hit = appCheckIn.get(t.id.toLowerCase()) ?? appCheckIn.get(t.id) ?? appCheckIn.get(t.name.trim().toLowerCase())
         return {
           id: t.id,
           name: t.name,
           hue: t.avatarHue,
           sub: `${t.dept} · ${t.desig}`,
           ytd: Number(t.attendance) || 0,
-          photo: peoplePhotoUrl('teacher', t.id),
+          photo: resolvePeoplePhoto('teacher', t.id, t.photoUrl),
           status: statusOf(t.id, t.name),
-          appCheckIn: hit?.checkedIn,
+          appCheckIn: Boolean(hit?.checkedIn || hit?.at || hit?.checkOutAt),
           checkInAt: hit?.at,
+          checkOutAt: hit?.checkOutAt,
         }
       })
     }
-    return (staffQ.data ?? []).map((s: Staff) => ({
-      id: s.id,
-      name: s.name,
-      hue: s.avatarHue,
-      sub: `${s.role} · ${s.dept}`,
-      ytd: Number(s.attendance) || 0,
-      photo: peoplePhotoUrl('staff', s.id),
-      status: statusOf(s.id, s.name),
-    }))
+    return (staffQ.data ?? []).map((s: Staff) => {
+      const hit = appCheckIn.get(s.id.toLowerCase()) ?? appCheckIn.get(s.id) ?? appCheckIn.get(s.name.trim().toLowerCase())
+      return {
+        id: s.id,
+        name: s.name,
+        hue: s.avatarHue,
+        sub: `${s.role} · ${s.dept}`,
+        ytd: Number(s.attendance) || 0,
+        photo: resolvePeoplePhoto('staff', s.id, s.photoUrl),
+        status: statusOf(s.id, s.name),
+        appCheckIn: Boolean(hit?.checkedIn || hit?.at || hit?.checkOutAt),
+        checkInAt: hit?.at,
+        checkOutAt: hit?.checkOutAt,
+      }
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [group, teachersQ.data, staffQ.data, draft, saved, appCheckIn, principalQ.isSuccess])
+  }, [group, teachersQ.data, staffQ.data, draft, saved, appCheckIn, geo.principalKnown])
 
   const searched = useMemo(() => {
     const term = q.trim().toLowerCase()
@@ -292,21 +351,32 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
           <Avatar name={r.name} hue={r.hue} size={44} src={r.photo} />
           <div>
             <div className="t-md fw6">{r.name}</div>
-            <div className="t-xs muted3">
-              {r.id}
-              {r.appCheckIn ? ` · app in ${r.checkInAt ? new Date(r.checkInAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}` : ''}
-            </div>
+            <div className="t-xs muted3">{r.sub}</div>
           </div>
         </div>
       ),
     },
     { key: 'sub', label: SUB_LABEL[group], sortValue: (r) => r.sub, render: (r) => <span className="t-sm muted">{r.sub}</span> },
-    {
-      key: 'source', label: 'Source',
-      render: (r) => group === 'teachers' && r.appCheckIn
-        ? <Badge tone="info" icon="phone">Teacher app</Badge>
-        : <Badge tone="neutral">Manual</Badge>,
-    },
+    ...(geoFence ? [
+      {
+        key: 'source', label: 'Source',
+        render: (r: PersonRow) => r.appCheckIn
+          ? <Badge tone="info" icon="phone">Teacher app</Badge>
+          : <Badge tone="neutral">Manual</Badge>,
+      } satisfies Column<PersonRow>,
+      {
+        key: 'checkInAt',
+        label: 'Check in',
+        sortValue: (r: PersonRow) => (r.checkInAt ? new Date(r.checkInAt).getTime() : 0),
+        render: (r: PersonRow) => <PunchTimeCell at={r.checkInAt} />,
+      } satisfies Column<PersonRow>,
+      {
+        key: 'checkOutAt',
+        label: 'Check out',
+        sortValue: (r: PersonRow) => (r.checkOutAt ? new Date(r.checkOutAt).getTime() : 0),
+        render: (r: PersonRow) => <PunchTimeCell at={r.checkOutAt} />,
+      } satisfies Column<PersonRow>,
+    ] : []),
     {
       key: 'ytd', label: 'YTD %', sortValue: (r) => r.ytd,
       render: (r) => <Badge tone={r.ytd >= 90 ? 'success' : r.ytd >= 75 ? 'warning' : 'danger'} dot>{r.ytd}%</Badge>,
@@ -320,15 +390,17 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
   ]
 
   const loading = group === 'teachers'
-    ? teachersQ.isLoading || principalQ.isLoading
-    : staffQ.isLoading
+    ? teachersQ.isLoading || (geoFence && geo.loading)
+    : group === 'staff'
+      ? staffQ.isLoading || (geoFence && geo.loading)
+      : staffQ.isLoading
 
   return (
     <Card pad={false}>
       <CardHead
         title={`${GROUP_NAME[group]} roster`}
-        sub={group === 'teachers'
-          ? `${date} · teacher app check-ins show automatically · ${presentTotal}/${all.length} present`
+        sub={geoFence && (group === 'teachers' || group === 'staff')
+          ? `${date} · teacher app check-in / check-out show automatically · ${presentTotal}/${all.length} present`
           : `${date} · ${presentTotal} of ${all.length} present`}
         icon={GROUP_ICON[group]}
         action={
@@ -363,8 +435,8 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
               </div>
             </div>
             <div className="row ai-center gap8 wrap">
-              {group === 'teachers'
-                ? <Badge tone="info" icon="phone">Teacher app check-ins</Badge>
+              {group === 'teachers' || group === 'staff'
+                ? <Badge tone="info" icon="phone">Teacher app punches</Badge>
                 : <Badge tone="neutral">Staff roll-call</Badge>}
               <span className="t-xs muted3">{date}</span>
             </div>
@@ -384,8 +456,8 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
       )}
       <div className="row ai-center jc-between" style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
         <span className="t-sm muted">
-          {group === 'teachers'
-            ? 'Teacher app check-ins appear here. Owner / Admin / Principal can override present / absent for anyone.'
+          {group === 'teachers' || group === 'staff'
+            ? 'Teacher app check-in and check-out appear here. Owner / Admin / Principal can override present / absent for anyone.'
             : editable
               ? 'Owner / Admin / Principal can mark any staff present or absent.'
               : 'View only.'}
@@ -412,61 +484,6 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
 }
 
 /* ============================================================
-   Geo-fence (Platinum) — preview UI
-   ============================================================ */
-const GEO_CHECKINS = [
-  { name: 'Main Gate', within: 0, status: 'inside' as const },
-  { name: 'Staff Parking', within: 0, status: 'inside' as const },
-  { name: 'Sports Ground', within: 0, status: 'edge' as const },
-  { name: 'Off-campus', within: 0, status: 'outside' as const },
-]
-
-function GeoFence() {
-  return (
-    <TierGate feature="attendance.geofence" title="Geo-fenced check-in">
-      <Card pad={false}>
-        <CardHead
-          title={<span className="row ai-center gap8">Geo-fenced check-in<DemoBadge /></span>}
-          sub="Auto check-in for teachers & staff entering campus (Platinum)"
-          icon="pin"
-          action={<Badge tone="info" icon="globe">Preview</Badge>}
-        />
-        <div className="row ai-center gap10 wrap" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
-          <span className="t-xs muted3">Live fence counts need the staff check-in API — this is a layout preview.</span>
-        </div>
-        <div className="sm-grid-2 gap16" style={{ padding: 16 }}>
-          <div style={{
-            position: 'relative', minHeight: 220, borderRadius: 12, overflow: 'hidden',
-            background: 'radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--brand-600) 18%, var(--surface-2)), var(--surface-2))',
-            border: '1px solid var(--border)',
-          }}>
-            <div style={{ position: 'absolute', inset: '50% auto auto 50%', transform: 'translate(-50%,-50%)', width: 150, height: 150, borderRadius: '50%', border: '2px dashed var(--brand-600)', opacity: 0.7 }} />
-            <div style={{ position: 'absolute', inset: '50% auto auto 50%', transform: 'translate(-50%,-50%)', color: 'var(--brand-600)' }}><Icon name="pin" size={26} /></div>
-            <span className="t-xs muted3" style={{ position: 'absolute', bottom: 10, left: 12 }}>Campus geo-fence · radius 250 m</span>
-          </div>
-          <div className="col gap8">
-            {GEO_CHECKINS.map((g) => (
-              <div key={g.name} className="row ai-center jc-between" style={{ padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 10 }}>
-                <div className="row ai-center gap12">
-                  <span className="sm-kpi-ic" style={{ marginBottom: 0 }}><Icon name="pin" size={16} /></span>
-                  <div>
-                    <div className="t-md fw6">{g.name}</div>
-                    <div className="t-xs muted3">Awaiting live detections</div>
-                  </div>
-                </div>
-                <Badge tone={g.status === 'inside' ? 'success' : g.status === 'edge' ? 'warning' : 'danger'} dot>
-                  {g.status === 'inside' ? 'Inside fence' : g.status === 'edge' ? 'At boundary' : 'Outside'}
-                </Badge>
-              </div>
-            ))}
-          </div>
-        </div>
-      </Card>
-    </TierGate>
-  )
-}
-
-/* ============================================================
    Screen
    ============================================================ */
 function AttendanceScreen() {
@@ -478,7 +495,11 @@ function AttendanceScreen() {
   const allPeople = seesAllPeople(app.role)
   const canView = allPeople || can(app.role, 'attendance', 'V') || can(app.role, 'attendance', 'E')
   const editable = canMarkAttendance(app.role)
-  const groupOpts = allPeople ? GROUP_OPTS_ALL : GROUP_OPTS_TEACHER
+  const geoFence = tierIncludes(app.plan, 'attendance.geofence')
+  const groupOpts = useMemo(() => {
+    const base = allPeople ? GROUP_OPTS_ALL_BASE : GROUP_OPTS_TEACHER
+    return geoFence ? [...base] : base.filter((o) => o.value !== 'geo')
+  }, [allPeople, geoFence])
   const [group, setGroup] = useState<Group>('students')
 
   useEffect(() => {
@@ -534,7 +555,7 @@ function AttendanceScreen() {
 
       {group === 'students' && <ClassWiseStudents editable={editable} leadership={allPeople} />}
       {allPeople && (group === 'teachers' || group === 'staff') && <StaffRoster group={group} editable={editable} />}
-      {allPeople && group === 'geo' && <GeoFence />}
+      {allPeople && group === 'geo' && <GeoFencePanel />}
     </div>
   )
 }

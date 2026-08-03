@@ -14,6 +14,7 @@ import { peopleScreens } from './school/people'
 import { teacherAddScreens } from './school/teacherAdd'
 import { staffAddScreens } from './school/staffAdd'
 import { attendanceScreens } from './school/attendance'
+import { transportScreens } from './school/transport'
 import { financeScreens } from './school/finance'
 import { opsScreens } from './school/operations'
 import { portfolioScreens } from './owner/portfolio'
@@ -35,6 +36,7 @@ export const screenRegistry: Record<string, ComponentType> = {
   ...staffAddScreens,
   ...attendanceScreens,
   ...financeScreens,
+  ...transportScreens,
   ...opsScreens,
   ...portfolioScreens,
   ...billingScreens,
