@@ -65,9 +65,8 @@ export async function getStudent(id: string): Promise<Student> {
   return toStudent(wire)
 }
 
-/** Body for POST /students — only fields the SIS create contract accepts. */
-export function fromStudent(s: Student): Record<string, unknown> {
-  const guardianName = studentGuardianName(s) || null
+/** Fields shared by the create and update wire payloads. */
+function studentCoreFields(s: Student): Record<string, unknown> {
   const guardianPhone = String(s.phone ?? '').trim()
     || String(s.father?.phone ?? '').trim()
     || String(s.mother?.phone ?? '').trim()
@@ -79,7 +78,7 @@ export function fromStudent(s: Student): Record<string, unknown> {
     grade: s.grade,
     section: s.section,
     roll: s.roll,
-    guardian_name: guardianName,
+    guardian_name: studentGuardianName(s) || null,
     guardian_phone: guardianPhone,
     house: s.house || null,
     avatar_hue: s.avatarHue ?? 0,
@@ -89,19 +88,15 @@ export function fromStudent(s: Student): Record<string, unknown> {
   }
 }
 
+/** Body for POST /students — only fields the SIS create contract accepts. */
+export function fromStudent(s: Student): Record<string, unknown> {
+  return studentCoreFields(s)
+}
+
 /** Body for PUT /students/{id}. */
 export function fromStudentUpdate(s: Student): Record<string, unknown> {
   return {
-    name: s.name,
-    grade: s.grade,
-    section: s.section,
-    roll: s.roll,
-    guardian_name: studentGuardianName(s) || null,
-    guardian_phone: String(s.phone ?? '').trim()
-      || String(s.father?.phone ?? '').trim()
-      || String(s.mother?.phone ?? '').trim()
-      || null,
-    house: s.house || null,
+    ...studentCoreFields(s),
     fee_status: s.feeStatus,
     fee_due: s.feeDue,
     status: s.status,

@@ -332,6 +332,10 @@ function StudentsScreen() {
   const editable = canEdit(app.role)
   const { data } = useStudents()
   const students = data ?? []
+  /* Real attendance %, never the seeded/dummy `attendance_pct` wire field —
+     null when the student has no marked days at all (shown as "Not marked"). */
+  const attMap = useMemo(() => attendancePctByStudent(listAllLocalAttendance()), [])
+  const attendancePctOf = (s: Student): number | null => (attMap.has(s.id) ? attMap.get(s.id)! : null)
 
   const gradeOptions = useMemo(() => {
     const unique = new Set<string>([...DEFAULT_GRADES])
@@ -384,13 +388,18 @@ function StudentsScreen() {
       ),
     },
     {
-      key: 'attendance', label: 'Attendance', align: 'left', sortValue: (s) => s.attendance,
-      render: (s) => (
-        <div className="row ai-center gap8" style={{ minWidth: 120 }}>
-          <div style={{ flex: 1 }}><Progress value={s.attendance} color={attColor(s.attendance)} /></div>
-          <span className="t-sm fw6" style={{ width: 34 }}>{s.attendance}%</span>
-        </div>
-      ),
+      key: 'attendance', label: 'Attendance', align: 'left', sortValue: (s) => attendancePctOf(s) ?? -1,
+      render: (s) => {
+        const pct = attendancePctOf(s)
+        return pct == null
+          ? <span className="t-sm muted3">Not marked</span>
+          : (
+            <div className="row ai-center gap8" style={{ minWidth: 120 }}>
+              <div style={{ flex: 1 }}><Progress value={pct} color={attColor(pct)} /></div>
+              <span className="t-sm fw6" style={{ width: 34 }}>{pct}%</span>
+            </div>
+          )
+      },
     },
     {
       key: 'fee', label: 'Fees', sortValue: (s) => s.feeDue,
@@ -588,6 +597,10 @@ function Student360() {
   const guardian = studentGuardianName(stu) || stu.guardian
   const attRecords = monthsQ.data ?? []
   const months = monthlyBreakdown(attRecords, stu.id)
+  /* Real % from this student's own marked days — never the seeded `attendance_pct`
+     field. null when the student has no marked days at all. */
+  const attPct = attendancePctByStudent(attRecords).get(stu.id) ?? null
+  const attPctLabel = attPct == null ? 'Not marked' : `${attPct}%`
   const academicStartYear = (() => {
     const m = String(stu.academicYear || '').match(/\d{4}/)
     return m ? Number(m[0]) : academicYearStart()
@@ -663,7 +676,7 @@ function Student360() {
             </div>
           </div>
           <div className="row ai-center gap12 wrap">
-            <StatTile icon="calendar" label="Attendance" value={stu.attendance + '%'} color={attColor(stu.attendance)} />
+            <StatTile icon="calendar" label="Attendance" value={attPctLabel} color={attPct == null ? 'var(--text-3)' : attColor(attPct)} />
             <StatTile
               icon="cap"
               label={hasLiveMarks ? `Rank · ${rank.rank}/${rank.classSize}` : 'Exam %'}
@@ -768,7 +781,7 @@ function Student360() {
               <div style={{ marginTop: 4 }}>
                 <DetailRow label="Fee status" value={feeLabel[stu.feeStatus]} />
                 <DetailRow label="Outstanding" value={fmtMoney(ledgerOutstanding)} />
-                <DetailRow label="Attendance" value={`${stu.attendance}%`} />
+                <DetailRow label="Attendance" value={attPctLabel} />
                 <DetailRow label="Status" value={stu.status} />
               </div>
             </Card>
@@ -800,8 +813,8 @@ function Student360() {
               <div className="row ai-center jc-between">
                 <span className="muted t-sm">Attendance trend</span>
                 {months.length
-                  ? <Spark data={months.map((m) => m.value)} w={120} color={attColor(stu.attendance)} />
-                  : <span className="fw7 t-sm muted">{stu.attendance ? `${stu.attendance}%` : '—'}</span>}
+                  ? <Spark data={months.map((m) => m.value)} w={120} color={attColor(attPct ?? 0)} />
+                  : <span className="fw7 t-sm muted">{attPctLabel}</span>}
               </div>
               <div className="row ai-center jc-between"><span className="muted t-sm">Outstanding fees</span><span className="fw7">{fmtMoney(ledgerOutstanding)}</span></div>
             </div>
@@ -862,8 +875,8 @@ function Student360() {
             sub={monthsQ.isLoading
               ? 'Loading live marks…'
               : months.length
-                ? `From class attendance marks · year average ${stu.attendance}%`
-                : `Year average ${stu.attendance}% · no monthly marks yet`}
+                ? `From class attendance marks · year average ${attPctLabel}`
+                : `Year average ${attPctLabel} · no monthly marks yet`}
             icon="calendar"
           />
           {monthsQ.isLoading ? (

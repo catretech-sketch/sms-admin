@@ -66,13 +66,13 @@ describe('countPeoplePresent', () => {
       ['t3', { checkedIn: false }],
     ])
     // t1 checked in (present), t2 not checked in (absent), t3 manually marked late (present)
-    const present = countPeoplePresent('teachers', people, { t3: 'late' }, { checkIn, principalKnown: true })
+    const present = countPeoplePresent(people, { t3: 'late' }, { checkIn, principalKnown: true })
     expect(present).toBe(2)
   })
 
-  it('counts staff via manual marks, defaulting unmarked to absent', () => {
+  it('counts staff via manual marks; unmarked staff never count as present', () => {
     const staff = [{ id: 's1', name: 'X' }, { id: 's2', name: 'Y' }]
-    expect(countPeoplePresent('staff', staff, { s2: 'present' })).toBe(1)
+    expect(countPeoplePresent(staff, { s2: 'present' })).toBe(1)
   })
 })
 

@@ -18,7 +18,7 @@ import { useStaff } from '@/api/hooks/useStaff'
 import { usePrincipalAttendance } from '@/api/hooks/usePrincipalAttendance'
 import { resolvePeoplePhoto } from '@/api/peopleExtras'
 import {
-  loadPeopleAttendance, savePeopleAttendance, effectivePeopleStatus,
+  loadPeopleAttendance, savePeopleAttendance, explicitPeopleStatus,
   countPeoplePresent, PEOPLE_ATTENDANCE_CHANGED,
   fetchRemotePeopleAttendance, pushPeopleAttendance,
 } from '@/api/peopleAttendance'
@@ -165,7 +165,6 @@ function SummaryCard({ group, tone, active, onClick }: {
     const roster = (group === 'teachers' ? teachersQ.data : staffQ.data) ?? []
     const marks = loadPeopleAttendance(group, today)
     return countPeoplePresent(
-      group,
       roster.map((p) => ({ id: p.id, name: p.name })),
       marks,
       geo.geoFence ? { checkIn: geo.checkIn, principalKnown: geo.principalKnown } : {},
@@ -221,7 +220,7 @@ interface PersonRow {
   sub: string
   ytd: number
   photo?: string
-  status: AttStatus
+  status: AttStatus | null
   appCheckIn?: boolean
   checkInAt?: string | null
   checkOutAt?: string | null
@@ -253,10 +252,10 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
 
   const appCheckIn = geo.checkIn
 
-  const statusOf = (id: string, name: string): AttStatus => {
+  /** `null` means nobody — CRM, teacher app, or geo-fence — has marked this person yet. */
+  const statusOf = (id: string, name: string): AttStatus | null => {
     if (draft[id]) return draft[id]
-    return effectivePeopleStatus(
-      group,
+    return explicitPeopleStatus(
       { id, name },
       saved,
       geo.geoFence ? { checkIn: appCheckIn, principalKnown: geo.principalKnown } : {},
@@ -311,8 +310,8 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
   )
 
   const counts = useMemo(() => {
-    const c = { present: 0, late: 0, absent: 0 }
-    searched.forEach((p) => { c[p.status]++ })
+    const c = { present: 0, late: 0, absent: 0, unmarked: 0 }
+    searched.forEach((p) => { c[p.status ?? 'unmarked']++ })
     return c
   }, [searched])
 
@@ -335,7 +334,14 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
 
   const submit = () => {
     const marks: Record<string, AttStatus> = { ...saved }
-    for (const p of all) marks[p.id] = statusOf(p.id, p.name)
+    for (const p of all) {
+      const explicit = draft[p.id] ?? explicitPeopleStatus(
+        { id: p.id, name: p.name },
+        saved,
+        geo.geoFence ? { checkIn: appCheckIn, principalKnown: geo.principalKnown } : {},
+      )
+      if (explicit) marks[p.id] = explicit
+    }
     savePeopleAttendance(group, date, marks)
     setSaved(marks)
     setDraft({})
@@ -384,8 +390,10 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
     {
       key: 'status', label: 'Today',
       render: (r) => editable
-        ? <Segmented value={r.status} onChange={(v) => setStatus(r.id, v as AttStatus)} options={STATUS_OPTS} />
-        : <Badge tone={STATUS_TONE[r.status]} dot>{STATUS_LABEL[r.status]}</Badge>,
+        ? <Segmented value={r.status ?? ''} onChange={(v) => setStatus(r.id, v as AttStatus)} options={STATUS_OPTS} />
+        : r.status
+          ? <Badge tone={STATUS_TONE[r.status]} dot>{STATUS_LABEL[r.status]}</Badge>
+          : <Badge tone="neutral">Not marked</Badge>,
     },
   ]
 

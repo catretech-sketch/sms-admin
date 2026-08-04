@@ -19,10 +19,12 @@ function isMissingEndpoint(err: unknown): boolean {
   return err instanceof ApiError && (err.status === 404 || err.status === 405)
 }
 
-function asStatus(v: unknown): AttendanceStatus {
+/** `null` for anything that isn't a real mark — a malformed/missing status must
+ *  never be silently treated as "present". */
+function asStatus(v: unknown): AttendanceStatus | null {
   const s = String(v ?? '').trim().toLowerCase()
   if (s === 'late' || s === 'absent' || s === 'present') return s
-  return 'present'
+  return null
 }
 
 /** Best-effort GET of a day's marks from the backend; null on any failure (caller keeps local cache). */
@@ -37,7 +39,8 @@ export async function fetchRemotePeopleAttendance(
     const out: Record<string, AttendanceStatus> = {}
     for (const row of rows ?? []) {
       const id = row.person_id != null ? String(row.person_id) : ''
-      if (id) out[id] = asStatus(row.status)
+      const status = asStatus(row.status)
+      if (id && status) out[id] = status
     }
     return out
   } catch (err) {
@@ -168,31 +171,39 @@ export function effectivePeopleStatus(
   marks: Record<string, AttendanceStatus>,
   opts: EffectiveStatusOpts = {},
 ): AttendanceStatus {
-  const mark = marks[person.id]
-  if (mark) return mark
-  if (group === 'teachers' && opts.checkIn) {
-    const hit = lookupStaffCheckIn(opts.checkIn, person)
-    if (hit?.checkedIn || hit?.at) return 'present'
-    if (opts.principalKnown && hit && !hit.checkedIn && !hit.at) return 'absent'
-  }
-  if (group === 'staff' && opts.checkIn) {
-    const hit = lookupStaffCheckIn(opts.checkIn, person)
-    if (hit?.checkedIn || hit?.at) return 'present'
-    if (opts.principalKnown && hit && !hit.checkedIn && !hit.at) return 'absent'
-  }
-  if (group === 'staff') return 'absent'
-  return 'present'
+  return explicitPeopleStatus(person, marks, opts) ?? (group === 'staff' ? 'absent' : 'present')
 }
 
-/** Count present/late people using {@link effectivePeopleStatus}. */
+/**
+ * Same resolution as {@link effectivePeopleStatus} but returns `null` instead
+ * of the unknown roll-call default when nobody has actually marked this person
+ * yet (no CRM mark, no app check-in). Use this to decide what gets *persisted*
+ * on submit — the roll-call default is a display placeholder only and must
+ * never be written as if it were a real mark.
+ */
+export function explicitPeopleStatus(
+  person: { id: string; name: string },
+  marks: Record<string, AttendanceStatus>,
+  opts: EffectiveStatusOpts = {},
+): AttendanceStatus | null {
+  const mark = marks[person.id]
+  if (mark) return mark
+  if (opts.checkIn) {
+    const hit = lookupStaffCheckIn(opts.checkIn, person)
+    if (hit?.checkedIn || hit?.at) return 'present'
+    if (opts.principalKnown && hit && !hit.checkedIn && !hit.at) return 'absent'
+  }
+  return null
+}
+
+/** Count present/late people from explicit marks/check-ins only — unmarked people never count as present. */
 export function countPeoplePresent(
-  group: PeopleAttGroup,
   people: { id: string; name: string }[],
   marks: Record<string, AttendanceStatus>,
   opts: EffectiveStatusOpts = {},
 ): number {
   return people.reduce(
-    (n, p) => n + (isPeoplePresent(effectivePeopleStatus(group, p, marks, opts)) ? 1 : 0),
+    (n, p) => n + (isPeoplePresent(explicitPeopleStatus(p, marks, opts) ?? undefined) ? 1 : 0),
     0,
   )
 }

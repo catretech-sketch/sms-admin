@@ -103,7 +103,6 @@ function SchoolDashboard() {
     const marks = loadPeopleAttendance('teachers', today)
     const checkIn = attQ.isSuccess ? principalStaffToCheckInMap(attQ.data?.staff ?? []) : new Map<string, CheckInInfo>()
     return countPeoplePresent(
-      'teachers',
       teachers.map((t) => ({ id: t.id, name: t.name })),
       marks,
       { checkIn, principalKnown: attQ.isSuccess },
@@ -118,7 +117,6 @@ function SchoolDashboard() {
     const marks = loadPeopleAttendance('staff', today)
     const checkIn = attQ.isSuccess ? principalStaffToCheckInMap(attQ.data?.staff ?? []) : new Map<string, CheckInInfo>()
     return countPeoplePresent(
-      'staff',
       staff.map((p) => ({ id: p.id, name: p.name })),
       marks,
       { checkIn, principalKnown: attQ.isSuccess },

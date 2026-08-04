@@ -8,20 +8,25 @@ function isMissingEndpoint(err: unknown): boolean {
   return err instanceof ApiError && (err.status === 404 || err.status === 405)
 }
 
-function asStatus(v: unknown): AttendanceStatus {
+/** `null` for anything that isn't a real mark — a malformed/missing status must
+ *  never be silently treated as "present". */
+function asStatus(v: unknown): AttendanceStatus | null {
   const s = String(v ?? '').trim().toLowerCase()
   if (s === 'late' || s === 'absent' || s === 'present') return s
-  return 'present'
+  return null
 }
 
-function toRecord(row: Record<string, unknown>): AttendanceRecord {
+/** `null` when the row has no recognizable status — dropped by the caller. */
+function toRecord(row: Record<string, unknown>): AttendanceRecord | null {
+  const status = asStatus(row.status)
+  if (!status) return null
   return {
     id: row.id != null ? String(row.id) : '',
     tenantId: row.tenant_id != null ? String(row.tenant_id) : row.tenantId != null ? String(row.tenantId) : undefined,
     classId: row.class_id != null ? String(row.class_id) : row.classId != null ? String(row.classId) : '',
     studentId: row.student_id != null ? String(row.student_id) : row.studentId != null ? String(row.studentId) : '',
     date: row.date != null ? String(row.date) : '',
-    status: asStatus(row.status),
+    status,
     markedBy: row.marked_by != null ? String(row.marked_by) : row.markedBy != null ? String(row.markedBy) : null,
   }
 }
@@ -210,7 +215,7 @@ async function tryStudentAttendanceApi(
     const data = await request<Record<string, unknown>[] | null>(`/students/${studentId}/attendance`, {
       query: { from, to },
     })
-    return (data ?? []).map((row) => toRecord(row))
+    return (data ?? []).map((row) => toRecord(row)).filter((r): r is AttendanceRecord => r != null)
   } catch (err) {
     if (isMissingEndpoint(err)) return null
     throw err
@@ -226,7 +231,7 @@ async function tryClassRangeAttendanceApi(
     const data = await request<Record<string, unknown>[] | null>(`/classes/${classId}/attendance`, {
       query: { from, to },
     })
-    return (data ?? []).map((row) => toRecord(row))
+    return (data ?? []).map((row) => toRecord(row)).filter((r): r is AttendanceRecord => r != null)
   } catch (err) {
     if (isMissingEndpoint(err)) return null
     throw err

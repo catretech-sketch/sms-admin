@@ -20,21 +20,27 @@ export interface AttendanceRecord {
   markedBy?: string | null
 }
 
-function asStatus(v: unknown): AttendanceStatus {
+/** `null` for anything that isn't a real mark — a malformed/missing status must
+ *  never be silently treated as "present". */
+function asStatus(v: unknown): AttendanceStatus | null {
   const s = String(v ?? '').trim().toLowerCase()
   if (s === 'late' || s === 'absent' || s === 'present') return s
-  return 'present'
+  return null
 }
 
-function toRecord(row: Record<string, unknown>): AttendanceRecord {
+/** `null` when the row has no recognizable status — dropped by the caller rather
+ *  than counted as a real "present" mark. */
+function toRecord(row: Record<string, unknown>): AttendanceRecord | null {
   const c = snakeToCamel<Record<string, unknown>>(row)
+  const status = asStatus(c.status)
+  if (!status) return null
   return {
     id: c.id != null ? String(c.id) : '',
     tenantId: c.tenantId != null ? String(c.tenantId) : undefined,
     classId: c.classId != null ? String(c.classId) : '',
     studentId: c.studentId != null ? String(c.studentId) : '',
     date: c.date != null ? String(c.date) : '',
-    status: asStatus(c.status),
+    status,
     markedBy: c.markedBy != null ? String(c.markedBy) : null,
   }
 }
@@ -92,7 +98,7 @@ function writeLocalDay(classId: string, day: string, records: AttendanceMark[]):
       classId,
       studentId: r.studentId,
       date: day,
-      status: asStatus(r.status),
+      status: r.status,
       markedBy: 'local',
     }))
   const merged = [...others, ...fresh]
@@ -154,7 +160,7 @@ export async function listAttendance(classId: string, date: string): Promise<Att
     const data = await request<Record<string, unknown>[] | null>(`/classes/${classId}/attendance`, {
       query: { date: day },
     })
-    const rows = (data ?? []).map((row) => toRecord(row))
+    const rows = (data ?? []).map((row) => toRecord(row)).filter((r): r is AttendanceRecord => r != null)
     if (rows.length) cacheLocalRecords(classId, day, rows)
     // Trust the server when the endpoint exists — an empty array means "not marked yet",
     // not "fall back to stale browser storage" (teacher-app marks live on the server).
@@ -172,7 +178,7 @@ export async function saveAttendance(
   const day = toAttendanceDate(args.date)
   const records = args.records
     .filter((r) => r.studentId)
-    .map((r) => ({ studentId: r.studentId, status: asStatus(r.status) }))
+    .map((r) => ({ studentId: r.studentId, status: r.status }))
   if (!records.length) throw new Error('No students to save')
   try {
     await request<unknown>(`/classes/${classId}/attendance`, {

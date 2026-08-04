@@ -158,9 +158,10 @@ function ClassPanel({
       .sort((a, b) => (a.roll ?? 0) - (b.roll ?? 0) || a.name.localeCompare(b.name)),
     [students, cls],
   )
-  const statusOf = (id: string): AttStatus => draft[id] ?? savedMap[id] ?? 'present'
+  /** `null` means nobody — CRM, teacher app, or geo-fence — has marked this student yet. */
+  const statusOf = (id: string): AttStatus | null => draft[id] ?? savedMap[id] ?? null
   const fromServer = (attendanceQ.data?.length ?? 0) > 0
-  const rosterPresent = roster.filter((s) => statusOf(s.id) !== 'absent').length
+  const rosterPresent = roster.filter((s) => statusOf(s.id) === 'present' || statusOf(s.id) === 'late').length
   const hasDraft = Object.keys(draft).length > 0
 
   /* Resolve present/total + whether this class is actually marked for the day.
@@ -201,7 +202,13 @@ function ClassPanel({
       toast.danger('No students', 'No students matched this class. Check grade/section on the student.')
       return
     }
-    const records = roster.map((s) => ({ studentId: s.id, status: statusOf(s.id) }))
+    const records = roster
+      .filter((s) => draft[s.id] !== undefined || savedMap[s.id] !== undefined)
+      .map((s) => ({ studentId: s.id, status: statusOf(s.id) as AttStatus }))
+    if (!records.length) {
+      toast.danger('Nothing to save', 'Mark at least one student before submitting.')
+      return
+    }
     try {
       await saveAttendance.mutateAsync({ classId, date, records })
       toast.success('Attendance saved', `${classLabel(cls)} · ${rosterPresent}/${roster.length} present`)
@@ -319,8 +326,10 @@ function ClassPanel({
                         </div>
                       </div>
                       {editable
-                        ? <Segmented value={st} onChange={(v) => setStatus(s.id, v as AttStatus)} options={STATUS_OPTS} />
-                        : <Badge tone={STATUS_TONE[st]} dot>{STATUS_LABEL[st]}</Badge>}
+                        ? <Segmented value={st ?? ''} onChange={(v) => setStatus(s.id, v as AttStatus)} options={STATUS_OPTS} />
+                        : st
+                          ? <Badge tone={STATUS_TONE[st]} dot>{STATUS_LABEL[st]}</Badge>
+                          : <Badge tone="neutral">Not marked</Badge>}
                     </div>
                   )
                 })}
