@@ -9,6 +9,7 @@ export function useGrades(examPaperId: string | null): UseQueryResult<GradeRow[]
     queryKey: queryKeys.exams.grades(examPaperId ?? ''),
     queryFn: () => listGrades(examPaperId!),
     enabled: !!examPaperId,
+    staleTime: 30_000,
   })
 }
 
@@ -18,7 +19,14 @@ export function useUpsertGrade(): UseMutationResult<GradeRow, Error, UpsertGrade
     mutationFn: (input) => upsertGrade(input),
     onSuccess: (g) => {
       qc.invalidateQueries({ queryKey: queryKeys.exams.grades(g.examPaperId) })
-      qc.invalidateQueries({ queryKey: ['exams', 'marksMap'] })
+      // Scope to marksMaps that actually include this paper, not every exam's map.
+      qc.invalidateQueries({
+        predicate: (query) => {
+          const k = query.queryKey
+          return k[0] === 'exams' && k[1] === 'marksMap'
+            && typeof k[3] === 'string' && k[3].split(',').includes(g.examPaperId)
+        },
+      })
     },
   })
 }
@@ -32,14 +40,15 @@ export function useExamMarksMap(examId: string | null): UseQueryResult<Record<st
     queryFn: async () => {
       const out: Record<string, number> = {}
       if (!examId || !papersQ.data?.length) return out
-      for (const p of papersQ.data) {
-        const grades = await listGrades(p.id)
-        for (const g of grades) {
+      const perPaper = await Promise.all(papersQ.data.map((p) => listGrades(p.id)))
+      papersQ.data.forEach((p, i) => {
+        for (const g of perPaper[i]) {
           out[markKey(examId, g.studentId, p.subject)] = g.marks
         }
-      }
+      })
       return out
     },
     enabled: !!examId && !!papersQ.data?.length,
+    staleTime: 30_000,
   })
 }
