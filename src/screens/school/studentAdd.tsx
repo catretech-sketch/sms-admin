@@ -383,11 +383,12 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
     setSaving(true)
 
     const afterOk = async (saved: Student) => {
-      // Navigate first so the profile opens instantly; persist the extras/files in
-      // the background (best-effort — the profile reads them from storage on open).
+      // Persist extras (father/mother, documents, blood group, etc. — fields the
+      // SIS API doesn't accept yet) BEFORE navigating, so the profile's first read
+      // of localStorage already has them instead of racing this write.
+      await persistExtras(saved.id, { ...student, id: saved.id }, files)
       toast.success(mode === 'edit' ? 'Student updated' : 'Student added', `${saved.name} · ${saved.cls}.`)
       app.go('school.student', { focus: saved.id })
-      await persistExtras(saved.id, { ...student, id: saved.id }, files)
     }
 
     if (mode === 'edit' && existing) {
