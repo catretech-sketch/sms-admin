@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { listStudents, getStudent, createStudent, toStudent, studentGuardianName, studentParentLabel, fromStudent } from './students'
+import { listStudents, getStudent, createStudent, updateStudent, toStudent, studentGuardianName, studentParentLabel, fromStudent, fromStudentUpdate } from './students'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -110,4 +110,35 @@ describe('createStudent', () => {
     expect(studentGuardianName(s)).toBe('')
     expect(studentParentLabel(s)).toBe('Guardian · 98100')
   })
+})
+
+describe('updateStudent', () => {
+  const editedStudent = {
+    id: 's1', adm: 'A-100', cls: '10-A', name: 'Asha', gender: 'F' as const, grade: '10', section: 'A',
+    roll: 3, guardian: 'Ravi Kumar', phone: '99', attendance: 92, feeStatus: 'paid' as const, feeDue: 0,
+    status: 'active' as const, house: 'Blue', avatarHue: 210,
+    dob: '2015-04-12', email: 'asha@example.com', address: '221B Baker Street',
+  } as unknown as Parameters<typeof updateStudent>[1]
+
+  it('fromStudentUpdate includes dob/email/address/gender — not just the original subset', () => {
+    const body = fromStudentUpdate(editedStudent)
+    expect(body.dob).toBe('2015-04-12')
+    expect(body.email).toBe('asha@example.com')
+    expect(body.address).toBe('221B Baker Street')
+    expect(body.gender).toBe('F')
+  })
+
+  it('PATCHes /students/{id} with the full field set, not a hardcoded subset', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { ...wireStudent, email: 'asha@example.com', dob: '2015-04-12' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await updateStudent('s1', editedStudent)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toContain('/students/s1')
+    expect((init as RequestInit).method).toBe('PATCH')
+    const body = JSON.parse((init as RequestInit).body as string)
+    expect(body.email).toBe('asha@example.com')
+    expect(body.dob).toBe('2015-04-12')
+    expect(body.address).toBe('221B Baker Street')
+  })
+
 })
