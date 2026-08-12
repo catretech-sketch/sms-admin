@@ -1,5 +1,12 @@
 import { useMutation, useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query'
-import { listAttendance, saveAttendance, type AttendanceMark, type AttendanceRecord } from '../attendance'
+import {
+  getAttendanceRollCall,
+  listAttendance,
+  saveAttendance,
+  type AttendanceMark,
+  type AttendanceRecord,
+  type AttendanceRollCall,
+} from '../attendance'
 import { queryKeys } from '../queryKeys'
 
 export function useClassAttendance(
@@ -9,6 +16,19 @@ export function useClassAttendance(
   return useQuery({
     queryKey: queryKeys.attendance.forClass(classId ?? '', date),
     queryFn: () => listAttendance(classId!, date),
+    enabled: Boolean(classId && date),
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+  })
+}
+
+export function useAttendanceRollCall(
+  classId: string | null | undefined,
+  date: string,
+): UseQueryResult<AttendanceRollCall> {
+  return useQuery({
+    queryKey: queryKeys.attendance.rollCall(classId ?? '', date),
+    queryFn: () => getAttendanceRollCall(classId!, date),
     enabled: Boolean(classId && date),
     staleTime: 30_000,
     refetchOnWindowFocus: true,

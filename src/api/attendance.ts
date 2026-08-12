@@ -20,6 +20,22 @@ export interface AttendanceRecord {
   markedBy?: string | null
 }
 
+export interface AttendanceRollCall {
+  date: string
+  day: string
+  period: number | null
+  subject: string | null
+  startTime: string | null
+  endTime: string | null
+  teacherId: string | null
+  teacherName: string | null
+  classTeacherId: string | null
+  classTeacherName: string | null
+  canMark: boolean
+  reason: string
+  marked: boolean
+}
+
 /** `null` for anything that isn't a real mark — a malformed/missing status must
  *  never be silently treated as "present". */
 function asStatus(v: unknown): AttendanceStatus | null {
@@ -169,6 +185,13 @@ export async function listAttendance(classId: string, date: string): Promise<Att
     if (isMissingEndpoint(err)) return loadLocalDay(classId, day)
     throw err
   }
+}
+
+export async function getAttendanceRollCall(classId: string, date: string): Promise<AttendanceRollCall> {
+  const data = await request<Record<string, unknown>>(`/classes/${classId}/attendance/roll-call`, {
+    query: { date: toAttendanceDate(date) },
+  })
+  return snakeToCamel<AttendanceRollCall>(data)
 }
 
 export async function saveAttendance(

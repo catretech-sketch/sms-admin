@@ -50,6 +50,7 @@ export const queryKeys = {
   },
   attendance: {
     forClass: (classId: string, date = '') => ['attendance', classId, date] as const,
+    rollCall: (classId: string, date = '') => ['attendance', 'rollCall', classId, date] as const,
     principal: (date = '') => ['attendance', 'principal', tenantScope(), date] as const,
     schoolLocation: ['attendance', 'schoolLocation', tenantScope()] as const,
     studentMonths: (studentId: string, classId = '') => ['attendance', 'studentMonths', studentId, classId] as const,

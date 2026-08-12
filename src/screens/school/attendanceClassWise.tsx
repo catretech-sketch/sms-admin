@@ -12,7 +12,7 @@ import type { SchoolClass } from '@/api/classes'
 import { useStudents } from '@/api/hooks/useStudents'
 import { useTeachers } from '@/api/hooks/useTeachers'
 import { useStaff } from '@/api/hooks/useStaff'
-import { useClassAttendance, useSaveAttendance } from '@/api/hooks/useAttendance'
+import { useAttendanceRollCall, useClassAttendance, useSaveAttendance } from '@/api/hooks/useAttendance'
 import { usePrincipalAttendance } from '@/api/hooks/usePrincipalAttendance'
 import { studentPhotoUrl } from '@/api/studentExtras'
 import { compareClassesAscending, gradeRank } from '@/lib/defaultClasses'
@@ -138,8 +138,10 @@ function ClassPanel({
   const toast = useToast()
   const classId = cls.id!
   const attendanceQ = useClassAttendance(open ? classId : null, date)
+  const rollCallQ = useAttendanceRollCall(open ? classId : null, date)
   const saveAttendance = useSaveAttendance()
   const [draft, setDraft] = useState<Record<string, AttStatus>>({})
+  const canEditAttendance = editable && rollCallQ.data?.canMark === true
 
   const savedMap = useMemo(() => {
     const m: Record<string, AttStatus> = {}
@@ -292,7 +294,7 @@ function ClassPanel({
 
       {open && (
         <div className="sm-att-class-body">
-          {attendanceQ.isLoading ? (
+          {attendanceQ.isLoading || rollCallQ.isLoading ? (
             <div className="t-sm muted" style={{ padding: '12px 16px' }}>Loading marks…</div>
           ) : roster.length === 0 ? (
             <div style={{ padding: 8 }}><Empty icon="users" title="No students" body="No students enrolled in this class." /></div>
@@ -304,8 +306,18 @@ function ClassPanel({
                     ? <Badge tone="success" icon="check">Saved on server</Badge>
                     : <Badge tone="neutral">Not saved yet</Badge>}
                   <span className="t-xs muted3">{date}</span>
+                  {rollCallQ.data && (
+                    <span className="sm-att-chip" style={{ color: 'var(--brand-600)' }}>
+                      Roll-call · P{rollCallQ.data.period ?? '—'} · {rollCallQ.data.subject ?? 'No subject'} · {rollCallQ.data.teacherName ?? 'No teacher'}
+                    </span>
+                  )}
+                  {rollCallQ.data && !rollCallQ.data.canMark && (
+                    <span className="t-xs muted">
+                      View only — {rollCallQ.data.classTeacherName || rollCallQ.data.teacherName || 'the assigned teacher'} takes this class today
+                    </span>
+                  )}
                 </div>
-                {editable && (
+                {canEditAttendance && (
                   <div className="row ai-center gap8">
                     <Btn size="sm" variant="secondary" icon="check" onClick={markAllPresent}>All present</Btn>
                     <Btn size="sm" variant="ghost" onClick={markAllAbsent}>All absent</Btn>
@@ -325,7 +337,7 @@ function ClassPanel({
                           <div className="t-xs muted3">Roll {s.roll} · {s.cls || classLabel(cls)}</div>
                         </div>
                       </div>
-                      {editable
+                      {canEditAttendance
                         ? <Segmented value={st ?? ''} onChange={(v) => setStatus(s.id, v as AttStatus)} options={STATUS_OPTS} />
                         : st
                           ? <Badge tone={STATUS_TONE[st]} dot>{STATUS_LABEL[st]}</Badge>
@@ -334,7 +346,7 @@ function ClassPanel({
                   )
                 })}
               </div>
-              {editable && (
+              {canEditAttendance && (
                 <div className="row ai-center jc-end" style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
                   <Btn variant="primary" icon="check" disabled={saveAttendance.isPending || !roster.length} onClick={() => { void submit() }}>
                     {saveAttendance.isPending ? 'Saving…' : 'Submit class'}

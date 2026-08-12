@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { listAttendance, saveAttendance, listLocalAttendanceRange } from './attendance'
+import { getAttendanceRollCall, listAttendance, saveAttendance, listLocalAttendanceRange } from './attendance'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -37,6 +37,26 @@ describe('listAttendance', () => {
       status: 'present',
       markedBy: null,
     }])
+  })
+})
+
+describe('getAttendanceRollCall', () => {
+  it('GETs /classes/{id}/attendance/roll-call?date= and maps can_mark', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: {
+        date: '2026-08-12',
+        day: 'Wed',
+        period: 1,
+        subject: 'Math',
+        can_mark: true,
+        reason: 'first_period',
+        marked: false,
+      },
+    })))
+    const row = await getAttendanceRollCall('c1', '2026-08-12')
+    expect(row.canMark).toBe(true)
+    expect(row.period).toBe(1)
+    expect(row.reason).toBe('first_period')
   })
 })
 
