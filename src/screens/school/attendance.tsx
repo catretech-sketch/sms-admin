@@ -32,8 +32,9 @@ import {
 } from '@/lib/geoAttendanceDemo'
 import type { Teacher, Staff, Role } from '@/types'
 import { GeoFencePanel } from './geoFencePanel'
+import { AttendanceAdvanced } from './attendanceAdvanced'
 
-type Group = 'students' | 'teachers' | 'staff' | 'geo'
+type Group = 'students' | 'teachers' | 'staff' | 'geo' | 'advanced'
 type AttStatus = AttendanceStatus
 
 /** Owner / Admin / Principal / VP — full school roll (students + teachers + staff). */
@@ -51,11 +52,13 @@ const GROUP_OPTS_ALL_BASE = [
   { value: 'students', label: 'Students' },
   { value: 'teachers', label: 'Teachers' },
   { value: 'staff', label: 'Staff' },
+  { value: 'advanced', label: 'Advanced' },
   { value: 'geo', label: 'Geo-fence' },
 ] as const
 
 const GROUP_OPTS_TEACHER = [
   { value: 'students', label: 'Students' },
+  { value: 'advanced', label: 'Advanced' },
 ]
 
 const STATUS_TONE: Record<AttStatus, BadgeTone> = { present: 'success', late: 'warning', absent: 'danger' }
@@ -562,6 +565,7 @@ function AttendanceScreen() {
       </div>
 
       {group === 'students' && <ClassWiseStudents editable={editable} leadership={allPeople} />}
+      {group === 'advanced' && <AttendanceAdvanced />}
       {allPeople && (group === 'teachers' || group === 'staff') && <StaffRoster group={group} editable={editable} />}
       {allPeople && group === 'geo' && <GeoFencePanel />}
     </div>

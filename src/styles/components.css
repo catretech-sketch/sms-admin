@@ -396,6 +396,35 @@ html[dir=rtl] .sm-toasts{ right:auto; left:22px; }
   .sm-att-hero-val{ font-size:28px; }
 }
 
+/* ---------- Attendance (advanced list) ---------- */
+.sm-att-adv-head{
+  display:flex; align-items:center; justify-content:space-between; gap:16px;
+  padding:16px 18px; border-bottom:1px solid var(--border);
+}
+.sm-att-adv-filters{
+  display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:12px;
+  padding:16px 18px; border-bottom:1px solid var(--border); background:var(--surface-2);
+}
+.sm-att-adv-field{ display:flex; flex-direction:column; gap:6px; min-width:0; }
+.sm-att-adv-field > span{ color:var(--text-2); font-size:12px; font-weight:700; }
+.sm-att-adv-search{ grid-column:span 2; }
+.sm-att-adv-search .sm-search{ width:100%; }
+.sm-att-adv-state{
+  display:flex; align-items:center; justify-content:center; gap:16px; min-height:180px; padding:28px;
+  text-align:center;
+}
+.sm-att-adv-table-wrap{ width:100%; overflow:auto; }
+.sm-att-adv-table{ min-width:1420px; }
+.sm-att-adv-table td{ white-space:nowrap; }
+.sm-att-adv-pagination{
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:12px 18px; border-top:1px solid var(--border);
+}
+@media (max-width:720px){
+  .sm-att-adv-head, .sm-att-adv-pagination{ align-items:flex-start; flex-direction:column; }
+  .sm-att-adv-search{ grid-column:span 1; }
+}
+
 /* ---- Report card (branded sheet) ---- */
 .sm-report-card{
   position:relative;
