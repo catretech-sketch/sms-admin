@@ -17,7 +17,7 @@ const DEFAULT_FILTERS: PeriodAttendanceAdvancedFilters = {
 const PRESET_OPTIONS = [
   { value: 'today', label: 'Today' },
   { value: 'yesterday', label: 'Yesterday' },
-  { value: 'last_7_days', label: 'Last 7 days' },
+  { value: 'this_week', label: 'This week' },
   { value: 'this_month', label: 'This month' },
   { value: 'custom', label: 'Custom range' },
 ]
@@ -37,6 +37,7 @@ const ROLE_OPTIONS = [
   { value: 'principal', label: 'Principal' },
   { value: 'vice_principal', label: 'Vice Principal' },
   { value: 'teacher', label: 'Teacher' },
+  { value: 'staff', label: 'Staff' },
 ]
 
 function compactFilters(filters: PeriodAttendanceAdvancedFilters): PeriodAttendanceAdvancedFilters {
@@ -100,6 +101,19 @@ export function AttendanceAdvanced() {
     setFilters((current) => ({ ...current, [key]: value, page: 1 }))
   }
 
+  const updatePreset = (preset: string) => {
+    setFilters((current) => ({
+      ...current,
+      preset,
+      page: 1,
+      ...(preset === 'custom' ? {} : { from: undefined, to: undefined }),
+    }))
+  }
+
+  const updateGrade = (grade: string) => {
+    setFilters((current) => ({ ...current, grade, classId: undefined, page: 1 }))
+  }
+
   return (
     <Card pad={false}>
       <div className="sm-att-adv-head">
@@ -117,7 +131,7 @@ export function AttendanceAdvanced() {
             aria-label="Date preset"
             value={filters.preset}
             options={PRESET_OPTIONS}
-            onChange={(event) => update('preset', event.target.value)}
+            onChange={(event) => updatePreset(event.target.value)}
           />
         </label>
         {filters.preset === 'custom' && (
@@ -138,7 +152,7 @@ export function AttendanceAdvanced() {
             aria-label="Class"
             value={filters.grade ?? ''}
             options={[{ value: '', label: 'All classes' }, ...grades.map((grade) => ({ value: grade, label: grade }))]}
-            onChange={(event) => update('grade', event.target.value)}
+            onChange={(event) => updateGrade(event.target.value)}
           />
         </label>
         <label className="sm-att-adv-field">

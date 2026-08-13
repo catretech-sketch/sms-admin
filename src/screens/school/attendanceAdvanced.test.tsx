@@ -116,6 +116,49 @@ describe('AttendanceAdvanced', () => {
 
     await waitFor(() => expect(advancedFilters).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 })))
   })
+
+  it('uses a supported week preset and clears custom bounds when leaving custom range', async () => {
+    render(<AttendanceAdvanced />)
+
+    expect(screen.getByRole('option', { name: 'This week' })).toHaveValue('this_week')
+    expect(screen.queryByRole('option', { name: 'Last 7 days' })).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Date preset'), { target: { value: 'custom' } })
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-08-01' } })
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: '2026-08-07' } })
+    fireEvent.change(screen.getByLabelText('Date preset'), { target: { value: 'today' } })
+
+    await waitFor(() => expect(advancedFilters).toHaveBeenLastCalledWith({
+      preset: 'today',
+      page: 1,
+      pageSize: 25,
+    }))
+  })
+
+  it('clears the selected section when the class grade changes', async () => {
+    render(<AttendanceAdvanced />)
+
+    fireEvent.change(screen.getByLabelText('Class'), { target: { value: 'IX' } })
+    fireEvent.change(screen.getByLabelText('Section'), { target: { value: 'class-1' } })
+    fireEvent.change(screen.getByLabelText('Class'), { target: { value: 'X' } })
+
+    await waitFor(() => expect(advancedFilters).toHaveBeenLastCalledWith(expect.objectContaining({
+      grade: 'X',
+    })))
+    expect(advancedFilters).toHaveBeenLastCalledWith(expect.not.objectContaining({
+      classId: expect.anything(),
+    }))
+  })
+
+  it('forwards Staff as a marked-by role filter', async () => {
+    render(<AttendanceAdvanced />)
+
+    fireEvent.change(screen.getByLabelText('Marked by role'), { target: { value: 'staff' } })
+
+    await waitFor(() => expect(advancedFilters).toHaveBeenLastCalledWith(expect.objectContaining({
+      markedByRole: 'staff',
+      page: 1,
+    })))
+  })
 })
 
 describe('Attendance screen Advanced wiring', () => {
