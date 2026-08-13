@@ -51,14 +51,20 @@ export const queryKeys = {
   attendance: {
     forClass: (classId: string, date = '') => ['attendance', classId, date] as const,
     rollCall: (classId: string, date = '') => ['attendance', 'rollCall', classId, date] as const,
+    dayTimetable: (classId: string, date = '') => ['attendance', 'dayTimetable', classId, date] as const,
+    period: (classId: string, date = '', period = 0, subject = '') =>
+      ['attendance', 'period', classId, date, period, subject] as const,
     principal: (date = '') => ['attendance', 'principal', tenantScope(), date] as const,
     schoolLocation: ['attendance', 'schoolLocation', tenantScope()] as const,
     studentMonths: (studentId: string, classId = '') => ['attendance', 'studentMonths', studentId, classId] as const,
+    advanced: (filters: import('./periodAttendanceAdvanced').PeriodAttendanceAdvancedFilters = {}) =>
+      ['attendance', 'advanced', tenantScope(), filters] as const,
   },
   exams: {
     all: ['exams'] as const,
     papers: (examId: string) => ['exams', 'papers', examId] as const,
     grades: (paperId: string) => ['exams', 'grades', paperId] as const,
+    studentGrades: (studentId: string) => ['exams', 'studentGrades', tenantScope(), studentId] as const,
   },
   complaints: {
     all: ['complaints'] as const,
