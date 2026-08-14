@@ -62,7 +62,7 @@ export async function collectAudienceContacts(
     try {
       for (const s of await listStudents()) {
         if (!inClass(s.cls)) continue
-        addEmail(emails, s.email)
+        addEmail(emails, s.guardianEmail)
         addEmail(emails, s.father?.email)
         addEmail(emails, s.mother?.email)
         addPhone(phones, s.phone)

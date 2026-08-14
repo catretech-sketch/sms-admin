@@ -43,3 +43,22 @@ export async function ensureDefaultSubjects(existing?: SchoolSubject[]): Promise
   }
   return created
 }
+
+/**
+ * Ensure every named subject exists in GET/POST /subjects (idempotent).
+ * Used by timetable publish so student/teacher catalogs match free-text slot subjects.
+ */
+export async function ensureSubjectsNamed(names: string[]): Promise<{ created: number; total: number }> {
+  const wanted = [...new Set(names.map((n) => n.trim()).filter(Boolean))]
+  if (wanted.length === 0) return { created: 0, total: 0 }
+  const current = await listSubjects()
+  const have = new Set(current.map((s) => s.name.trim().toLowerCase()).filter(Boolean))
+  let created = 0
+  for (const name of wanted) {
+    if (have.has(name.toLowerCase())) continue
+    await createSubject(name)
+    have.add(name.toLowerCase())
+    created += 1
+  }
+  return { created, total: wanted.length }
+}

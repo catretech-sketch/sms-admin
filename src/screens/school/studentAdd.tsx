@@ -10,9 +10,10 @@ import { useCreateStudent, useUpdateStudent } from '@/api/hooks/useStudentMutati
 import { useStudent, useStudents } from '@/api/hooks/useStudents'
 import { nextPersonCode, personCodePrefix } from '@/lib/personCodes'
 import {
-  extrasFromStudent, fileToStoredDoc, loadStudentExtras, saveStudentExtras,
+  extrasFromStudent, fileToStoredDoc, fetchStudentExtras, mergeStudentExtras, saveStudentExtras,
   type StoredDoc,
 } from '@/api/studentExtras'
+import { parentMailFromStudent } from '@/api/students'
 import { PageHead, Card, CardHead, Btn, Badge, Icon, useFormKit, Spinner, Empty, Field, Input } from '@/components/ui'
 import { useClasses, useClassNames } from '@/api/hooks/useClasses'
 import type { SchoolClass } from '@/api/classes'
@@ -77,7 +78,7 @@ function splitName(full: string): { first: string; last: string } {
   return { first: parts[0], last: parts.slice(1).join(' ') }
 }
 
-function studentToForm(s: Student): Form {
+export function studentToForm(s: Student): Form {
   const { first, last } = splitName(s.name)
   const classKey = s.cls || (s.grade && s.section ? `${s.grade}-${s.section}` : s.grade || '')
   return {
@@ -106,8 +107,8 @@ function studentToForm(s: Student): Form {
     address: s.address || '',
     aadhaar: s.aadhaar || '',
     fatherName: s.father?.name || s.guardian || '',
-    fatherEmail: s.father?.email || '',
-    fatherPhone: s.father?.phone || '',
+    fatherEmail: s.father?.email || s.guardianEmail || '',
+    fatherPhone: s.father?.phone || s.phone || '',
     fatherOccupation: s.father?.occupation || '',
     fatherAadhaar: s.father?.aadhaar || '',
     motherName: s.mother?.name || '',
@@ -129,6 +130,17 @@ function buildStudent(
   const fatherName = properName(f.fatherName) || undefined
   const motherName = properName(f.motherName) || undefined
   const guardian = (fatherName || motherName || '').trim()
+  const father = {
+    name: fatherName, email: f.fatherEmail.trim() || undefined,
+    phone: f.fatherPhone || undefined, occupation: f.fatherOccupation || undefined,
+    aadhaar: f.fatherAadhaar || undefined,
+    photoName: files.fatherPhoto?.name || base?.father?.photoName,
+  }
+  const mother = {
+    name: motherName, email: f.motherEmail.trim() || undefined,
+    phone: f.motherPhone || undefined, occupation: f.motherOccupation || undefined,
+    photoName: files.motherPhoto?.name || base?.mother?.photoName,
+  }
   return {
     id: base?.id || 'S' + Date.now().toString(36).toUpperCase(),
     adm: f.adm.trim(),
@@ -140,6 +152,7 @@ function buildStudent(
     roll: 0, /* server assigns A–Z by name within class */
     guardian,
     phone: f.phone.trim(),
+    guardianEmail: parentMailFromStudent({ father, mother }) || undefined,
     attendance: base?.attendance ?? 0,
     feeStatus: base?.feeStatus ?? 'due',
     feeDue: base?.feeDue ?? 0,
@@ -160,17 +173,8 @@ function buildStudent(
     email: f.email || undefined,
     aadhaar: f.aadhaar || undefined,
     photoName: files.studentPhoto?.name || base?.photoName,
-    father: {
-      name: fatherName, email: f.fatherEmail || undefined,
-      phone: f.fatherPhone || undefined, occupation: f.fatherOccupation || undefined,
-      aadhaar: f.fatherAadhaar || undefined,
-      photoName: files.fatherPhoto?.name || base?.father?.photoName,
-    },
-    mother: {
-      name: motherName, email: f.motherEmail || undefined,
-      phone: f.motherPhone || undefined, occupation: f.motherOccupation || undefined,
-      photoName: files.motherPhoto?.name || base?.mother?.photoName,
-    },
+    father,
+    mother,
     documents: {
       birthCert: files.birthCert?.name || base?.documents?.birthCert,
       transferCert: files.transferCert?.name || base?.documents?.transferCert,
@@ -181,7 +185,7 @@ function buildStudent(
 }
 
 async function persistExtras(studentId: string, student: Student, files: Files): Promise<void> {
-  const prev = loadStudentExtras(studentId)?.files || []
+  const prev = (await fetchStudentExtras(studentId).catch(() => null))?.files || []
   const byKey = new Map(prev.map((d) => [d.key, d]))
   const picks: Array<[StoredDoc['key'], File | null]> = [
     ['photo', files.studentPhoto],
@@ -196,7 +200,7 @@ async function persistExtras(studentId: string, student: Student, files: Files):
     const stored = await fileToStoredDoc(key, file)
     if (stored) byKey.set(key, stored)
   }
-  saveStudentExtras(studentId, extrasFromStudent(student, Array.from(byKey.values())))
+  await saveStudentExtras(studentId, extrasFromStudent(student, Array.from(byKey.values())))
 }
 
 function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
@@ -219,13 +223,21 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
   const classesQ = useClasses()
   const liveClasses = classesQ.data ?? []
   const classNames = useClassNames()
-  const [houses, setHouses] = useState(() => listSchoolHouses())
+  const [houses, setHouses] = useState<string[]>([])
 
   useEffect(() => {
-    /* Refresh if Academics added a house in another tab. */
-    const sync = () => setHouses(listSchoolHouses())
+    let cancelled = false
+    const sync = () => {
+      void listSchoolHouses()
+        .then((list) => { if (!cancelled) setHouses(list) })
+        .catch(() => { /* keep prior list */ })
+    }
+    sync()
     window.addEventListener('focus', sync)
-    return () => window.removeEventListener('focus', sync)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', sync)
+    }
   }, [])
 
   const suggestedAdm = useMemo(() => {
@@ -282,25 +294,34 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
 
   useEffect(() => {
     if (mode !== 'edit' || !existing) return
+    let cancelled = false
     setForm(studentToForm(existing))
-    const ex = loadStudentExtras(existing.id)
-    const next: Partial<Record<keyof typeof INITIAL_FILES, string>> = {}
-    const map: Record<string, keyof typeof INITIAL_FILES> = {
-      photo: 'studentPhoto',
-      fatherPhoto: 'fatherPhoto',
-      motherPhoto: 'motherPhoto',
-      studentAadhaar: 'studentAadhaarDoc',
-      fatherAadhaar: 'fatherAadhaarDoc',
-      birthCert: 'birthCert',
-      transferCert: 'transferCert',
-    }
-    for (const d of ex?.files ?? []) {
-      if (!d.dataUrl) continue
-      const formKey = map[d.key]
-      if (formKey) next[formKey] = d.dataUrl
-    }
-    setSavedUrls(next)
-    setHydrated(true)
+    void fetchStudentExtras(existing.id)
+      .then((ex) => {
+        if (cancelled) return
+        setForm(studentToForm(mergeStudentExtras({ ...existing })))
+        const next: Partial<Record<keyof typeof INITIAL_FILES, string>> = {}
+        const map: Record<string, keyof typeof INITIAL_FILES> = {
+          photo: 'studentPhoto',
+          fatherPhoto: 'fatherPhoto',
+          motherPhoto: 'motherPhoto',
+          studentAadhaar: 'studentAadhaarDoc',
+          fatherAadhaar: 'fatherAadhaarDoc',
+          birthCert: 'birthCert',
+          transferCert: 'transferCert',
+        }
+        for (const d of ex?.files ?? []) {
+          if (!d.dataUrl) continue
+          const formKey = map[d.key]
+          if (formKey) next[formKey] = d.dataUrl
+        }
+        setSavedUrls(next)
+        setHydrated(true)
+      })
+      .catch(() => {
+        if (!cancelled) setHydrated(true)
+      })
+    return () => { cancelled = true }
   }, [mode, existing])
 
   const clearSaved = (key: keyof typeof INITIAL_FILES) => {
@@ -383,10 +404,16 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
     setSaving(true)
 
     const afterOk = async (saved: Student) => {
-      // Persist extras (father/mother, documents, blood group, etc. — fields the
-      // SIS API doesn't accept yet) BEFORE navigating, so the profile's first read
-      // of localStorage already has them instead of racing this write.
-      await persistExtras(saved.id, { ...student, id: saved.id }, files)
+      try {
+        await persistExtras(saved.id, { ...student, id: saved.id }, files)
+      } catch (err) {
+        toast.danger(
+          'Student saved, extras failed',
+          err instanceof Error ? err.message : 'Enrolment details could not be saved to the server.',
+        )
+        app.go('school.student', { focus: saved.id })
+        return
+      }
       toast.success(mode === 'edit' ? 'Student updated' : 'Student added', `${saved.name} · ${saved.cls}.`)
       app.go('school.student', { focus: saved.id })
     }

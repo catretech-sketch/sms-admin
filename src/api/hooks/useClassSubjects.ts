@@ -12,7 +12,7 @@ import {
 } from '../classSubjects'
 import { queryKeys } from '../queryKeys'
 
-/** Live + local class→subject map. Hydrates from GET /classes.subjects when present. */
+/** In-memory class→subject map. Hydrates from GET /classes.subjects when present. */
 export function useClassSubjectsMap(): ClassSubjectsMap {
   const classesQ = useClasses()
   const [tick, setTick] = useState(0)
@@ -24,10 +24,8 @@ export function useClassSubjectsMap(): ClassSubjectsMap {
   useEffect(() => {
     const bump = () => setTick((n) => n + 1)
     window.addEventListener(CLASS_SUBJECTS_CHANGED, bump)
-    window.addEventListener('storage', bump)
     return () => {
       window.removeEventListener(CLASS_SUBJECTS_CHANGED, bump)
-      window.removeEventListener('storage', bump)
     }
   }, [])
 
@@ -55,6 +53,7 @@ export function useListClassSubjects(classId: string | null): UseQueryResult<str
     queryKey: queryKeys.classes.subjects(classId ?? ''),
     queryFn: () => listClassSubjects(classId!),
     enabled: !!classId,
+    staleTime: 30_000,
   })
 }
 

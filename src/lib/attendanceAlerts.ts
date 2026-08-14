@@ -1,7 +1,8 @@
 /* Attendance absence-streak alerts.
    Flags students (and teachers/staff via the same shape) who have been marked
    absent for N or more consecutive recorded days, so leadership can warn parents
-   and escalate to email. Threshold is configurable and persisted per browser. */
+   and escalate to email. Thresholds are persisted via `/attendance/alert-config`;
+   in-memory cache only after a successful API response (never browser SoT). */
 import { toAttendanceDate, type AttendanceRecord, type AttendanceStatus } from '@/api/attendance'
 
 export interface AbsenceAlert {
@@ -38,11 +39,14 @@ export const DEFAULT_ALERT_CONFIG: AttendanceAlertConfig = {
   autoChannel: 'app',
 }
 
-const CONFIG_KEY = 'sms_attendance_alert_config'
 const LAST_AUTO_KEY = 'sms_attendance_alert_last_auto'
+const LEGACY_CONFIG_KEY = 'sms_attendance_alert_config'
 const MIN_DAYS = 1
 const MAX_DAYS = 60
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
+
+/** Session memory — populated only after successful API GET/PUT. */
+let memoryConfig: AttendanceAlertConfig | null = null
 
 function clampDays(v: unknown, fallback: number): number {
   const n = Math.round(Number(v))
@@ -58,42 +62,49 @@ function normChannel(v: unknown): AlertChannel {
   return v === 'email' ? 'email' : 'app'
 }
 
-/** Read the persisted alert config (falls back to defaults, safe in SSR/tests). */
-export function loadAlertConfig(): AttendanceAlertConfig {
-  try {
-    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(CONFIG_KEY) : null
-    if (raw) {
-      const p = JSON.parse(raw) as Partial<AttendanceAlertConfig>
-      const noticeDays = clampDays(p.noticeDays, DEFAULT_ALERT_CONFIG.noticeDays)
-      const emailDays = clampDays(p.emailDays, DEFAULT_ALERT_CONFIG.emailDays)
-      /* Email escalation should never trigger before the in-app notice. */
-      return {
-        noticeDays,
-        emailDays: Math.max(noticeDays, emailDays),
-        autoSend: Boolean(p.autoSend),
-        autoTime: normTime(p.autoTime, DEFAULT_ALERT_CONFIG.autoTime),
-        autoChannel: normChannel(p.autoChannel),
-      }
-    }
-  } catch { /* ignore malformed config */ }
-  return { ...DEFAULT_ALERT_CONFIG }
-}
-
-/** Persist the alert config (best-effort). */
-export function saveAlertConfig(cfg: Partial<AttendanceAlertConfig>): AttendanceAlertConfig {
+/** Normalize/clamp alert config (no I/O). */
+export function normalizeAlertConfig(cfg: Partial<AttendanceAlertConfig>): AttendanceAlertConfig {
   const noticeDays = clampDays(cfg.noticeDays, DEFAULT_ALERT_CONFIG.noticeDays)
   const emailDays = Math.max(noticeDays, clampDays(cfg.emailDays, DEFAULT_ALERT_CONFIG.emailDays))
-  const next: AttendanceAlertConfig = {
+  return {
     noticeDays,
     emailDays,
     autoSend: Boolean(cfg.autoSend),
     autoTime: normTime(cfg.autoTime, DEFAULT_ALERT_CONFIG.autoTime),
     autoChannel: normChannel(cfg.autoChannel),
   }
+}
+
+function clearLegacyConfigStorage(): void {
   try {
-    if (typeof localStorage !== 'undefined') localStorage.setItem(CONFIG_KEY, JSON.stringify(next))
-  } catch { /* ignore quota / disabled storage */ }
-  return next
+    if (typeof localStorage !== 'undefined') localStorage.removeItem(LEGACY_CONFIG_KEY)
+  } catch { /* ignore */ }
+}
+
+/**
+ * Session-cached alert config after a successful API load/save.
+ * Returns null when the API has not successfully provided config this session.
+ */
+export function loadAlertConfig(): AttendanceAlertConfig | null {
+  clearLegacyConfigStorage()
+  return memoryConfig ? { ...memoryConfig } : null
+}
+
+/**
+ * Update in-memory cache only (after successful API GET/PUT).
+ * Never writes business config to localStorage.
+ */
+export function saveAlertConfig(cfg: Partial<AttendanceAlertConfig>): AttendanceAlertConfig {
+  const next = normalizeAlertConfig(cfg)
+  memoryConfig = next
+  clearLegacyConfigStorage()
+  return { ...next }
+}
+
+/** Test helper — drop in-memory alert config. */
+export function clearAlertConfigMemory(): void {
+  memoryConfig = null
+  clearLegacyConfigStorage()
 }
 
 /** Local YYYY-MM-DD for a date (used to dedupe one auto-send per day). */

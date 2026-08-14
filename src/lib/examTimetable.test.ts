@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { groupExamTimetable, autoBuildExamSlots, buildExamPeriodGrid, orderSubjectsBy, shuffleWithSeed, printExamTimetable } from './examTimetable'
+import { groupExamTimetable, autoBuildExamSlots, buildExamPeriodGrid, orderSubjectsBy, shuffleWithSeed, printExamTimetable, clampExamMaxMarks } from './examTimetable'
 
 describe('shuffleWithSeed', () => {
   it('is deterministic for the same seed', () => {
@@ -155,12 +155,35 @@ describe('autoBuildExamSlots', () => {
       className: 'VI-A',
       room: 'Hall 1',
     })
-    expect(slots[0]).toMatchObject({ classId: 'c1', className: 'VI-A', room: 'Hall 1' })
+    expect(slots[0]).toMatchObject({ classId: 'c1', className: 'VI-A', room: 'Hall 1', maxMarks: 100 })
+  })
+
+  it('applies per-subject max marks (e.g. 70 vs 100)', () => {
+    const slots = autoBuildExamSlots({
+      subjects: ['Maths', 'Drawing'],
+      startDate: '2026-09-07',
+      sessions: [{ start: '09:30' }],
+      duration: 120,
+      maxMarksBySubject: { Maths: 100, Drawing: 70 },
+    })
+    expect(slots.map((s) => ({ subject: s.subject, maxMarks: s.maxMarks }))).toEqual([
+      { subject: 'Maths', maxMarks: 100 },
+      { subject: 'Drawing', maxMarks: 70 },
+    ])
   })
 
   it('returns [] when nothing to place', () => {
     expect(autoBuildExamSlots({ subjects: [], startDate: '2026-09-07', sessions: [{ start: '09:30' }], duration: 180 })).toEqual([])
     expect(autoBuildExamSlots({ subjects: ['A'], startDate: '', sessions: [{ start: '09:30' }], duration: 180 })).toEqual([])
+  })
+})
+
+describe('clampExamMaxMarks', () => {
+  it('defaults and clamps', () => {
+    expect(clampExamMaxMarks(undefined)).toBe(100)
+    expect(clampExamMaxMarks(70)).toBe(70)
+    expect(clampExamMaxMarks(0)).toBe(100)
+    expect(clampExamMaxMarks(2000)).toBe(999)
   })
 })
 

@@ -1,5 +1,4 @@
 import { getClassSubjects } from '@/api/classSubjects'
-import { loadExamClassIds } from '@/api/examClasses'
 import { parseExamGrades } from '@/lib/defaultClasses'
 
 export type PaperScopeInput = {
@@ -25,14 +24,10 @@ export function isDummyExamPaper(paper: PaperScopeInput): boolean {
   return !mapped.includes(paper.subject)
 }
 
-/** Resolve which class IDs belong to this exam (explicit list, else none). */
+/** Resolve which class IDs belong to this exam (explicit API list only). */
 export function resolveExamClassIds(exam: ExamScope): Set<string> {
   const fromExam = exam.classIds?.filter(Boolean) ?? []
   if (fromExam.length) return new Set(fromExam)
-  if (exam.examId) {
-    const local = loadExamClassIds(exam.examId)
-    if (local.length) return new Set(local)
-  }
   return new Set()
 }
 

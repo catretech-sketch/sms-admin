@@ -1,11 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { useEffect } from 'react'
 import { render, screen, fireEvent, within, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AppProvider, useApp } from '@/context/AppProvider'
 import { ToastProvider } from '@/context/ToastProvider'
-import { studentAddScreens } from './studentAdd'
+import { clearPersonExtrasMemory } from '@/api/personExtrasApi'
+import { studentAddScreens, studentToForm } from './studentAdd'
+import type { Student } from '@/types'
 
 const AddStudentScreen = studentAddScreens['school.sis.add']
+const EditStudentScreen = studentAddScreens['school.sis.edit']
 
 /* Surfaces roster size + current view so assertions can observe the
    effect of a save without reaching into provider internals. */
@@ -126,4 +130,108 @@ describe('Add Student form', () => {
 
     vi.unstubAllGlobals()
   }, 20000)
+})
+
+describe('studentToForm parent email', () => {
+  it('hydrates father email from guardianEmail when extras father is missing', () => {
+    const f = studentToForm({
+      id: 'rahul-1', adm: 'sccrdtb/STU/26/0001', name: 'Rahul Sharma', gender: 'M',
+      grade: 'IV', section: 'B', cls: 'IV-B', roll: 0, guardian: 'Vaibhav Dubey',
+      phone: '7080080089', guardianEmail: 'Vaibhavv@yopmail.com', attendance: 60,
+      feeStatus: 'due', feeDue: 0, status: 'active', house: 'Ruby', avatarHue: 1,
+      address: 'Vill- Harpur',
+    } as Student)
+    expect(f.fatherEmail).toBe('Vaibhavv@yopmail.com')
+    expect(f.fatherPhone).toBe('7080080089')
+    expect(f.address).toBe('Vill- Harpur')
+  })
+})
+
+describe('Edit student form', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    sessionStorage.clear()
+    clearPersonExtrasMemory()
+  })
+
+  const RAHUL = {
+    id: 'rahul-1', admission_no: 'sccrdtb/STU/26/0001', class_label: 'IV-B',
+    name: 'Rahul Sharma', gender: 'M', grade: 'IV', section: 'B', roll: 0,
+    guardian_name: 'Vaibhav Dubey', guardian_phone: '7080080089', guardian_email: null,
+    email: 'rahul@yopmail.com', dob: '2014-05-01',
+    attendance_pct: 60, fee_status: 'due', fee_due: 0,
+    status: 'active', house: 'Ruby', avatar_hue: 1,
+  }
+
+  function FocusEdit({ id }: { id: string }) {
+    const app = useApp()
+    useEffect(() => { app.go('school.sis.edit', { focus: id }) }, [id])
+    if (app.focus !== id) return null
+    return <EditStudentScreen />
+  }
+
+  function makeEditFetch() {
+    return vi.fn().mockImplementation((url: unknown, init?: { method?: string; body?: string }) => {
+      const u = String(url)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (u.includes('/classes')) {
+        return Promise.resolve(jsonResponse({
+          data: [{ id: 'c-ivb', name: 'IV-B', grade: 'IV', section: 'B', room: null, class_teacher_id: null, student_count: 2 }],
+          next_cursor: null,
+        }))
+      }
+      if (u.includes('/extras') && method === 'GET') {
+        return Promise.resolve(jsonResponse({
+          data: { extras_json: JSON.stringify({ father: { name: 'Vaibhav Dubey', email: 'Vaibhavv@yopmail.com' } }) },
+        }))
+      }
+      if (u.includes('/students/') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ data: RAHUL }))
+      }
+      if (u.includes('/students') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ data: [RAHUL], next_cursor: null }))
+      }
+      return Promise.resolve(jsonResponse({ data: { ...RAHUL, guardian_email: 'Vaibhavv@yopmail.com' } }))
+    })
+  }
+
+  function renderEdit() {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    return render(
+      <QueryClientProvider client={qc}>
+        <AppProvider>
+          <ToastProvider>
+            <FocusEdit id="rahul-1" />
+          </ToastProvider>
+        </AppProvider>
+      </QueryClientProvider>,
+    )
+  }
+
+  it('loads father email from extras and PATCHes it as guardian_email', async () => {
+    const fetchMock = makeEditFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    renderEdit()
+
+    const fatherEmail = await waitFor(() => {
+      const field = screen.getByText('Father email').closest('.sm-field') as HTMLElement
+      return within(field).getByRole('textbox') as HTMLInputElement
+    })
+    expect(fatherEmail.value).toBe('Vaibhavv@yopmail.com')
+
+    fireEvent.click(screen.getByText('Save changes'))
+
+    await waitFor(() => {
+      const patch = fetchMock.mock.calls.find((c) => {
+        const url = String(c[0])
+        const method = ((c[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase()
+        return url.includes('/students/rahul-1') && method === 'PATCH'
+      })
+      expect(patch).toBeTruthy()
+      const body = JSON.parse((patch![1] as RequestInit).body as string)
+      expect(body.guardian_email).toBe('Vaibhavv@yopmail.com')
+    })
+
+    vi.unstubAllGlobals()
+  })
 })

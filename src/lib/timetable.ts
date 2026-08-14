@@ -11,9 +11,52 @@ export type Grids = Record<string, Grid>
 /** Stable key for a 0-based day + 0-based period slot. */
 export const cellKey = (day: number, period: number): string => `${day}-${period}`
 
+/**
+ * Auto-fill a class grid from periods-per-week quotas.
+ * Uses a diagonal walk (start subject rotates by day+period) so consecutive
+ * periods do not repeat the same Mon–Sat subject row — the old round-robin
+ * token list did that whenever subject count ≈ day count.
+ * Cells get empty teacherId; the screen assigns teachers via pickTeacher.
+ */
+export function generateAutoTimetableGrid(
+  daysLen: number,
+  periods: number,
+  subjectNames: string[],
+  ppw: Record<string, number>,
+): Grid {
+  const left: Record<string, number> = {}
+  for (const s of subjectNames) left[s] = Math.max(0, Math.floor(ppw[s] ?? 0))
+  const capacity = daysLen * periods
+  const quotaTotal = subjectNames.reduce((a, s) => a + (left[s] ?? 0), 0)
+  const target = Math.min(capacity, quotaTotal)
+  const grid: Grid = {}
+  if (subjectNames.length === 0 || target === 0) return grid
+
+  let placed = 0
+  for (let p = 0; p < periods && placed < target; p++) {
+    for (let d = 0; d < daysLen && placed < target; d++) {
+      const start = (d + p) % subjectNames.length
+      let chosen: string | null = null
+      for (let k = 0; k < subjectNames.length; k++) {
+        const s = subjectNames[(start + k) % subjectNames.length]
+        if ((left[s] ?? 0) > 0) {
+          chosen = s
+          break
+        }
+      }
+      if (!chosen) continue
+      left[chosen]!--
+      grid[cellKey(d, p)] = { subject: chosen, teacherId: '' }
+      placed++
+    }
+  }
+  return grid
+}
+
 // ─── Backend publish reconciliation ─────────────────────────────────────────
-// Pure diffing so it can be unit-tested without the API — the screen just
-// executes the plan (create each `toCreate`, delete each `toDeleteIds`).
+// Pure diffing so it can be unit-tested without the API — the screen posts
+// one PUT /timetable/replace with ownedClassIds + toCreate (toDeleteIds is
+// kept for tests / legacy per-slot sync).
 
 export interface RemoteTimetableSlot {
   id: string
@@ -29,11 +72,41 @@ export interface TimetableSyncTarget {
   classId: string
   className: string
   teacherId: string | null
+  startTime: string | null
+  endTime: string | null
 }
 
 export interface TimetableSyncPlan {
   toCreate: TimetableSyncTarget[]
   toDeleteIds: string[]
+  /** Classes present in the draft grids that resolved to a backend id. */
+  ownedClassIds: string[]
+}
+
+/** Default Mon–Sat teaching bells (Period 1..8) when Periods tab is empty. */
+export const DEFAULT_CLASS_BELL_TIMES: PeriodBellMap = {
+  1: { start: '08:15', end: '09:00' },
+  2: { start: '09:00', end: '09:45' },
+  3: { start: '09:55', end: '10:40' },
+  4: { start: '10:40', end: '11:25' },
+  5: { start: '12:05', end: '12:50' },
+  6: { start: '12:50', end: '13:35' },
+  7: { start: '13:35', end: '14:20' },
+  8: { start: '14:20', end: '15:05' },
+}
+
+/** Map Class-type period rows → 1-based teaching period → start/end. */
+export function bellTimesFromPeriodRows(
+  rows: Array<{ type: string; start: string; end: string }>,
+): PeriodBellMap {
+  const out: PeriodBellMap = {}
+  let n = 0
+  for (const r of rows) {
+    if ((r.type ?? '').toLowerCase() !== 'class') continue
+    n += 1
+    out[n] = { start: r.start, end: r.end }
+  }
+  return out
 }
 
 /**
@@ -49,6 +122,7 @@ export function planTimetableSync(
   days: string[],
   classIdFor: (className: string) => string | null,
   remote: RemoteTimetableSlot[],
+  bellTimes: PeriodBellMap = {},
 ): TimetableSyncPlan {
   const toCreate: TimetableSyncTarget[] = []
   const ownedClassIds = new Set<string>()
@@ -56,6 +130,11 @@ export function planTimetableSync(
   for (const [className, grid] of Object.entries(grids)) {
     const classId = classIdFor(className)
     if (!classId) continue
+    // Only replace classes that still have at least one placed period.
+    // Empty / all-null grids must NOT enter ownedClassIds — otherwise publish
+    // DELETEs that class's live TimetableSlots and attendance shows "No periods".
+    const filled = Object.values(grid).some(Boolean)
+    if (!filled) continue
     ownedClassIds.add(classId)
     for (const [key, cell] of Object.entries(grid)) {
       if (!cell) continue
@@ -63,9 +142,12 @@ export function planTimetableSync(
       const d = Number(dStr)
       const p = Number(pStr)
       if (!days[d]) continue // key from a day index this school doesn't use
+      const period = p + 1
+      const bell = bellTimes[period]
       toCreate.push({
-        day: days[d], period: p + 1, subject: cell.subject || null,
+        day: days[d], period, subject: cell.subject || null,
         classId, className, teacherId: cell.teacherId || null,
+        startTime: bell?.start ?? null, endTime: bell?.end ?? null,
       })
     }
   }
@@ -78,7 +160,48 @@ export function planTimetableSync(
     .filter((r) => r.classId && ownedClassIds.has(r.classId))
     .map((r) => r.id)
 
-  return { toCreate, toDeleteIds }
+  return { toCreate, toDeleteIds, ownedClassIds: [...ownedClassIds] }
+}
+
+/** Rebuild editor grids from live GET /timetable slots (class_name + day + period). */
+export function gridsFromRemoteSlots(
+  slots: Array<{
+    day: string
+    period: number
+    subject: string | null
+    className: string | null
+    teacherId?: string | null
+    teacherName?: string | null
+  }>,
+  days: string[],
+  teacherIdForName?: (name: string) => string | null,
+): Grids {
+  const dayIndex = (raw: string): number => {
+    const v = raw.trim()
+    const short = v.slice(0, 3)
+    const i = days.findIndex((d) => d.toLowerCase() === short.toLowerCase() || d.toLowerCase() === v.toLowerCase())
+    return i
+  }
+  const grids: Grids = {}
+  for (const s of slots) {
+    const className = (s.className ?? '').trim()
+    const subject = (s.subject ?? '').trim()
+    if (!className || !subject) continue
+    const di = dayIndex(s.day)
+    const p = Number(s.period) - 1
+    if (di < 0 || p < 0) continue
+    const tid =
+      (s.teacherId && String(s.teacherId)) ||
+      (s.teacherName ? teacherIdForName?.(s.teacherName) ?? '' : '') ||
+      ''
+    grids[className] ??= {}
+    grids[className][cellKey(di, p)] = { subject, teacherId: tid }
+  }
+  return grids
+}
+
+export function hasFilledGrid(grids: Grids): boolean {
+  return Object.values(grids).some((g) => Object.values(g).some(Boolean))
 }
 
 /**

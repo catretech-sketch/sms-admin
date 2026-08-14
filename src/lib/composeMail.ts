@@ -35,11 +35,12 @@ export function openMailCompose(input: MailtoInput): boolean {
 }
 
 export function guardianEmailsFromStudent(s: {
+  guardianEmail?: string | null
   email?: string | null
   father?: { email?: string | null } | null
   mother?: { email?: string | null } | null
 }): string[] {
-  const raw = [s.father?.email, s.mother?.email, s.email]
+  const raw = [s.guardianEmail, s.father?.email, s.mother?.email]
   const out: string[] = []
   for (const e of raw) {
     const v = (e ?? '').trim()

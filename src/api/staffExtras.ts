@@ -1,6 +1,7 @@
-/* Staff onboarding fields not yet on the staffing API — persist per-tenant in
-   localStorage (same key as peopleExtras files) so edit forms round-trip. */
-import { tokenStore } from './auth/tokenStore'
+/* Staff onboarding extras — GET/PUT /v1/staff/{id}/extras. */
+import {
+  fetchPersonExtrasJson, putPersonExtrasJson, loadCachedOrLegacyJson,
+} from './personExtrasApi'
 import { fileToStoredDoc, type StoredDoc } from './studentExtras'
 import type {
   Staff,
@@ -34,7 +35,11 @@ export interface StaffExtras {
   dateOfJoining?: string
   dateOfLeaving?: string
   basicSalary?: string
+  hra?: string
+  allowances?: string
   epf?: string
+  profTax?: string
+  otherDeductions?: string
   uan?: string
   username?: string
   notes?: string
@@ -48,36 +53,32 @@ export interface StaffExtras {
   files?: StoredDoc[]
 }
 
-const PREFIX = 'sms_staff_extras:'
-
-function storageKey(staffId: string): string {
-  const tenant = tokenStore.getTenantId() || 'default'
-  return `${PREFIX}${tenant}:${staffId}`
-}
-
-export function loadStaffExtras(staffId: string): StaffExtras | null {
+function parseExtras(raw: string | null): StaffExtras | null {
+  if (!raw) return null
   try {
-    const raw = localStorage.getItem(storageKey(staffId))
-    if (!raw) return null
     return JSON.parse(raw) as StaffExtras
   } catch {
     return null
   }
 }
 
-export function saveStaffExtras(staffId: string, extras: StaffExtras): void {
+export function loadStaffExtras(staffId: string): StaffExtras | null {
+  return parseExtras(loadCachedOrLegacyJson('staff', staffId))
+}
+
+export async function fetchStaffExtras(staffId: string): Promise<StaffExtras | null> {
+  return parseExtras(await fetchPersonExtrasJson('staff', staffId))
+}
+
+export async function saveStaffExtras(staffId: string, extras: StaffExtras): Promise<void> {
   try {
-    localStorage.setItem(storageKey(staffId), JSON.stringify(extras))
+    await putPersonExtrasJson('staff', staffId, JSON.stringify(extras))
   } catch {
     const slim: StaffExtras = {
       ...extras,
       files: (extras.files || []).map(({ dataUrl: _d, ...meta }) => meta),
     }
-    try {
-      localStorage.setItem(storageKey(staffId), JSON.stringify(slim))
-    } catch {
-      /* ignore quota */
-    }
+    await putPersonExtrasJson('staff', staffId, JSON.stringify(slim))
   }
 }
 
@@ -114,7 +115,11 @@ export function mergeStaffExtras(s: Staff): Staff {
     dateOfJoining: ex.dateOfJoining ?? s.dateOfJoining,
     dateOfLeaving: ex.dateOfLeaving ?? s.dateOfLeaving,
     basicSalary: ex.basicSalary ?? s.basicSalary,
+    hra: ex.hra ?? s.hra,
+    allowances: ex.allowances ?? s.allowances,
     epf: ex.epf ?? s.epf,
+    profTax: ex.profTax ?? s.profTax,
+    otherDeductions: ex.otherDeductions ?? s.otherDeductions,
     uan: ex.uan ?? s.uan,
     username: ex.username ?? s.username,
     notes: ex.notes ?? s.notes,
@@ -152,7 +157,11 @@ export function extrasFromStaff(s: Staff, files: StoredDoc[] = []): StaffExtras 
     dateOfJoining: s.dateOfJoining,
     dateOfLeaving: s.dateOfLeaving,
     basicSalary: s.basicSalary,
+    hra: s.hra,
+    allowances: s.allowances,
     epf: s.epf,
+    profTax: s.profTax,
+    otherDeductions: s.otherDeductions,
     uan: s.uan,
     username: s.username,
     notes: s.notes,
@@ -173,11 +182,11 @@ export async function persistStaffExtras(
   staff: Staff,
   picks: Array<{ key: string; label: string; file: File | null }>,
 ): Promise<void> {
-  const prev = loadStaffExtras(staffId)
+  const prev = (await fetchStaffExtras(staffId).catch(() => loadStaffExtras(staffId))) ?? undefined
   const byKey = new Map((prev?.files ?? []).map((d) => [d.key, d]))
   for (const p of picks) {
     const stored = await fileToStoredDoc(p.key, p.file, p.label)
     if (stored) byKey.set(p.key, stored)
   }
-  saveStaffExtras(staffId, extrasFromStaff(staff, Array.from(byKey.values())))
+  await saveStaffExtras(staffId, extrasFromStaff(staff, Array.from(byKey.values())))
 }

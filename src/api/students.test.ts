@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { listStudents, getStudent, createStudent, updateStudent, toStudent, studentGuardianName, studentParentLabel, fromStudent, fromStudentUpdate } from './students'
+import { listStudents, getStudent, createStudent, updateStudent, toStudent, studentGuardianName, studentParentLabel, parentMailFromStudent, fromStudent, fromStudentUpdate } from './students'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -95,10 +95,23 @@ describe('createStudent', () => {
     const body = fromStudent({
       id: 't', adm: 'A-1', cls: '1-A', name: 'Kid', gender: 'M', grade: '1', section: 'A', roll: 1,
       guardian: '', phone: '', attendance: 0, feeStatus: 'due', feeDue: 0, status: 'active', house: 'Ruby', avatarHue: 1,
-      father: { name: 'Amit Shah', phone: '90000' },
+      father: { name: 'Amit Shah', phone: '90000', email: 'dad@home.test' },
     } as Parameters<typeof fromStudent>[0])
     expect(body.guardian_name).toBe('Amit Shah')
     expect(body.guardian_phone).toBe('90000')
+    expect(body.guardian_email).toBe('dad@home.test')
+  })
+
+  it('toStudent maps guardian_email for the Parents list (never student email)', () => {
+    const s = toStudent({
+      id: 'x', admission_no: 'A-1', name: 'Kid', gender: 'M', grade: '1', section: 'A',
+      class_label: '1-A', roll: 1, guardian_name: 'Meera', guardian_phone: '98100',
+      guardian_email: 'meera@home.test', email: 'kid@school.test',
+      attendance_pct: 88, fee_status: 'due', fee_due: 0, status: 'active', house: 'Ruby', avatar_hue: 10,
+    })
+    expect(s.guardianEmail).toBe('meera@home.test')
+    expect(s.email).toBe('kid@school.test')
+    expect(parentMailFromStudent(s)).toBe('meera@home.test')
   })
 
   it('parent label falls back when guardian missing', () => {
@@ -126,6 +139,21 @@ describe('updateStudent', () => {
     expect(body.email).toBe('asha@example.com')
     expect(body.address).toBe('221B Baker Street')
     expect(body.gender).toBe('F')
+  })
+
+  it('fromStudentUpdate omits roll so edit-save does not overwrite A–Z class roll with 0', () => {
+    const body = fromStudentUpdate({ ...editedStudent, roll: 0 })
+    expect(body.roll).toBeUndefined()
+    expect(fromStudent(editedStudent).roll).toBe(3)
+  })
+
+  it('fromStudentUpdate writes father email onto guardian_email for Students.GuardianEmail', () => {
+    const body = fromStudentUpdate({
+      ...editedStudent,
+      guardianEmail: undefined,
+      father: { name: 'Vaibhav Dubey', email: 'Vaibhavv@yopmail.com' },
+    })
+    expect(body.guardian_email).toBe('Vaibhavv@yopmail.com')
   })
 
   it('PATCHes /students/{id} with the full field set, not a hardcoded subset', async () => {

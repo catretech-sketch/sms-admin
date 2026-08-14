@@ -31,6 +31,23 @@ describe('createSubject', () => {
   })
 })
 
+describe('ensureSubjectsNamed', () => {
+  it('creates only missing subject names', async () => {
+    const { ensureSubjectsNamed } = await import('./subjects')
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        data: [{ id: 's1', name: 'English' }],
+        next_cursor: null,
+      }))
+      .mockResolvedValueOnce(jsonResponse({ data: { id: 's2', name: 'Math' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(ensureSubjectsNamed(['English', 'Math', ' english '])).resolves.toEqual({
+      created: 1,
+      total: 2,
+    })
+  })
+})
+
 describe('updateSubject', () => {
   it('PATCHes /subjects/{id} with {name}', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { id: 's1', name: 'Physics' } }))

@@ -28,10 +28,11 @@ describe('composeMail', () => {
 
   it('collects unique guardian emails from a student', () => {
     expect(guardianEmailsFromStudent({
+      guardianEmail: 'home@x.com',
       email: 'stu@x.com',
       father: { email: 'dad@x.com' },
       mother: { email: 'mom@x.com' },
-    })).toEqual(['dad@x.com', 'mom@x.com', 'stu@x.com'])
-    expect(guardianEmailsFromStudent({ email: '', father: null, mother: { email: 'bad' } })).toEqual([])
+    })).toEqual(['home@x.com', 'dad@x.com', 'mom@x.com'])
+    expect(guardianEmailsFromStudent({ email: 'stu@x.com', father: null, mother: { email: 'bad' } })).toEqual([])
   })
 })

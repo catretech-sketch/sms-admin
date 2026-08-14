@@ -1,6 +1,6 @@
 /* Class-wise student attendance — day/month filters, loads marks from API
    (same table the teacher app writes to). */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import {
   Card, CardHead, Btn, Modal, Badge, Avatar, Search, Segmented, Select, Input,
@@ -12,23 +12,25 @@ import type { SchoolClass } from '@/api/classes'
 import { useStudents } from '@/api/hooks/useStudents'
 import { useTeachers } from '@/api/hooks/useTeachers'
 import { useStaff } from '@/api/hooks/useStaff'
-import { useAttendanceRollCall, useClassAttendance, useSaveAttendance } from '@/api/hooks/useAttendance'
+import { useClassDayTimetable, usePeriodAttendance, useSavePeriodAttendance } from '@/api/hooks/useAttendance'
 import { usePrincipalAttendance } from '@/api/hooks/usePrincipalAttendance'
 import { studentPhotoUrl } from '@/api/studentExtras'
 import { compareClassesAscending, gradeRank } from '@/lib/defaultClasses'
-import { listAllLocalAttendance, toAttendanceDate, type AttendanceStatus, type AttendanceRecord } from '@/api/attendance'
-import { listAllLocalPeopleAttendance } from '@/api/peopleAttendance'
+import { listCachedAttendance, listClassAttendanceRange, mapPool, toAttendanceDate, ATTENDANCE_CHANGED, type AttendanceStatus, type AttendanceRecord } from '@/api/attendance'
+import { listCachedPeopleAttendance } from '@/api/peopleAttendance'
 import {
-  flagAbsenceStreaks, loadAlertConfig, saveAlertConfig,
-  dueForAutoSend, getLastAutoSent, markAutoSent,
+  flagAbsenceStreaks, loadAlertConfig, saveAlertConfig, normalizeAlertConfig,
+  DEFAULT_ALERT_CONFIG, dueForAutoSend, getLastAutoSent, markAutoSent,
+  type AttendanceAlertConfig,
 } from '@/lib/attendanceAlerts'
 import { notifyAbsence, pickGuardianContacts, pickPeopleContacts, type AbsenceAudience } from '@/lib/attendanceNotify'
-import { fetchAlertConfig, putAlertConfig } from '@/api/attendanceAlertConfig'
+import { fetchAlertConfig, persistAlertConfig } from '@/api/attendanceAlertConfig'
 import {
   dailyTrend, weeklyTrend, monthlyTrend, quarterlyTrend, trendComposition,
   type TrendMode, type TrendPoint, type Composition,
 } from '@/lib/attendanceTrend'
 import type { Student } from '@/types'
+import { subjStyle } from '@/lib/subjectStyle'
 
 type AttStatus = AttendanceStatus
 
@@ -137,21 +139,38 @@ function ClassPanel({
 }) {
   const toast = useToast()
   const classId = cls.id!
-  const attendanceQ = useClassAttendance(open ? classId : null, date)
-  const rollCallQ = useAttendanceRollCall(open ? classId : null, date)
-  const saveAttendance = useSaveAttendance()
+  const dayTtQ = useClassDayTimetable(open ? classId : null, date)
+  const slots = dayTtQ.data ?? []
+  const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const current = slots.find((s) => s.isCurrent)
+    const first = slots[0]
+    const pick = current ?? first
+    setSelectedSlotId((prev) => {
+      if (prev && slots.some((s) => s.id === prev)) return prev
+      return pick?.id ?? null
+    })
+  }, [open, classId, date, slots])
+
+  const selected = slots.find((s) => s.id === selectedSlotId) ?? null
+  const period = selected?.period ?? null
+  const subject = selected?.subject ?? null
+  const periodQ = usePeriodAttendance(open ? classId : null, date, period, subject)
+  const savePeriod = useSavePeriodAttendance()
   const [draft, setDraft] = useState<Record<string, AttStatus>>({})
-  const canEditAttendance = editable && rollCallQ.data?.canMark === true
+  const canEditAttendance = Boolean(editable && selected?.canMark)
 
   const savedMap = useMemo(() => {
     const m: Record<string, AttStatus> = {}
-    for (const r of attendanceQ.data ?? []) {
+    for (const r of periodQ.data ?? []) {
       if (r.studentId && r.status) m[r.studentId] = r.status
     }
     return m
-  }, [attendanceQ.data])
+  }, [periodQ.data])
 
-  useEffect(() => { setDraft({}) }, [classId, date, attendanceQ.dataUpdatedAt])
+  useEffect(() => { setDraft({}) }, [classId, date, selectedSlotId, periodQ.dataUpdatedAt])
 
   const roster = useMemo(
     () => students
@@ -160,23 +179,32 @@ function ClassPanel({
       .sort((a, b) => (a.roll ?? 0) - (b.roll ?? 0) || a.name.localeCompare(b.name)),
     [students, cls],
   )
-  /** `null` means nobody — CRM, teacher app, or geo-fence — has marked this student yet. */
+  /** `null` means nobody has marked this student for the selected period yet. */
   const statusOf = (id: string): AttStatus | null => draft[id] ?? savedMap[id] ?? null
-  const fromServer = (attendanceQ.data?.length ?? 0) > 0
-  const rosterPresent = roster.filter((s) => statusOf(s.id) === 'present' || statusOf(s.id) === 'late').length
+  const fromServer = (periodQ.data?.length ?? 0) > 0
+  const periodPresent = roster.filter((s) => {
+    const st = statusOf(s.id)
+    return st === 'present' || st === 'late'
+  }).length
+  const periodAbsent = roster.filter((s) => statusOf(s.id) === 'absent').length
+  const periodLate = roster.filter((s) => statusOf(s.id) === 'late').length
+  const periodMarkedCount = roster.filter((s) => statusOf(s.id) != null).length
+  const periodUnmarked = Math.max(0, roster.length - periodMarkedCount)
   const hasDraft = Object.keys(draft).length > 0
+  const periodsMarked = slots.filter((s) => s.marked).length
+  const periodSaved = Boolean(fromServer || selected?.marked)
+  const periodPct = periodMarkedCount
+    ? Math.round(((periodPresent) / periodMarkedCount) * 100)
+    : null
 
-  /* Resolve present/total + whether this class is actually marked for the day.
-     Priority: live edits while open → local saved marks → principal summary.
-     When nothing is recorded we show a neutral "Not marked" state instead of a
-     misleading 100%-present or all-absent number. */
+  /* Collapsed header: day-level period progress. Open body uses selected-period counts. */
   let present: number
   let total: number
   let marked: boolean
   if (open) {
-    total = Math.max(roster.length, summaryTotal && summaryTotal > 0 ? summaryTotal : 0)
-    present = rosterPresent
-    marked = fromServer || (summaryMarked ?? 0) > 0 || hasDraft
+    total = roster.length
+    present = periodPresent
+    marked = periodSaved || hasDraft || periodMarkedCount > 0
   } else if ((summaryMarked ?? 0) > 0 || (summaryPresent != null && summaryPresent > 0) || (summaryTotal != null && summaryTotal > 0)) {
     total = Math.max(roster.length, summaryTotal ?? 0)
     present = summaryPresent ?? 0
@@ -188,10 +216,14 @@ function ClassPanel({
   } else {
     total = roster.length
     present = 0
-    marked = false
+    marked = periodsMarked > 0
   }
-  const absent = marked ? Math.max(0, total - present) : 0
-  const pct = marked && total ? Math.round((present / total) * 100) : (marked ? (summaryPct ?? 0) : 0)
+  const absent = open
+    ? periodAbsent
+    : (marked ? Math.max(0, total - present) : 0)
+  const pct = open
+    ? (periodPct ?? 0)
+    : (marked && total ? Math.round((present / total) * 100) : (marked ? (summaryPct ?? 0) : 0))
 
   const setStatus = (id: string, st: AttStatus) => setDraft((d) => ({ ...d, [id]: st }))
   const markAllPresent = () =>
@@ -200,6 +232,10 @@ function ClassPanel({
     setDraft((d) => ({ ...d, ...Object.fromEntries(roster.map((s) => [s.id, 'absent' as AttStatus])) }))
 
   const submit = async () => {
+    if (!selected || !subject) {
+      toast.danger('Pick a period', 'Select a timetable period before saving.')
+      return
+    }
     if (!roster.length) {
       toast.danger('No students', 'No students matched this class. Check grade/section on the student.')
       return
@@ -212,8 +248,16 @@ function ClassPanel({
       return
     }
     try {
-      await saveAttendance.mutateAsync({ classId, date, records })
-      toast.success('Attendance saved', `${classLabel(cls)} · ${rosterPresent}/${roster.length} present`)
+      await savePeriod.mutateAsync({
+        classId,
+        date,
+        period: selected.period,
+        subject,
+        subjectId: selected.subjectId,
+        periodId: selected.id,
+        records,
+      })
+      toast.success('Attendance saved', `${classLabel(cls)} · P${selected.period} ${subject} · ${periodPresent}/${roster.length} present`)
       setDraft({})
       window.dispatchEvent(new Event(ATTENDANCE_SAVED_EVENT))
     } catch (err) {
@@ -224,7 +268,22 @@ function ClassPanel({
   const code = classCode(cls)
   const hue = classHue(cls)
   const accent = `hsl(${hue} 58% 42%)`
+  const selectedTone = selected ? subjStyle(selected.subject ?? '—') : null
   const pctColor = pct >= 90 ? 'var(--success)' : pct >= 75 ? 'var(--warning)' : 'var(--danger)'
+  const rollLabel = (roll: number | null | undefined) =>
+    roll != null && roll > 0 ? `Roll ${roll}` : 'No roll no.'
+
+  const headBadge = open
+    ? (hasDraft
+      ? <Badge tone="warning" dot>Unsaved</Badge>
+      : periodSaved
+        ? <Badge tone="success" dot>P{selected?.period} saved</Badge>
+        : <Badge tone="neutral" dot>P{selected?.period ?? '—'} open</Badge>)
+    : (periodsMarked > 0
+      ? <Badge tone="success" dot>{periodsMarked}/{slots.length || '—'} periods</Badge>
+      : marked
+        ? <Badge tone="success" dot>Marked</Badge>
+        : <Badge tone="neutral" dot>Not marked</Badge>)
 
   return (
     <div className="sm-att-class" style={{ borderLeftColor: accent }}>
@@ -241,12 +300,34 @@ function ClassPanel({
             <div className="row ai-center gap8 wrap">
               <span className="t-md fw7">{classLabel(cls)}</span>
               {cls.room && cls.room !== '—' ? <span className="t-xs muted3">Room {cls.room}</span> : null}
-              {marked
-                ? <Badge tone="success" dot>Marked</Badge>
-                : <Badge tone="neutral" dot>Not marked</Badge>}
+              {headBadge}
             </div>
             <div className="row ai-center gap6 wrap" style={{ marginTop: 5 }}>
-              {marked ? (
+              {open ? (
+                <>
+                  <span className="sm-att-chip" style={{ color: 'var(--success)', borderColor: 'color-mix(in srgb, var(--success) 35%, transparent)', background: 'color-mix(in srgb, var(--success) 12%, transparent)' }}>
+                    <Icon name="check" size={12} /> {periodPresent} present
+                  </span>
+                  {periodLate > 0 && (
+                    <span className="sm-att-chip" style={{ color: 'var(--warning)', borderColor: 'color-mix(in srgb, var(--warning) 35%, transparent)', background: 'color-mix(in srgb, var(--warning) 12%, transparent)' }}>
+                      {periodLate} late
+                    </span>
+                  )}
+                  <span
+                    className="sm-att-chip"
+                    style={periodAbsent > 0
+                      ? { color: 'var(--danger)', borderColor: 'color-mix(in srgb, var(--danger) 35%, transparent)', background: 'color-mix(in srgb, var(--danger) 12%, transparent)' }
+                      : { color: 'var(--text-3)' }}
+                  >
+                    <Icon name="x" size={12} /> {periodAbsent} absent
+                  </span>
+                  {periodUnmarked > 0 && (
+                    <span className="sm-att-chip" style={{ color: 'var(--text-3)' }}>
+                      {periodUnmarked} unmarked
+                    </span>
+                  )}
+                </>
+              ) : marked ? (
                 <>
                   <span className="sm-att-chip" style={{ color: 'var(--success)', borderColor: 'color-mix(in srgb, var(--success) 35%, transparent)', background: 'color-mix(in srgb, var(--success) 12%, transparent)' }}>
                     <Icon name="check" size={12} /> {present} present
@@ -264,21 +345,21 @@ function ClassPanel({
                 <span className="sm-att-chip" style={{ color: 'var(--text-3)' }}>Attendance not taken</span>
               )}
               <span className="sm-att-chip" style={{ color: 'var(--text-2)' }}>
-                <Icon name="users" size={12} /> {total} roll
+                <Icon name="users" size={12} /> {roster.length} students
               </span>
             </div>
           </div>
         </div>
         <div className="row ai-center gap12">
-          {marked ? (
+          {(open ? periodMarkedCount > 0 : marked) ? (
             <Donut
               size={48}
               thickness={7}
               segments={[
-                { value: present, color: pctColor },
-                { value: absent, color: 'color-mix(in srgb, var(--danger) 22%, var(--surface-2))' },
+                { value: present || 0, color: pctColor },
+                { value: Math.max(0, (open ? periodMarkedCount : total) - present), color: 'color-mix(in srgb, var(--danger) 22%, var(--surface-2))' },
               ]}
-              center={<span className="t-xs fw7" style={{ color: pctColor }}>{pct}%</span>}
+              center={<span className="t-xs fw7" style={{ color: pctColor }}>{open && periodPct == null ? '—' : `${pct}%`}</span>}
             />
           ) : (
             <Donut
@@ -294,62 +375,136 @@ function ClassPanel({
 
       {open && (
         <div className="sm-att-class-body">
-          {attendanceQ.isLoading || rollCallQ.isLoading ? (
-            <div className="t-sm muted" style={{ padding: '12px 16px' }}>Loading marks…</div>
+          {dayTtQ.isLoading ? (
+            <div className="t-sm muted" style={{ padding: '12px 16px' }}>Loading timetable…</div>
+          ) : dayTtQ.isError ? (
+            <div style={{ padding: 8 }}><Empty icon="alert" title="Could not load timetable" body="Check your connection and try again." /></div>
+          ) : slots.length === 0 ? (
+            <div style={{ padding: 8 }}>
+              <Empty
+                icon="calendar"
+                title="No periods today"
+                body="No teaching periods for this class on this date (Mon–Sat only). Publish this class’s grid under Academics → Timetable — only published classes show periods here."
+              />
+            </div>
           ) : roster.length === 0 ? (
             <div style={{ padding: 8 }}><Empty icon="users" title="No students" body="No students enrolled in this class." /></div>
           ) : (
             <>
-              <div className="row ai-center jc-between gap12 wrap" style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
-                <div className="row ai-center gap8 wrap">
-                  {fromServer
-                    ? <Badge tone="success" icon="check">Saved on server</Badge>
-                    : <Badge tone="neutral">Not saved yet</Badge>}
-                  <span className="t-xs muted3">{date}</span>
-                  {rollCallQ.data && (
-                    <span className="sm-att-chip" style={{ color: 'var(--brand-600)' }}>
-                      Roll-call · P{rollCallQ.data.period ?? '—'} · {rollCallQ.data.subject ?? 'No subject'} · {rollCallQ.data.teacherName ?? 'No teacher'}
-                    </span>
-                  )}
-                  {rollCallQ.data && !rollCallQ.data.canMark && (
-                    <span className="t-xs muted">
-                      View only — {rollCallQ.data.classTeacherName || rollCallQ.data.teacherName || 'the assigned teacher'} takes this class today
-                    </span>
-                  )}
-                </div>
-                {canEditAttendance && (
-                  <div className="row ai-center gap8">
-                    <Btn size="sm" variant="secondary" icon="check" onClick={markAllPresent}>All present</Btn>
-                    <Btn size="sm" variant="ghost" onClick={markAllAbsent}>All absent</Btn>
-                  </div>
-                )}
-              </div>
-              <div className="col">
-                {roster.map((s) => {
-                  const st = statusOf(s.id)
-                  const photo = studentPhotoUrl(s.id)
+              <div className="sm-att-period-strip" role="tablist" aria-label="Periods">
+                {slots.map((slot) => {
+                  const active = slot.id === selected?.id
+                  const tone = subjStyle(slot.subject ?? '—')
+                  const chipStyle = {
+                    '--att-subj-fg': tone.fg,
+                    '--att-subj-bg': tone.bg,
+                    '--att-subj-bd': tone.bd,
+                  } as CSSProperties
                   return (
-                    <div key={s.id} className="sm-att-row">
-                      <div className="row ai-center gap12" style={{ minWidth: 0 }}>
-                        <Avatar name={s.name} hue={s.avatarHue} size={48} src={photo} />
-                        <div style={{ minWidth: 0 }}>
-                          <div className="t-md fw6">{s.name}</div>
-                          <div className="t-xs muted3">Roll {s.roll} · {s.cls || classLabel(cls)}</div>
-                        </div>
-                      </div>
-                      {canEditAttendance
-                        ? <Segmented value={st ?? ''} onChange={(v) => setStatus(s.id, v as AttStatus)} options={STATUS_OPTS} />
-                        : st
-                          ? <Badge tone={STATUS_TONE[st]} dot>{STATUS_LABEL[st]}</Badge>
-                          : <Badge tone="neutral">Not marked</Badge>}
-                    </div>
+                    <button
+                      key={slot.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      className={['sm-att-period', active && 'on', slot.marked && 'marked', slot.isCurrent && 'current'].filter(Boolean).join(' ')}
+                      style={chipStyle}
+                      onClick={() => setSelectedSlotId(slot.id)}
+                      title={`${slot.subject ?? 'Period'} · ${slot.teacherName ?? 'No teacher'}${slot.marked ? ' · saved' : ''}`}
+                    >
+                      <span className="sm-att-period-swatch" aria-hidden />
+                      <span className="sm-att-period-num">P{slot.period}</span>
+                      <span className="sm-att-period-sub">{slot.subject ?? '—'}</span>
+                      {slot.isCurrent ? <span className="sm-att-period-tag">Now</span> : null}
+                      {slot.marked ? <span className="sm-att-period-dot" aria-hidden /> : null}
+                    </button>
                   )
                 })}
               </div>
+
+              {selected && selectedTone && (
+                <div className="sm-att-period-meta">
+                  <div className="sm-att-period-meta-main">
+                    <div className="t-md fw7 row ai-center gap8">
+                      <span
+                        className="sm-att-subj-dot"
+                        style={{ background: selectedTone.fg }}
+                        aria-hidden
+                      />
+                      <span style={{ color: selectedTone.fg }}>
+                        P{selected.period} · {selected.subject ?? 'Subject'}
+                      </span>
+                    </div>
+                    <div className="t-xs muted3" style={{ marginTop: 2 }}>
+                      {[
+                        selected.startTime && selected.endTime ? `${selected.startTime}–${selected.endTime}` : null,
+                        selected.teacherName || null,
+                        date,
+                      ].filter(Boolean).join(' · ')}
+                    </div>
+                  </div>
+                  <div className="row ai-center gap8 wrap">
+                    {hasDraft
+                      ? <Badge tone="warning" dot>Unsaved changes</Badge>
+                      : periodSaved
+                        ? <Badge tone="success" icon="check">Saved</Badge>
+                        : <Badge tone="neutral" dot>Not marked</Badge>}
+                    {canEditAttendance && (
+                      <>
+                        <Btn size="sm" variant="secondary" onClick={markAllPresent}>All present</Btn>
+                        <Btn size="sm" variant="ghost" onClick={markAllAbsent}>All absent</Btn>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {selected && !selected.canMark && (
+                <div className="t-xs muted" style={{ padding: '0 16px 10px' }}>
+                  View only — {selected.teacherName || 'the assigned teacher'} marks this period
+                </div>
+              )}
+
+              {periodQ.isLoading ? (
+                <div className="t-sm muted" style={{ padding: '12px 16px' }}>Loading marks…</div>
+              ) : (
+                <div className="col">
+                  {roster.map((s) => {
+                    const st = statusOf(s.id)
+                    const photo = studentPhotoUrl(s.id)
+                    return (
+                      <div key={s.id} className="sm-att-row">
+                        <div className="row ai-center gap12" style={{ minWidth: 0 }}>
+                          <Avatar name={s.name} hue={s.avatarHue} size={40} src={photo} />
+                          <div style={{ minWidth: 0 }}>
+                            <div className="t-md fw6">{s.name}</div>
+                            <div className="t-xs muted3">{rollLabel(s.roll)}</div>
+                          </div>
+                        </div>
+                        {canEditAttendance
+                          ? <Segmented value={st ?? ''} onChange={(v) => setStatus(s.id, v as AttStatus)} options={STATUS_OPTS} />
+                          : st
+                            ? <Badge tone={STATUS_TONE[st]} dot>{STATUS_LABEL[st]}</Badge>
+                            : <Badge tone="neutral">Not marked</Badge>}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
               {canEditAttendance && (
-                <div className="row ai-center jc-end" style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
-                  <Btn variant="primary" icon="check" disabled={saveAttendance.isPending || !roster.length} onClick={() => { void submit() }}>
-                    {saveAttendance.isPending ? 'Saving…' : 'Submit class'}
+                <div className="sm-att-save-bar">
+                  <span className="t-xs muted3">
+                    {periodMarkedCount}/{roster.length} marked
+                    {hasDraft ? ' · unsaved' : ''}
+                  </span>
+                  <Btn
+                    variant="primary"
+                    icon="check"
+                    disabled={savePeriod.isPending || !roster.length || (!hasDraft && periodSaved)}
+                    onClick={() => { void submit() }}
+                  >
+                    {savePeriod.isPending
+                      ? 'Saving…'
+                      : `Save P${selected?.period ?? ''} attendance`}
                   </Btn>
                 </div>
               )}
@@ -554,9 +709,9 @@ function trendFor(records: AttendanceRecord[], mode: TrendMode, count: number): 
 
 function loadAudienceRecords(audience: Audience): AttendanceRecord[] {
   const parts: AttendanceRecord[] = []
-  if (audience === 'students' || audience === 'everyone') parts.push(...listAllLocalAttendance())
-  if (audience === 'teachers' || audience === 'everyone') parts.push(...listAllLocalPeopleAttendance('teachers'))
-  if (audience === 'staff' || audience === 'everyone') parts.push(...listAllLocalPeopleAttendance('staff'))
+  if (audience === 'students' || audience === 'everyone') parts.push(...listCachedAttendance())
+  if (audience === 'teachers' || audience === 'everyone') parts.push(...listCachedPeopleAttendance('teachers'))
+  if (audience === 'staff' || audience === 'everyone') parts.push(...listCachedPeopleAttendance('staff'))
   return parts
 }
 
@@ -674,12 +829,32 @@ function AttendanceTrendCard({ classes }: { classes: SchoolClass[] }) {
   useEffect(() => {
     const bump = () => setTick((n) => n + 1)
     window.addEventListener(ATTENDANCE_SAVED_EVENT, bump)
+    window.addEventListener(ATTENDANCE_CHANGED, bump)
     window.addEventListener('focus', bump)
     return () => {
       window.removeEventListener(ATTENDANCE_SAVED_EVENT, bump)
+      window.removeEventListener(ATTENDANCE_CHANGED, bump)
       window.removeEventListener('focus', bump)
     }
   }, [])
+
+  // Hydrate student marks from API for trend charts after first paint, with
+  // capped concurrency — never fan out all classes at once (that freezes CRM).
+  useEffect(() => {
+    let cancelled = false
+    const to = todayIso()
+    const fromDate = new Date(`${to}T12:00:00`)
+    fromDate.setDate(fromDate.getDate() - 120)
+    const from = `${fromDate.getFullYear()}-${String(fromDate.getMonth() + 1).padStart(2, '0')}-${String(fromDate.getDate()).padStart(2, '0')}`
+    const ids = classes.map((c) => c.id).filter(Boolean) as string[]
+    const timer = window.setTimeout(() => {
+      void mapPool(ids, 3, async (id) => {
+        if (cancelled) return
+        await listClassAttendanceRange(id, from, to).catch(() => [] as AttendanceRecord[])
+      }).then(() => { if (!cancelled) setTick((n) => n + 1) })
+    }, 400)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [classes])
 
   // Class scope only applies to students.
   useEffect(() => { if (audA !== 'students') { setGradeA('all'); setSectionA('all') } }, [audA])
@@ -844,41 +1019,78 @@ function AbsenceAlertsPanel({
   const toast = useToast()
   const teachers = useTeachers().data ?? []
   const staff = useStaff().data ?? []
-  const [cfg, setCfg] = useState(loadAlertConfig)
+  const classes = useClasses().data ?? []
+  const [cfg, setCfg] = useState<AttendanceAlertConfig | null>(null)
+  const [cfgStatus, setCfgStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [cfgError, setCfgError] = useState('')
   const [tick, setTick] = useState(0)
   const [busy, setBusy] = useState<null | 'app' | 'email'>(null)
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState(() => ({
-    noticeDays: cfg.noticeDays, emailDays: cfg.emailDays,
-    autoSend: cfg.autoSend, autoTime: cfg.autoTime, autoChannel: cfg.autoChannel,
+    noticeDays: DEFAULT_ALERT_CONFIG.noticeDays,
+    emailDays: DEFAULT_ALERT_CONFIG.emailDays,
+    autoSend: DEFAULT_ALERT_CONFIG.autoSend,
+    autoTime: DEFAULT_ALERT_CONFIG.autoTime,
+    autoChannel: DEFAULT_ALERT_CONFIG.autoChannel,
   }))
   const warnedRef = useRef(false)
 
-  // Load the server-persisted config once (shared across devices/users); the
-  // browser-local config stays as a cache/fallback when the endpoint is absent.
-  useEffect(() => {
-    let cancelled = false
+  const loadConfigFromApi = () => {
+    setCfgStatus('loading')
+    setCfgError('')
     void fetchAlertConfig()
       .then((server) => {
-        if (cancelled || !server) return
+        if (!server) {
+          setCfg(null)
+          setCfgStatus('error')
+          setCfgError('Alert settings unavailable from the server.')
+          return
+        }
         const saved = saveAlertConfig(server)
         setCfg(saved)
         setDraft({
           noticeDays: saved.noticeDays, emailDays: saved.emailDays,
           autoSend: saved.autoSend, autoTime: saved.autoTime, autoChannel: saved.autoChannel,
         })
+        setCfgStatus('ready')
       })
-      .catch(() => { /* offline / not shipped — keep local */ })
-    return () => { cancelled = true }
+      .catch((err) => {
+        setCfg(null)
+        setCfgStatus('error')
+        setCfgError(err instanceof Error ? err.message : 'Could not load alert settings.')
+      })
+  }
+
+  // API is the only Source of Truth — no browser config fallback.
+  useEffect(() => {
+    loadConfigFromApi()
   }, [])
 
-  // Re-read local marks after a class is saved or the window refocuses.
+  // Load absence history only when the alerts UI is opened (not on every Attendance click).
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    const to = todayIso()
+    const fromDate = new Date(`${to}T12:00:00`)
+    fromDate.setDate(fromDate.getDate() - 90)
+    const from = `${fromDate.getFullYear()}-${String(fromDate.getMonth() + 1).padStart(2, '0')}-${String(fromDate.getDate()).padStart(2, '0')}`
+    const ids = classes.map((c) => c.id).filter(Boolean) as string[]
+    void mapPool(ids, 3, async (id) => {
+      if (cancelled) return
+      await listClassAttendanceRange(id, from, to).catch(() => [] as AttendanceRecord[])
+    }).then(() => { if (!cancelled) setTick((n) => n + 1) })
+    return () => { cancelled = true }
+  }, [classes, open])
+
+  // Re-read session marks after a class is saved or the window refocuses.
   useEffect(() => {
     const bump = () => setTick((n) => n + 1)
     window.addEventListener(ATTENDANCE_SAVED_EVENT, bump)
+    window.addEventListener(ATTENDANCE_CHANGED, bump)
     window.addEventListener('focus', bump)
     return () => {
       window.removeEventListener(ATTENDANCE_SAVED_EVENT, bump)
+      window.removeEventListener(ATTENDANCE_CHANGED, bump)
       window.removeEventListener('focus', bump)
     }
   }, [])
@@ -892,10 +1104,11 @@ function AbsenceAlertsPanel({
     return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
   }
 
-  // Flagged people across all three groups, from real local marks.
+  // Flagged people — only when server config is ready (no invented thresholds).
   const alerts = useMemo<FlaggedPerson[]>(() => {
+    if (!cfg) return []
     const out: FlaggedPerson[] = []
-    for (const a of flagAbsenceStreaks(listAllLocalAttendance(), cfg.noticeDays)) {
+    for (const a of flagAbsenceStreaks(listCachedAttendance(), cfg.noticeDays)) {
       const s = studentById.get(a.id)
       if (!s) continue
       out.push({
@@ -903,7 +1116,7 @@ function AbsenceAlertsPanel({
         subtitle: `${s.cls || '—'} · last absent ${dayNum(a.lastDate)}`, streak: a.streak, lastDate: a.lastDate,
       })
     }
-    for (const a of flagAbsenceStreaks(listAllLocalPeopleAttendance('teachers'), cfg.noticeDays)) {
+    for (const a of flagAbsenceStreaks(listCachedPeopleAttendance('teachers'), cfg.noticeDays)) {
       const t = teacherById.get(a.id)
       if (!t) continue
       out.push({
@@ -911,7 +1124,7 @@ function AbsenceAlertsPanel({
         subtitle: `${t.dept || t.desig || 'Teacher'} · last absent ${dayNum(a.lastDate)}`, streak: a.streak, lastDate: a.lastDate,
       })
     }
-    for (const a of flagAbsenceStreaks(listAllLocalPeopleAttendance('staff'), cfg.noticeDays)) {
+    for (const a of flagAbsenceStreaks(listCachedPeopleAttendance('staff'), cfg.noticeDays)) {
       const st = staffById.get(a.id)
       if (!st) continue
       out.push({
@@ -922,12 +1135,16 @@ function AbsenceAlertsPanel({
     return out.sort((x, y) => y.streak - x.streak || x.name.localeCompare(y.name))
     // tick forces a recompute after saves/focus
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cfg.noticeDays, tick, studentById, teacherById, staffById])
+  }, [cfg, tick, studentById, teacherById, staffById])
 
-  const emailable = useMemo(() => alerts.filter((a) => a.streak >= cfg.emailDays), [alerts, cfg.emailDays])
+  const emailable = useMemo(
+    () => (cfg ? alerts.filter((a) => a.streak >= cfg.emailDays) : []),
+    [alerts, cfg],
+  )
 
   // Warning "popup" — surface once when alerts first appear this session.
   useEffect(() => {
+    if (!cfg) return
     if (alerts.length && !warnedRef.current) {
       warnedRef.current = true
       toast.danger(
@@ -936,7 +1153,7 @@ function AbsenceAlertsPanel({
       )
     }
     if (!alerts.length) warnedRef.current = false
-  }, [alerts.length, cfg.noticeDays, toast])
+  }, [alerts.length, cfg, toast])
 
   const setDays = (which: 'noticeDays' | 'emailDays', raw: string) => {
     const v = Number(raw)
@@ -944,29 +1161,37 @@ function AbsenceAlertsPanel({
     setDraft((d) => ({ ...d, [which]: v }))
   }
 
-  const dirty = draft.noticeDays !== cfg.noticeDays
+  const dirty = !!cfg && (
+    draft.noticeDays !== cfg.noticeDays
     || draft.emailDays !== cfg.emailDays
     || draft.autoSend !== cfg.autoSend
     || draft.autoTime !== cfg.autoTime
     || draft.autoChannel !== cfg.autoChannel
+  )
 
-  const saveThresholds = () => {
-    const saved = saveAlertConfig({ ...cfg, ...draft })
-    setCfg(saved)
-    setDraft({
-      noticeDays: saved.noticeDays, emailDays: saved.emailDays,
-      autoSend: saved.autoSend, autoTime: saved.autoTime, autoChannel: saved.autoChannel,
-    })
-    toast.success(
-      'Alert settings saved',
-      saved.autoSend
-        ? `Auto-${saved.autoChannel === 'email' ? 'email' : 'notify'} daily at ${saved.autoTime}.`
-        : `Warn after ${saved.noticeDays} · email after ${saved.emailDays} days.`,
-    )
-    // Persist to the server too (best-effort); stays local if the endpoint is absent.
-    void putAlertConfig(saved)
-      .then((server) => { if (server) setCfg(saveAlertConfig(server)) })
-      .catch(() => { /* keep local copy */ })
+  const saveThresholds = async () => {
+    if (!cfg) return
+    const next = normalizeAlertConfig({ ...cfg, ...draft })
+    try {
+      const saved = await persistAlertConfig(next)
+      setCfg(saved)
+      setCfgStatus('ready')
+      setDraft({
+        noticeDays: saved.noticeDays, emailDays: saved.emailDays,
+        autoSend: saved.autoSend, autoTime: saved.autoTime, autoChannel: saved.autoChannel,
+      })
+      toast.success(
+        'Alert settings saved',
+        saved.autoSend
+          ? `Auto-${saved.autoChannel === 'email' ? 'email' : 'notify'} daily at ${saved.autoTime}.`
+          : `Warn after ${saved.noticeDays} · email after ${saved.emailDays} days.`,
+      )
+    } catch (err) {
+      toast.danger(
+        'Could not save alert settings',
+        err instanceof Error ? err.message : 'Server unavailable — settings were not saved.',
+      )
+    }
   }
 
   const contactsFor = (kind: AbsenceAudience, ids: string[]) => {
@@ -976,6 +1201,10 @@ function AbsenceAlertsPanel({
   }
 
   const send = async (mode: 'app' | 'email') => {
+    if (!cfg) {
+      toast.danger('Settings unavailable', 'Load alert settings from the server before sending.')
+      return
+    }
     const list = mode === 'email' ? emailable : alerts
     if (!list.length) {
       toast.danger('Nothing to send', mode === 'email'
@@ -1009,6 +1238,7 @@ function AbsenceAlertsPanel({
 
   // Human-readable schedule status (reflects the saved config, not the draft).
   const scheduleStatus = (() => {
+    if (!cfg) return cfgStatus === 'loading' ? 'Loading settings…' : 'Settings unavailable — retry to load from the server.'
     if (dirty) return 'Unsaved changes — click Save to apply.'
     if (!cfg.autoSend) return 'Off — send manually from the buttons below.'
     const now = new Date()
@@ -1022,17 +1252,16 @@ function AbsenceAlertsPanel({
     return `Auto-${cfg.autoChannel === 'email' ? 'email' : 'notify'} · next ${when}${lastAuto ? ` · last sent ${lastAuto}` : ''}`
   })()
 
-  // Scheduled auto-send: fire once per day at the configured time while a
-  // leadership session is open. Refs avoid resubscribing the interval.
+  // Scheduled auto-send: only when API config is loaded into session memory.
   const sendRef = useRef(send)
   sendRef.current = send
   const listRef = useRef({ alerts, emailable })
   listRef.current = { alerts, emailable }
   useEffect(() => {
-    if (!editable) return
+    if (!editable || !cfg) return
     const check = () => {
       const c = loadAlertConfig()
-      if (!dueForAutoSend(c, new Date(), getLastAutoSent())) return
+      if (!c || !dueForAutoSend(c, new Date(), getLastAutoSent())) return
       markAutoSent() // dedupe today even if the list is empty
       const list = c.autoChannel === 'email' ? listRef.current.emailable : listRef.current.alerts
       if (list.length) void sendRef.current(c.autoChannel)
@@ -1040,7 +1269,10 @@ function AbsenceAlertsPanel({
     check()
     const id = window.setInterval(check, 60_000)
     return () => window.clearInterval(id)
-  }, [editable])
+  }, [editable, cfg])
+
+  const noticeDaysLabel = cfg?.noticeDays ?? '—'
+  const emailDaysLabel = cfg?.emailDays ?? '—'
 
   return (
     <>
@@ -1057,10 +1289,14 @@ function AbsenceAlertsPanel({
           {alerts.length > 0 && <span className="sm-att-alert-bell-dot">{alerts.length}</span>}
         </span>
         <span className="t-sm fw6">Absence alerts</span>
-        {alerts.length > 0
-          ? <span className="t-xs" style={{ color: 'var(--danger)' }}>{alerts.length} flagged</span>
-          : <span className="t-xs muted3">All clear</span>}
-        {cfg.autoSend && (
+        {cfgStatus === 'error'
+          ? <span className="t-xs" style={{ color: 'var(--danger)' }}>Unavailable</span>
+          : cfgStatus === 'loading'
+            ? <span className="t-xs muted3">Loading…</span>
+            : alerts.length > 0
+              ? <span className="t-xs" style={{ color: 'var(--danger)' }}>{alerts.length} flagged</span>
+              : <span className="t-xs muted3">All clear</span>}
+        {cfg?.autoSend && (
           <span className="t-xs fw6 row ai-center gap4" style={{
             color: 'var(--brand-600)', background: 'color-mix(in srgb, var(--brand-600) 12%, transparent)',
             padding: '1px 8px', borderRadius: 999,
@@ -1076,8 +1312,10 @@ function AbsenceAlertsPanel({
         size="md"
         icon="bell"
         title={<span className="row ai-center gap8">Absence alerts{alerts.length > 0 && <Badge tone="danger" dot>{alerts.length}</Badge>}</span>}
-        sub={`Students, teachers & staff absent ${cfg.noticeDays}+ days in a row · email escalates at ${cfg.emailDays}+ days`}
-        footer={editable && alerts.length > 0 ? (
+        sub={cfg
+          ? `Students, teachers & staff absent ${noticeDaysLabel}+ days in a row · email escalates at ${emailDaysLabel}+ days`
+          : 'Alert thresholds load from the server'}
+        footer={editable && cfg && alerts.length > 0 ? (
           <div className="row ai-center jc-between gap12 wrap" style={{ width: '100%' }}>
             <span className="t-xs muted3">
               {emailable.length
@@ -1095,6 +1333,21 @@ function AbsenceAlertsPanel({
           </div>
         ) : undefined}
       >
+        {cfgStatus === 'loading' && (
+          <div className="t-sm muted" style={{ padding: '16px 0' }}>Loading alert settings from the server…</div>
+        )}
+        {cfgStatus === 'error' && (
+          <div className="col gap12" style={{ padding: '8px 0 16px' }}>
+            <Empty
+              icon="alert"
+              title="Alert settings unavailable"
+              body={cfgError || 'Could not load settings from the database. Browser storage is not used as a fallback.'}
+            />
+            <Btn variant="secondary" icon="refresh" onClick={loadConfigFromApi}>Retry</Btn>
+          </div>
+        )}
+        {cfgStatus === 'ready' && cfg && (
+        <>
         <div className="row ai-center gap8 wrap" style={{ marginBottom: 12 }}>
           <label className="t-xs muted3 row ai-center gap6">
             Warn after
@@ -1114,7 +1367,7 @@ function AbsenceAlertsPanel({
             />
             days
           </label>
-          <Btn size="sm" variant={dirty ? 'primary' : 'secondary'} icon="check" disabled={!dirty} onClick={saveThresholds}>
+          <Btn size="sm" variant={dirty ? 'primary' : 'secondary'} icon="check" disabled={!dirty} onClick={() => { void saveThresholds() }}>
             Save
           </Btn>
         </div>
@@ -1194,6 +1447,8 @@ function AbsenceAlertsPanel({
             })}
           </div>
         )}
+        </>
+        )}
       </Modal>
     </>
   )
@@ -1237,22 +1492,24 @@ export function ClassWiseStudents({ editable, leadership }: { editable: boolean;
     return m
   }, [principalQ.data])
 
-  // Refresh locally-derived counts after a save or window refocus.
+  // Refresh session-cache counts after a save or window refocus.
   useEffect(() => {
     const bump = () => setLocalTick((n) => n + 1)
     window.addEventListener(ATTENDANCE_SAVED_EVENT, bump)
+    window.addEventListener(ATTENDANCE_CHANGED, bump)
     window.addEventListener('focus', bump)
     return () => {
       window.removeEventListener(ATTENDANCE_SAVED_EVENT, bump)
+      window.removeEventListener(ATTENDANCE_CHANGED, bump)
       window.removeEventListener('focus', bump)
     }
   }, [])
 
-  /* Present/absent tallied from locally-saved marks for the selected day, keyed by
-     class id — so the overview reflects real marks even when the summary API is 404. */
+  /* Present/absent tallied from API-backed session marks for the selected day.
+     Principal summary powers closed cards — do not fan out 1 request per class on open. */
   const localByClass = useMemo(() => {
     const m = new Map<string, LocalCount>()
-    for (const r of listAllLocalAttendance()) {
+    for (const r of listCachedAttendance()) {
       if (toAttendanceDate(r.date) !== date) continue
       const cur = m.get(r.classId) ?? { present: 0, absent: 0, total: 0 }
       cur.total += 1
@@ -1261,7 +1518,7 @@ export function ClassWiseStudents({ editable, leadership }: { editable: boolean;
       m.set(r.classId, cur)
     }
     return m
-    // localTick forces recompute after a save/focus
+    // localTick forces recompute after a save/focus/hydrate
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date, localTick])
 
@@ -1295,13 +1552,12 @@ export function ClassWiseStudents({ editable, leadership }: { editable: boolean;
 
   const overallPct = principalQ.data?.overallPct ?? 0
   const presentTotal = principalQ.data?.presentTotal ?? 0
-  /* API StudentCount is often 0 — prefer live SIS roster for on-roll. */
-  const apiRoll = principalQ.data?.studentTotal ?? 0
-  const studentTotal = Math.max(apiRoll, students.length)
-  const attendancePct = studentTotal > 0
-    ? Math.round((presentTotal / studentTotal) * 100)
-    : Math.round(Number(overallPct) || 0)
-  const absentOrUnmarked = Math.max(0, studentTotal - presentTotal)
+  /* studentTotal from principal API is now marked period count (period formula SoT). */
+  const markedPeriods = principalQ.data?.studentTotal ?? 0
+  const attendancePct = markedPeriods > 0
+    ? Math.round(Number(overallPct) || ((presentTotal / markedPeriods) * 100))
+    : null
+  const absentOrUnmarked = Math.max(0, markedPeriods - presentTotal)
   const monthDays = mode === 'month' ? daysInMonth(month) : []
 
   return (
@@ -1354,27 +1610,31 @@ export function ClassWiseStudents({ editable, leadership }: { editable: boolean;
               ]}
               center={
                 <div style={{ textAlign: 'center', lineHeight: 1.1 }}>
-                  <div className="fw7" style={{ fontSize: 18 }}>{attendancePct}%</div>
-                  <div className="t-xs muted3">present</div>
+                  <div className="fw7" style={{ fontSize: 18 }}>
+                    {attendancePct == null ? '—' : `${attendancePct}%`}
+                  </div>
+                  <div className="t-xs muted3">periods</div>
                 </div>
               }
             />
             <div className="sm-att-hero-kpis" style={{ flex: 1 }}>
               <div>
-                <div className="sm-att-hero-val">{attendancePct}%</div>
+                <div className="sm-att-hero-val">
+                  {attendancePct == null ? 'Not marked' : `${attendancePct}%`}
+                </div>
                 <div className="t-sm muted">Today’s attendance</div>
               </div>
               <div className="sm-att-hero-stat">
                 <div className="t-lg fw7">{presentTotal}</div>
-                <div className="t-xs muted3">Present</div>
+                <div className="t-xs muted3">Present / late</div>
               </div>
               <div className="sm-att-hero-stat">
                 <div className="t-lg fw7">{absentOrUnmarked}</div>
-                <div className="t-xs muted3">Absent / unmarked</div>
+                <div className="t-xs muted3">Absent / leave</div>
               </div>
               <div className="sm-att-hero-stat">
-                <div className="t-lg fw7">{studentTotal}</div>
-                <div className="t-xs muted3">On roll</div>
+                <div className="t-lg fw7">{markedPeriods}</div>
+                <div className="t-xs muted3">Marked periods</div>
               </div>
             </div>
           </div>
@@ -1384,7 +1644,7 @@ export function ClassWiseStudents({ editable, leadership }: { editable: boolean;
           </div>
           <div className="sm-meter" style={{ width: '100%', height: 8, marginTop: 4 }}>
             <span style={{
-              width: `${attendancePct}%`,
+              width: `${attendancePct ?? 0}%`,
               background: 'var(--success)',
             }} />
           </div>

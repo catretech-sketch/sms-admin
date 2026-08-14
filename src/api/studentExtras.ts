@@ -1,7 +1,8 @@
-/* Enrolment extras (father/mother/documents) are not yet on the SIS API.
-   Persist per-tenant in localStorage so Parents / Student 360 can show and
-   download what was captured at add/edit. */
-import { tokenStore } from './auth/tokenStore'
+/* Enrolment extras (father/mother/documents) — GET/PUT /v1/students/{id}/extras.
+   Legacy localStorage migrated once; sync load is cache-only after hydrate. */
+import {
+  fetchPersonExtrasJson, putPersonExtrasJson, loadCachedOrLegacyJson,
+} from './personExtrasApi'
 import type { ParentInfo, Student, StudentDocs } from '@/types'
 
 export interface StoredDoc {
@@ -27,40 +28,42 @@ export interface StudentExtras {
   motherTongue?: string
   languages?: string
   lastSchool?: string
+  address?: string
   aadhaar?: string
   academicYear?: string
   admissionDate?: string
   files?: StoredDoc[]
 }
 
-const PREFIX = 'sms_student_extras:'
-
-function storageKey(studentId: string): string {
-  const tenant = tokenStore.getTenantId() || 'default'
-  return `${PREFIX}${tenant}:${studentId}`
-}
-
-export function loadStudentExtras(studentId: string): StudentExtras | null {
+function parseExtras(raw: string | null): StudentExtras | null {
+  if (!raw) return null
   try {
-    const raw = localStorage.getItem(storageKey(studentId))
-    if (!raw) return null
     return JSON.parse(raw) as StudentExtras
   } catch {
     return null
   }
 }
 
-export function saveStudentExtras(studentId: string, extras: StudentExtras): void {
+/** Sync peek of memory/legacy — prefer fetchStudentExtras for authoritative load. */
+export function loadStudentExtras(studentId: string): StudentExtras | null {
+  return parseExtras(loadCachedOrLegacyJson('student', studentId))
+}
+
+export async function fetchStudentExtras(studentId: string): Promise<StudentExtras | null> {
+  const json = await fetchPersonExtrasJson('student', studentId)
+  return parseExtras(json)
+}
+
+export async function saveStudentExtras(studentId: string, extras: StudentExtras): Promise<void> {
+  const full = JSON.stringify(extras)
   try {
-    localStorage.setItem(storageKey(studentId), JSON.stringify(extras))
+    await putPersonExtrasJson('student', studentId, full)
   } catch {
-    /* quota — keep metadata only */
-    const slim: StudentExtras = { ...extras, files: (extras.files || []).map(({ dataUrl: _d, ...meta }) => meta) }
-    try {
-      localStorage.setItem(storageKey(studentId), JSON.stringify(slim))
-    } catch {
-      /* ignore */
+    const slim: StudentExtras = {
+      ...extras,
+      files: (extras.files || []).map(({ dataUrl: _d, ...meta }) => meta),
     }
+    await putPersonExtrasJson('student', studentId, JSON.stringify(slim))
   }
 }
 
@@ -80,11 +83,13 @@ export function mergeStudentExtras(s: Student): Student {
     motherTongue: ex.motherTongue ?? s.motherTongue,
     languages: ex.languages ?? s.languages,
     lastSchool: ex.lastSchool ?? s.lastSchool,
+    address: ex.address ?? s.address,
     aadhaar: ex.aadhaar ?? s.aadhaar,
     academicYear: ex.academicYear ?? s.academicYear,
     admissionDate: ex.admissionDate ?? s.admissionDate,
     guardian: (s.guardian || '').trim() || (ex.father?.name || '').trim() || (ex.mother?.name || '').trim() || s.guardian,
     phone: (s.phone || '').trim() || (ex.father?.phone || '').trim() || (ex.mother?.phone || '').trim() || s.phone,
+    guardianEmail: (s.guardianEmail || '').trim() || (ex.father?.email || '').trim() || (ex.mother?.email || '').trim() || s.guardianEmail,
   }
 }
 
@@ -111,6 +116,7 @@ export function extrasFromStudent(s: Student, files: StoredDoc[] = []): StudentE
     motherTongue: s.motherTongue,
     languages: s.languages,
     lastSchool: s.lastSchool,
+    address: s.address,
     aadhaar: s.aadhaar,
     academicYear: s.academicYear,
     admissionDate: s.admissionDate,

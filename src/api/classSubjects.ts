@@ -1,6 +1,5 @@
-/* Per-class subject lists — live API when available, tenant-local map as fallback. */
+/* Per-class subject lists — live API with optional in-memory cache (no localStorage). */
 import { request } from './client'
-import { ApiError } from './ApiError'
 import { tokenStore } from './auth/tokenStore'
 import { loadPublishEnvelope } from '@/lib/academicsPublish'
 import type { SchoolClass } from './classes'
@@ -10,9 +9,21 @@ export type ClassSubjectsMap = Record<string, string[]>
 
 export const CLASS_SUBJECTS_CHANGED = 'sms-class-subjects-changed'
 
-function storageKey(): string {
-  const tenant = tokenStore.getTenantId() || 'default'
-  return `sms_class_subjects:${tenant}`
+/** Session cache populated by hydrate / successful list / save. */
+const memoryByTenant = new Map<string, ClassSubjectsMap>()
+
+function tenantId(): string {
+  return tokenStore.getTenantId() || 'default'
+}
+
+function memoryMap(): ClassSubjectsMap {
+  const tid = tenantId()
+  let map = memoryByTenant.get(tid)
+  if (!map) {
+    map = {}
+    memoryByTenant.set(tid, map)
+  }
+  return map
 }
 
 function notifyChanged(): void {
@@ -56,21 +67,7 @@ export function parseSubjectsFromClassWire(wire: Record<string, unknown>): strin
 }
 
 export function loadClassSubjectsMap(): ClassSubjectsMap {
-  try {
-    const raw = localStorage.getItem(storageKey())
-    if (!raw) return {}
-    const parsed = JSON.parse(raw) as unknown
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
-    const out: ClassSubjectsMap = {}
-    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-      const key = String(k).trim()
-      if (!key) continue
-      out[key] = normalizeNames(v)
-    }
-    return out
-  } catch {
-    return {}
-  }
+  return { ...memoryMap() }
 }
 
 export function saveClassSubjectsMap(map: ClassSubjectsMap): ClassSubjectsMap {
@@ -80,9 +77,9 @@ export function saveClassSubjectsMap(map: ClassSubjectsMap): ClassSubjectsMap {
     if (!key) continue
     next[key] = normalizeNames(v)
   }
-  localStorage.setItem(storageKey(), JSON.stringify(next))
+  memoryByTenant.set(tenantId(), next)
   notifyChanged()
-  return next
+  return { ...next }
 }
 
 export function classSubjectsKey(classId: string | undefined | null, className: string): string {
@@ -91,9 +88,9 @@ export function classSubjectsKey(classId: string | undefined | null, className: 
   return className.trim()
 }
 
-/** Mapped subjects only — never invents from the full catalog. */
+/** Mapped subjects only — never invents from the full catalog. Sync; [] if not hydrated. */
 export function getClassSubjects(classId: string | undefined | null, className: string): string[] {
-  const map = loadClassSubjectsMap()
+  const map = memoryMap()
   const id = (classId ?? '').trim()
   const name = className.trim()
   if (id && map[id]?.length) return [...map[id]]
@@ -106,9 +103,12 @@ export function setClassSubjects(
   className: string,
   subjects: string[],
 ): ClassSubjectsMap {
-  const map = loadClassSubjectsMap()
+  const map = { ...memoryMap() }
   const key = classSubjectsKey(classId, className)
   const list = normalizeNames(subjects)
+  const prev = (key && map[key]) || []
+  const same = prev.length === list.length && prev.every((s, i) => s === list[i])
+  if (same) return { ...map }
   if (!list.length) {
     delete map[key]
     if (className.trim() && className.trim() !== key) delete map[className.trim()]
@@ -121,11 +121,10 @@ export function setClassSubjects(
 }
 
 /**
- * Prefer API subjects on each class row; fill gaps from the local map.
- * Writes API-sourced lists into the local map so Exams/Timetable stay in sync.
+ * Prefer API subjects on each class row; update in-memory cache only.
  */
 export function hydrateClassSubjectsFromClasses(classes: SchoolClass[]): ClassSubjectsMap {
-  const map = loadClassSubjectsMap()
+  const map = { ...memoryMap() }
   let changed = false
   for (const c of classes) {
     const id = (c.id ?? '').trim()
@@ -181,33 +180,26 @@ export function unionMappedSubjects(
 
 /**
  * GET /classes/{id}/subjects — returns names.
- * Falls back to the local map on 404/405 (endpoint not deployed yet).
+ * Fail closed on 404/405 (no localStorage fallback).
  */
 export async function listClassSubjects(classId: string): Promise<string[]> {
   const id = classId.trim()
   if (!id) return []
-  try {
-    const data = await request<unknown>(`/classes/${id}/subjects`)
-    let names: string[] = []
-    if (Array.isArray(data)) names = normalizeNames(data)
-    else if (data && typeof data === 'object') {
-      const row = data as Record<string, unknown>
-      if (Array.isArray(row.subjects)) names = normalizeNames(row.subjects)
-      else if (Array.isArray(row.data)) names = normalizeNames(row.data)
-    }
-    if (names.length) setClassSubjects(id, '', names)
-    return names.length ? names : getClassSubjects(id, '')
-  } catch (err) {
-    if (err instanceof ApiError && (err.status === 404 || err.status === 405)) {
-      return getClassSubjects(id, '')
-    }
-    throw err
+  const data = await request<unknown>(`/classes/${id}/subjects`)
+  let names: string[] = []
+  if (Array.isArray(data)) names = normalizeNames(data)
+  else if (data && typeof data === 'object') {
+    const row = data as Record<string, unknown>
+    if (Array.isArray(row.subjects)) names = normalizeNames(row.subjects)
+    else if (Array.isArray(row.data)) names = normalizeNames(row.data)
   }
+  setClassSubjects(id, '', names)
+  return names
 }
 
 /**
  * PUT /classes/{id}/subjects with `{ subjects: string[] }`.
- * Always updates the local map. Ignores 404/405 from the server.
+ * Requires classId; updates in-memory cache after successful API write.
  */
 export async function saveClassSubjects(
   classId: string,
@@ -216,20 +208,16 @@ export async function saveClassSubjects(
 ): Promise<string[]> {
   const id = classId.trim()
   const list = normalizeNames(subjects)
-  setClassSubjects(id || null, className, list)
-  if (!id) return list
-  try {
-    await request<unknown>(`/classes/${id}/subjects`, {
-      method: 'PUT',
-      body: { subjects: list },
-    })
-  } catch (err) {
-    if (!(err instanceof ApiError && (err.status === 404 || err.status === 405))) {
-      /* Local map already saved — surface unexpected errors. */
-      throw err
-    }
+  if (!id) {
+    throw new Error('Class id is required')
   }
-  return list
+  const saved = await request<unknown>(`/classes/${id}/subjects`, {
+    method: 'PUT',
+    body: { subjects: list },
+  })
+  const fromApi = Array.isArray(saved) ? normalizeNames(saved) : list
+  setClassSubjects(id, className, fromApi)
+  return fromApi
 }
 
 /** How many teaching (Class) periods are in the Periods schedule. */
@@ -248,4 +236,9 @@ export function subjectsMatchPeriodsHint(subjectCount: number, periodCount: numb
   if (subjectCount === periodCount) return `Ready — ${subjectCount} subjects match ${periodCount} periods.`
   if (subjectCount < periodCount) return `${subjectCount} of ${periodCount} subjects — add ${periodCount - subjectCount} more to match periods.`
   return `${subjectCount} subjects for ${periodCount} periods — remove ${subjectCount - periodCount} for a 1:1 match.`
+}
+
+/** Test helper: clear in-memory cache for the active tenant. */
+export function __resetClassSubjectsMemoryForTests(): void {
+  memoryByTenant.clear()
 }

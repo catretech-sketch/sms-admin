@@ -164,3 +164,47 @@ describe('listStudentAttendanceHistory', () => {
     expect(rows).toEqual([expect.objectContaining({ studentId: 's1', status: 'present' })])
   })
 })
+
+describe('getStudentAttendanceSummary', () => {
+  it('maps SaaS period aggregate and keeps null percentage when unmarked', async () => {
+    const { getStudentAttendanceSummary } = await import('./studentAttendance')
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      data: {
+        total_marked_periods: 11,
+        present_periods: 8,
+        late_periods: 1,
+        absent_periods: 2,
+        leave_periods: 0,
+        attendance_percentage: 81.82,
+        present_today_badge: true,
+      },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const s = await getStudentAttendanceSummary('s1', '2026-04-01', '2026-08-13')
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/students/s1/attendance/summary')
+    expect(s).toEqual({
+      totalMarkedPeriods: 11,
+      presentPeriods: 8,
+      latePeriods: 1,
+      absentPeriods: 2,
+      leavePeriods: 0,
+      attendancePercentage: 81.82,
+      presentTodayBadge: true,
+    })
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: {
+        total_marked_periods: 0,
+        present_periods: 0,
+        late_periods: 0,
+        absent_periods: 0,
+        leave_periods: 0,
+        attendance_percentage: null,
+        present_today_badge: null,
+      },
+    })))
+    const empty = await getStudentAttendanceSummary('s2')
+    expect(empty.attendancePercentage).toBeNull()
+    expect(empty.totalMarkedPeriods).toBe(0)
+  })
+})

@@ -17,12 +17,14 @@ function cleanName(v: unknown): string {
 export function toStudent(wire: Record<string, unknown>): Student {
   const c = snakeToCamel<Record<string, unknown>>(wire)
   const {
-    admissionNo, classLabel, guardianName, guardianPhone, attendancePct,
+    admissionNo, classLabel, guardianName, guardianPhone, guardianEmail, attendancePct,
     ...rest
   } = c
   const guardian = cleanName(guardianName ?? rest.guardian)
   const phone = String(guardianPhone ?? rest.phone ?? '').trim()
-  const attendance = Number(attendancePct ?? rest.attendance ?? 0)
+  const parentEmail = String(guardianEmail ?? rest.guardianEmail ?? '').trim()
+  const rawPct = attendancePct ?? rest.attendance
+  const attendance = rawPct == null || rawPct === '' ? null : Number(rawPct)
   const dob = toDateInputValue(c.dob) || undefined
   const base = {
     ...rest,
@@ -30,6 +32,7 @@ export function toStudent(wire: Record<string, unknown>): Student {
     cls: classLabel,
     guardian,
     phone,
+    guardianEmail: parentEmail || undefined,
     attendance,
     dob,
   } as unknown as Student
@@ -48,6 +51,15 @@ export function studentGuardianName(s: Student): string {
 /** Display label for Parents — never empty when a student exists. */
 export function studentParentLabel(s: Student): string {
   return studentGuardianName(s) || (s.phone ? `Guardian · ${s.phone}` : `Parent of ${s.name}`)
+}
+
+/** Parent login / mail — father, mother, or stored guardian_email. Never the student's school email. */
+export function parentMailFromStudent(s: {
+  guardianEmail?: string | null
+  father?: { email?: string } | null
+  mother?: { email?: string } | null
+}): string {
+  return (s.guardianEmail || s.father?.email || s.mother?.email || '').trim()
 }
 
 export async function listStudents(opts: ListStudentsOpts = {}): Promise<Student[]> {
@@ -77,9 +89,9 @@ function studentCoreFields(s: Student): Record<string, unknown> {
     gender: s.gender,
     grade: s.grade,
     section: s.section,
-    roll: s.roll,
     guardian_name: studentGuardianName(s) || null,
     guardian_phone: guardianPhone,
+    guardian_email: parentMailFromStudent(s) || null,
     house: s.house || null,
     avatar_hue: s.avatarHue ?? 0,
     dob: toDateInputValue(s.dob) || null,
@@ -90,10 +102,11 @@ function studentCoreFields(s: Student): Record<string, unknown> {
 
 /** Body for POST /students — only fields the SIS create contract accepts. */
 export function fromStudent(s: Student): Record<string, unknown> {
-  return studentCoreFields(s)
+  return { ...studentCoreFields(s), roll: s.roll ?? 0 }
 }
 
-/** Body for PUT /students/{id}. */
+/** Body for PATCH /students/{id}. Roll is assigned A–Z on the server — do not
+ *  send 0 from the form or an edit save overwrites the class roll. */
 export function fromStudentUpdate(s: Student): Record<string, unknown> {
   return {
     ...studentCoreFields(s),

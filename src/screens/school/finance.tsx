@@ -4,7 +4,7 @@
    HR is owned by the Admin office (payroll prepared by Admin,
    Principal only approves). No separate HR persona.
    ============================================================ */
-import { useEffect, useMemo, useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import { useFeePayments, usePayInvoice, useCreateFeeRazorpayOrder, useVerifyFeeRazorpayPayment } from '@/api/hooks/useFeePayments'
 import { useSchoolIntegrations } from '@/api/hooks/useSchoolIntegrations'
@@ -25,17 +25,17 @@ import { downloadTextFile, invoicesToCsv } from '@/lib/feeExport'
 import { payrollRunToCsv, payrollCsvFileName, downloadPayslip } from '@/lib/payrollExport'
 import { downloadFeeReceipt, type FeeReceiptData } from '@/lib/feeReceipt'
 import { getStudent } from '@/api/students'
+import { studentPhotoUrl } from '@/api/studentExtras'
 import { can } from '@/lib/gating'
 import {
   PageHead, Card, CardHead, Kpi, Btn, Badge, Avatar, Search, Select, Field, Input,
   Modal, Tabs, Icon, Empty, Bars, DataTable, Checkbox, type Column, type BadgeTone,
 } from '@/components/ui'
 import { TierGate } from '@/components/shell/gates'
-import { grades } from '@/data/mockDb'
 import { gradeRank } from '@/lib/defaultClasses'
 import { fmtMoney, fmtNum } from '@/lib/format'
 import { properName } from '@/lib/properCase'
-import { localDateIso } from '@/api/feeReports'
+import { localDateIso, paymentDateIso } from '@/api/feeReports'
 import { currentPeriod, periodLabel, computeSalary, toAmount, type SalaryComponents } from '@/lib/payroll'
 import {
   usePayrollRun, usePayrollPreview, useRunPayroll, useApprovePayroll, useSalaryStructures, useUpsertSalaryStructure,
@@ -45,7 +45,7 @@ import { TEACHER_DESIGNATIONS, STAFF_ROLES, LEADERSHIP_ROLES } from '@/lib/salar
 import { useQuery } from '@tanstack/react-query'
 import { listSchoolUsers, fromApiRole } from '@/api/users'
 import { queryKeys } from '@/api/queryKeys'
-import type { FeeStatus, FeePayment, FeeHead, FeeInvoice } from '@/types'
+import type { FeeStatus, FeePayment, FeeHead, FeeInvoice, Student } from '@/types'
 
 /* ============================================================
    Fees collection
@@ -133,6 +133,8 @@ function feeAmountFromRazorpayOrder(orderAmount: number, dueHint: number): numbe
 }
 
 /* ---------- Record-payment modal ---------- */
+const FEE_TYPE_ALL = '__all__'
+
 function PaymentModal({ invoice, cur, schoolName, schoolCity, studentAdm, logoUrl, logoInitials, brandColor, onClose }: {
   invoice: FeeInvoice
   cur: string
@@ -150,18 +152,22 @@ function PaymentModal({ invoice, cur, schoolName, schoolCity, studentAdm, logoUr
   const heads = useMemo<FeeHead[]>(() => (headsQ.data ?? []).filter((h) => h.active !== false), [headsQ.data])
   const adm = studentAdm || invoice.studentAdm || ''
 
-  const [amount, setAmount] = useState(String(invoice.due || invoice.total))
+  const [amount, setAmount] = useState(String(invoice.due > 0 ? invoice.due : ''))
   const [mode, setMode] = useState(PAY_MODES[0])
-  const [headId, setHeadId] = useState('')
+  const [headId, setHeadId] = useState(FEE_TYPE_ALL)
   const [ref, setRef] = useState('')
   const [chequeNumber, setChequeNumber] = useState('')
   const [chequeBank, setChequeBank] = useState('')
   const [chequeDate, setChequeDate] = useState('')
   const [upiVpa, setUpiVpa] = useState('')
 
-  useEffect(() => {
-    if (!headId && heads.length) setHeadId(heads[0].id)
-  }, [heads, headId])
+  const feeTypeOptions = useMemo(
+    () => [
+      { value: FEE_TYPE_ALL, label: 'All fee types' },
+      ...heads.map((h) => ({ value: h.id, label: h.name })),
+    ],
+    [heads],
+  )
 
   const amtNum = Math.max(0, Number(amount) || 0)
   const upiUri = mode === 'UPI (manual)'
@@ -177,16 +183,23 @@ function PaymentModal({ invoice, cur, schoolName, schoolCity, studentAdm, logoUr
   const submit = () => {
     const n = Number(amount)
     if (!n || n <= 0) { toast.danger('Amount required', 'Enter a valid payment amount.'); return }
+    if (invoice.due > 0 && n > invoice.due + 0.001) {
+      toast.danger('Amount too high', `Outstanding due is ${fmtMoney(invoice.due, cur)}.`)
+      return
+    }
     if (mode === 'Cheque' && !chequeNumber.trim()) { toast.danger('Cheque number required', 'Enter the cheque number.'); return }
     if (mode === 'UPI (manual)' && !upiVpa.trim() && !ref.trim()) {
       toast.danger('UPI VPA or reference required', 'Enter the school UPI ID for QR, or a UPI transaction reference.')
       return
     }
-    const head = heads.find((h) => h.id === headId)
+    const head = headId === FEE_TYPE_ALL ? undefined : heads.find((h) => h.id === headId)
+    const headName = headId === FEE_TYPE_ALL ? 'All fee types' : head?.name
     const paymentRef = ref.trim() || (mode === 'UPI (manual)' ? upiVpa.trim() : '')
     const payment: FeePayment = {
       id: Date.now(), invoiceId: invoice.id, studentId: invoice.studentId, studentName: invoice.studentName, cls: invoice.cls,
-      headId: headId || undefined, headName: head?.name,
+      headId: headId === FEE_TYPE_ALL ? undefined : (headId || undefined),
+      headName,
+      feeType: headName,
       amount: n, mode,
       ref: paymentRef,
       date: localDateIso(),
@@ -198,7 +211,7 @@ function PaymentModal({ invoice, cur, schoolName, schoolCity, studentAdm, logoUr
         onClose()
         void notifyReceiptBestEffort(invoice, n, mode, schoolName, cur, {
           ref: paymentRef,
-          headName: head?.name,
+          headName,
           schoolCity,
           logoUrl,
           logoInitials,
@@ -244,11 +257,11 @@ function PaymentModal({ invoice, cur, schoolName, schoolCity, studentAdm, logoUr
             <div className="fw6" style={{ color: invoice.due > 0 ? 'var(--danger)' : undefined }}>{fmtMoney(invoice.due, cur)}</div>
           </div>
         </div>
-        <Field label="Fee type" required hint="Which fee is being paid — Academic, Transport, etc.">
-          <Select options={heads.map((h) => ({ value: h.id, label: h.name }))} value={headId} onChange={(e) => setHeadId(e.target.value)} />
+        <Field label="Fee type" required hint="All fee types, or one head — Academic, Transport, etc.">
+          <Select options={feeTypeOptions} value={headId} onChange={(e) => setHeadId(e.target.value)} />
         </Field>
-        <Field label="Amount" required hint={`Term fee ${fmtMoney(invoice.total, cur)} · paid so far ${fmtMoney(invoice.paid, cur)}.`}>
-          <Input icon="rupee" type="number" inputMode="numeric" placeholder="Enter amount" value={amount} onChange={(e) => setAmount(e.target.value)} />
+        <Field label="Amount" required hint={`Term fee ${fmtMoney(invoice.total, cur)} · paid so far ${fmtMoney(invoice.paid, cur)} · due ${fmtMoney(invoice.due, cur)}.`}>
+          <Input icon="rupee" type="number" inputMode="numeric" placeholder="e.g. 5000" value={amount} onChange={(e) => setAmount(e.target.value)} />
         </Field>
         <Field label="Payment mode" required>
           <Select options={PAY_MODES} value={mode} onChange={(e) => setMode(e.target.value)} />
@@ -455,9 +468,7 @@ function FeeHistoryTab({ cur }: { cur: string }) {
 }
 
 /* ---------- Fee structure (named header + class-wise amounts) ---------- */
-const STRUCTURE_GRADES = grades.slice(4)
 const TERM_OPTIONS = ['Term 1', 'Term 2', 'Annual']
-const SECTION_OPTIONS = ['', 'A', 'B', 'C', 'D']
 const CURRENCY_OPTIONS = ['₹', 'INR', 'USD', 'AED', 'EUR']
 /** Soft cap so desk typos don't become INR 1,00,00,00,00,00,00,000. */
 const MAX_FEE_AMOUNT = 9_999_999
@@ -501,7 +512,7 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
   const heads = useMemo<FeeHead[]>(() => (headsQ.data ?? []).filter((h) => h.active !== false), [headsQ.data])
 
   const allClasses = useMemo<StructureClassRow[]>(() => {
-    const live = (classesQ.data ?? [])
+    return (classesQ.data ?? [])
       .filter((c) => c.name.trim())
       .map((c) => ({
         key: c.name.trim(),
@@ -510,13 +521,15 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
         section: c.section || '',
       }))
       .sort((a, b) => gradeRank(a.grade) - gradeRank(b.grade) || a.label.localeCompare(b.label))
-    if (live.length) return live
-    return STRUCTURE_GRADES.map((g) => ({ key: `${g}-A`, label: `${g}-A`, grade: g, section: 'A' }))
   }, [classesQ.data])
 
   const gradeOptions = useMemo(() => {
-    const live = [...new Set(allClasses.map((c) => c.grade).filter(Boolean))]
-    return live.length ? live : [...STRUCTURE_GRADES]
+    return [...new Set(allClasses.map((c) => c.grade).filter(Boolean))]
+  }, [allClasses])
+
+  const sectionOptions = useMemo(() => {
+    const secs = [...new Set(allClasses.map((c) => c.section).filter(Boolean))].sort((a, b) => a.localeCompare(b))
+    return secs
   }, [allClasses])
 
   const [meta, setMeta] = useState({
@@ -532,7 +545,8 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
   const [newHead, setNewHead] = useState('')
   const [draft, setDraft] = useState<Record<string, Record<string, number>>>({})
   const [hydrated, setHydrated] = useState(false)
-  const [viewGrade, setViewGrade] = useState('')
+  const [viewGrade, setViewGrade] = useState('') /* '' = all grades */
+  const [viewSection, setViewSection] = useState('') /* '' = all sections */
   const [classQ, setClassQ] = useState('')
 
   useEffect(() => {
@@ -550,26 +564,35 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
     })
     setDraft(d.amounts)
     if (d.classGrade) setViewGrade(d.classGrade)
+    if (d.section) setViewSection(d.section)
     setHydrated(true)
   }, [structureQ.data, hydrated, cur])
 
-  /* Default amount editor to one grade so Nursery–XII doesn't dump 40+ rows at once. */
+  /* Keep amount editor filters aligned with structure scope. */
   useEffect(() => {
-    if (viewGrade || !gradeOptions.length) return
-    setViewGrade(meta.classGrade || gradeOptions.find((g) => g === 'IV') || gradeOptions[0])
-  }, [gradeOptions, viewGrade, meta.classGrade])
+    if (meta.classGrade) setViewGrade(meta.classGrade)
+  }, [meta.classGrade])
+  useEffect(() => {
+    if (meta.section) setViewSection(meta.section)
+  }, [meta.section])
 
   const structureClasses = useMemo(() => {
     const needle = classQ.trim().toLowerCase()
+    const gradeFilter = meta.classGrade || viewGrade
+    const sectionFilter = meta.section || viewSection
     return allClasses.filter((row) => {
-      if (meta.classGrade && row.grade !== meta.classGrade) return false
-      if (viewGrade && row.grade !== viewGrade) return false
-      if (meta.section && row.section && row.section !== meta.section) return false
-      if (meta.section && !row.section && !row.label.endsWith(`-${meta.section}`)) return false
+      if (gradeFilter && row.grade !== gradeFilter) return false
+      if (sectionFilter) {
+        if (row.section) {
+          if (row.section !== sectionFilter) return false
+        } else if (!row.label.endsWith(`-${sectionFilter}`)) {
+          return false
+        }
+      }
       if (needle && !`${row.label} ${row.grade} ${row.section}`.toLowerCase().includes(needle)) return false
       return true
     })
-  }, [allClasses, meta.classGrade, meta.section, viewGrade, classQ])
+  }, [allClasses, meta.classGrade, meta.section, viewGrade, viewSection, classQ])
 
   const cellValue = (row: StructureClassRow, headId: string) =>
     draft[row.key]?.[headId] ?? draft[row.grade]?.[headId] ?? 0
@@ -604,6 +627,34 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
       return next
     })
   }
+
+  /** Push one fee-type amount onto every class currently shown in the grid. */
+  const applyHeadToAllShown = (headId: string, raw: string) => {
+    if (!structureClasses.length) {
+      toast.danger('No classes', 'Nothing to fill — adjust class / section filters.')
+      return
+    }
+    const n = parseFeeAmount(raw)
+    setDraft((d) => {
+      const next = { ...d }
+      for (const row of structureClasses) {
+        next[row.key] = { ...(next[row.key] ?? {}), [headId]: n }
+      }
+      return next
+    })
+    setAmountText((t) => {
+      const next = { ...t }
+      for (const row of structureClasses) delete next[cellKey(row, headId)]
+      return next
+    })
+    const headName = heads.find((h) => h.id === headId)?.name ?? 'Fee'
+    toast.success(
+      `${headName} applied`,
+      `${fmtMoney(n, meta.currency || cur)} set on ${structureClasses.length} class${structureClasses.length === 1 ? '' : 'es'}.`,
+    )
+  }
+
+  const [bulkByHead, setBulkByHead] = useState<Record<string, string>>({})
 
   const addHead = () => {
     const name = properName(newHead.trim())
@@ -701,20 +752,59 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
   const [genTerm, setGenTerm] = useState(TERM_OPTIONS[0])
   const [genDue, setGenDue] = useState('')
   const [genClasses, setGenClasses] = useState<Set<string>>(new Set())
+  /** Once the user toggles Select all / Clear / a class, stop auto-syncing checks. */
+  const genClassesTouched = useRef(false)
   const [seeding, setSeeding] = useState(false)
   const [busy, setBusy] = useState(false)
 
-  useEffect(() => {
-    setGenClasses(new Set(structureClasses.map((c) => c.key)))
-  }, [structureClasses])
+  const classKeysWithAmount = useMemo(() => {
+    return new Set(
+      structureClasses.filter((c) => rowTotal(c) > 0).map((c) => c.key),
+    )
+  }, [structureClasses, draft, heads])
 
-  const toggleGenClass = (key: string) => setGenClasses((prev) => {
-    const next = new Set(prev)
-    if (next.has(key)) next.delete(key); else next.add(key)
-    return next
-  })
+  useEffect(() => {
+    const visible = new Set(structureClasses.map((c) => c.key))
+    if (genClassesTouched.current) {
+      /* Keep manual picks; drop classes that are no longer in the filtered list. */
+      setGenClasses((prev) => {
+        const next = new Set([...prev].filter((k) => visible.has(k)))
+        return next.size === prev.size && [...next].every((k) => prev.has(k)) ? prev : next
+      })
+      return
+    }
+    /* Default: only check classes that already have fee amounts (not every empty row). */
+    setGenClasses(new Set(classKeysWithAmount))
+  }, [structureClasses, classKeysWithAmount])
+
+  const markGenTouched = () => { genClassesTouched.current = true }
+
+  const toggleGenClass = (key: string) => {
+    markGenTouched()
+    setGenClasses((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }
+
+  const selectAllGenClasses = () => {
+    markGenTouched()
+    setGenClasses(new Set(structureClasses.map((c) => c.key)))
+  }
+
+  const selectGenClassesWithAmounts = () => {
+    markGenTouched()
+    setGenClasses(new Set(classKeysWithAmount))
+  }
+
+  const clearGenClasses = () => {
+    markGenTouched()
+    setGenClasses(new Set())
+  }
 
   const selectedRows = structureClasses.filter((c) => genClasses.has(c.key))
+  const selectedWithAmount = selectedRows.filter((c) => rowTotal(c) > 0)
 
   const save = () => {
     const err = validateMeta()
@@ -731,12 +821,17 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
     const err = validateMeta()
     if (err) { toast.danger('Missing fields', err); return }
     if (!selectedRows.length) { toast.danger('Pick classes', 'Select at least one class to generate invoices for.'); return }
+    if (!selectedWithAmount.length) {
+      toast.danger('No amounts on selection', 'Checked classes have no fee amounts. Fill amounts or use “With amounts”.')
+      return
+    }
     if (grandTotal <= 0) { toast.danger('Fill amounts', 'Enter fee amounts for at least one class / head.'); return }
     if (meta.status !== 'active') { toast.danger('Inactive structure', 'Set Status to Active before generating invoices.'); return }
     setBusy(true)
     try {
       const doc = await saveStructure.mutateAsync(buildDocument())
-      const classes = selectedRows.map((r) => r.key)
+      const skipped = selectedRows.length - selectedWithAmount.length
+      const classes = selectedWithAmount.map((r) => r.key)
       const res = await generateInvoices.mutateAsync({
         classes,
         academicYear: doc.academicYear,
@@ -745,7 +840,7 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
       })
       toast.success(
         'Structure saved · invoices generated',
-        `${res.created} invoice(s) · ${classes.length} class(es) · ${genTerm} · ${doc.academicYear}. Open Collection to record payment.`,
+        `${res.created} invoice(s) · ${classes.length} class(es) · ${genTerm} · ${doc.academicYear}${skipped ? ` · skipped ${skipped} with no amount` : ''}. Open Collection to record payment.`,
       )
       onGenerated?.()
     } catch (e) {
@@ -786,6 +881,36 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
       }
       return next
     })
+  }
+
+  if (classesQ.isLoading) {
+    return (
+      <Card>
+        <div className="t-sm muted" style={{ padding: 24 }}>Loading classes from the server…</div>
+      </Card>
+    )
+  }
+  if (classesQ.isError) {
+    return (
+      <Card>
+        <Empty
+          icon="alert"
+          title="Classes unavailable"
+          body={classesQ.error instanceof Error ? classesQ.error.message : 'Could not load classes from the database. Fee structure needs live classes.'}
+        />
+      </Card>
+    )
+  }
+  if (!allClasses.length) {
+    return (
+      <Card>
+        <Empty
+          icon="users"
+          title="No classes found"
+          body="Add classes under Academics before creating a fee structure. Mock grades are not shown."
+        />
+      </Card>
+    )
   }
 
   return (
@@ -833,23 +958,37 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
             </div>
           </div>
           <div className="row gap16 wrap">
-            <div style={{ flex: '1 1 140px' }}>
-              <Field label="Class" hint="Optional — leave blank for all classes">
+            <div style={{ flex: '1 1 180px' }}>
+              <Field label="Class" hint="Structure scope — All classes applies school-wide">
                 <Select
-                  options={[{ value: '', label: 'All classes' }, ...gradeOptions.map((g) => ({ value: g, label: g }))]}
+                  options={[
+                    { value: '', label: 'All classes' },
+                    ...gradeOptions.map((g) => ({ value: g, label: g })),
+                  ]}
                   value={meta.classGrade}
                   disabled={!editable}
-                  onChange={(e) => patchMeta('classGrade', e.target.value)}
+                  onChange={(e) => {
+                    const next = e.target.value
+                    patchMeta('classGrade', next)
+                    setViewGrade(next)
+                  }}
                 />
               </Field>
             </div>
-            <div style={{ flex: '1 1 120px' }}>
-              <Field label="Section" hint="Optional">
+            <div style={{ flex: '1 1 160px' }}>
+              <Field label="Section" hint="All sections includes every section in the class">
                 <Select
-                  options={SECTION_OPTIONS.map((s) => ({ value: s, label: s || 'All sections' }))}
+                  options={[
+                    { value: '', label: 'All sections' },
+                    ...sectionOptions.map((s) => ({ value: s, label: s })),
+                  ]}
                   value={meta.section}
                   disabled={!editable}
-                  onChange={(e) => patchMeta('section', e.target.value)}
+                  onChange={(e) => {
+                    const next = e.target.value
+                    patchMeta('section', next)
+                    setViewSection(next)
+                  }}
                 />
               </Field>
             </div>
@@ -954,28 +1093,123 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
                 <Field
                   label="Amount by class"
                   required
-                  hint={`Showing ${structureClasses.length} class(es)${viewGrade ? ` · Grade ${viewGrade}` : ''} · max ${fmtMoney(MAX_FEE_AMOUNT, meta.currency || cur)} per cell`}
+                  hint={`Showing ${structureClasses.length} of ${allClasses.length} class(es) · max ${fmtMoney(MAX_FEE_AMOUNT, meta.currency || cur)} per cell`}
                 >
                   <div className="col gap12">
-                    <div className="row gap6 wrap" role="group" aria-label="Filter by grade">
-                      {(meta.classGrade ? [meta.classGrade] : gradeOptions).map((g) => (
-                        <Btn
-                          key={g}
-                          type="button"
-                          size="sm"
-                          variant={viewGrade === g ? 'primary' : 'secondary'}
-                          onClick={() => setViewGrade(g)}
-                        >
-                          {g}
-                        </Btn>
-                      ))}
+                    <div className="row ai-center gap8 wrap" style={{
+                      padding: '10px 12px',
+                      borderRadius: 10,
+                      border: '1px solid var(--border)',
+                      background: 'var(--surface-2)',
+                    }}>
+                      <span className="t-xs muted3 fw6" style={{ textTransform: 'uppercase', letterSpacing: '0.04em' }}>View</span>
+                      <div className="row gap6 wrap" role="group" aria-label="Filter by class">
+                        {!meta.classGrade && (
+                          <Btn
+                            type="button"
+                            size="sm"
+                            variant={viewGrade === '' ? 'primary' : 'secondary'}
+                            onClick={() => setViewGrade('')}
+                          >
+                            All classes
+                          </Btn>
+                        )}
+                        {(meta.classGrade ? [meta.classGrade] : gradeOptions).map((g) => (
+                          <Btn
+                            key={g}
+                            type="button"
+                            size="sm"
+                            variant={viewGrade === g ? 'primary' : 'secondary'}
+                            onClick={() => setViewGrade(g)}
+                          >
+                            {g}
+                          </Btn>
+                        ))}
+                      </div>
+                      <div style={{ width: 1, alignSelf: 'stretch', background: 'var(--border)', margin: '0 2px' }} aria-hidden />
+                      <div style={{ minWidth: 140, flex: '0 1 160px' }}>
+                        <Select
+                          aria-label="Filter by section"
+                          options={[
+                            { value: '', label: 'All sections' },
+                            ...sectionOptions.map((s) => ({ value: s, label: `Section ${s}` })),
+                          ]}
+                          value={meta.section || viewSection}
+                          disabled={!!meta.section}
+                          onChange={(e) => setViewSection(e.target.value)}
+                        />
+                      </div>
+                      <div style={{ flex: '1 1 160px', minWidth: 140 }}>
+                        <Search
+                          value={classQ}
+                          onChange={setClassQ}
+                          placeholder="Search class…"
+                        />
+                      </div>
                     </div>
-                    <Search
-                      value={classQ}
-                      onChange={setClassQ}
-                      placeholder="Filter class e.g. IV-B"
-                      style={{ maxWidth: 280 }}
-                    />
+
+                    {editable && heads.length > 0 && (
+                      <div
+                        className="col gap10"
+                        style={{
+                          padding: 12,
+                          borderRadius: 10,
+                          border: '1px solid var(--border)',
+                          background: 'color-mix(in srgb, var(--brand-600) 6%, var(--surface))',
+                        }}
+                      >
+                        <div>
+                          <div className="fw6 t-sm">Same fee for all shown classes</div>
+                          <div className="t-xs muted">
+                            Enter an amount, then Apply — fills every class in the table below (current filters).
+                          </div>
+                        </div>
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                            gap: 10,
+                          }}
+                        >
+                          {heads.map((h) => (
+                            <div key={h.id} className="row ai-end gap8">
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <Field label={h.name}>
+                                  <Input
+                                    type="number"
+                                    min={0}
+                                    max={MAX_FEE_AMOUNT}
+                                    inputMode="numeric"
+                                    icon="rupee"
+                                    placeholder="0"
+                                    value={bulkByHead[h.id] ?? ''}
+                                    onChange={(e) => setBulkByHead((b) => ({ ...b, [h.id]: e.target.value }))}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.preventDefault()
+                                        applyHeadToAllShown(h.id, bulkByHead[h.id] ?? '')
+                                      }
+                                    }}
+                                    aria-label={`Same ${h.name} amount for all shown classes`}
+                                  />
+                                </Field>
+                              </div>
+                              <Btn
+                                type="button"
+                                size="sm"
+                                variant="secondary"
+                                icon="check"
+                                disabled={!structureClasses.length}
+                                onClick={() => applyHeadToAllShown(h.id, bulkByHead[h.id] ?? '')}
+                                title={`Apply ${h.name} to all ${structureClasses.length} shown class(es)`}
+                              >
+                                All
+                              </Btn>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Mobile / narrow: stacked cards */}
                     <div className="sm-fee-amount-cards">
@@ -1010,7 +1244,7 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
                         </div>
                       ))}
                       {!structureClasses.length && (
-                        <div className="t-sm muted" style={{ padding: 12 }}>No classes in this grade — pick another grade or clear search.</div>
+                        <div className="t-sm muted" style={{ padding: 12 }}>No classes match this class / section filter.</div>
                       )}
                     </div>
 
@@ -1022,9 +1256,30 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
                             <th>Class</th>
                             {heads.map((h) => (
                               <th key={h.id} className="ta-right">
-                                <div className="col ai-end gap2">
-                                  <span className="fw6">{h.name}</span>
-                                  <span className="t-xs muted fw4">Amount</span>
+                                <div className="col ai-end gap6">
+                                  <div className="col ai-end gap2">
+                                    <span className="fw6">{h.name}</span>
+                                    <span className="t-xs muted fw4">Amount</span>
+                                  </div>
+                                  {editable && (
+                                    <Btn
+                                      type="button"
+                                      size="sm"
+                                      variant="ghost"
+                                      icon="check"
+                                      disabled={!structureClasses.length}
+                                      title={`Copy first filled ${h.name} (or 0) to all shown classes`}
+                                      onClick={() => {
+                                        const first = structureClasses.find((r) => cellValue(r, h.id) > 0)
+                                        const raw = first
+                                          ? String(cellValue(first, h.id))
+                                          : (bulkByHead[h.id] ?? amountText[cellKey(structureClasses[0], h.id)] ?? '0')
+                                        applyHeadToAllShown(h.id, raw)
+                                      }}
+                                    >
+                                      Same all
+                                    </Btn>
+                                  )}
                                 </div>
                               </th>
                             ))}
@@ -1057,6 +1312,13 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
                               <td className="ta-right fw7">{fmtMoney(rowTotal(row), meta.currency || cur)}</td>
                             </tr>
                           ))}
+                          {!structureClasses.length && (
+                            <tr>
+                              <td colSpan={heads.length + 3} className="t-sm muted" style={{ padding: 16 }}>
+                                No classes match this class / section filter.
+                              </td>
+                            </tr>
+                          )}
                         </tbody>
                       </table>
                     </div>
@@ -1107,15 +1369,79 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
                 </Field>
               </div>
             </div>
-            <Field label="Classes" required hint={genClasses.size ? `${genClasses.size} selected` : 'Select at least one class'}>
-              <div className="row gap6 wrap" role="group" aria-label="Select classes">
-                <Btn type="button" size="sm" variant="ghost" onClick={() => setGenClasses(new Set(structureClasses.map((c) => c.key)))}>All</Btn>
-                <Btn type="button" size="sm" variant="ghost" onClick={() => setGenClasses(new Set())}>None</Btn>
-                {structureClasses.map((c) => (
-                  <Btn key={c.key} type="button" size="sm" variant={genClasses.has(c.key) ? 'primary' : 'secondary'} onClick={() => toggleGenClass(c.key)}>
-                    {c.label}
+            <Field
+              label="Generate for classes"
+              required
+              hint={
+                genClasses.size
+                  ? `${selectedWithAmount.length} with amount · ${genClasses.size} checked · ${structureClasses.length} shown`
+                  : 'Only classes with fee amounts are checked by default'
+              }
+            >
+              <div className="col gap10">
+                <div className="row ai-center gap8 wrap">
+                  <Btn type="button" size="sm" variant="secondary" onClick={selectGenClassesWithAmounts}>
+                    With amounts
                   </Btn>
-                ))}
+                  <Btn type="button" size="sm" variant="secondary" onClick={selectAllGenClasses}>
+                    Select all classes
+                  </Btn>
+                  <Btn type="button" size="sm" variant="ghost" onClick={clearGenClasses}>
+                    Clear
+                  </Btn>
+                </div>
+                <div
+                  className="sm-fee-gen-class-grid"
+                  role="group"
+                  aria-label="Select classes"
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
+                    gap: 8,
+                    maxHeight: 220,
+                    overflow: 'auto',
+                    padding: 10,
+                    border: '1px solid var(--border)',
+                    borderRadius: 10,
+                    background: 'var(--surface)',
+                  }}
+                >
+                  {structureClasses.map((c) => {
+                    const on = genClasses.has(c.key)
+                    const hasAmt = rowTotal(c) > 0
+                    return (
+                      <button
+                        key={c.key}
+                        type="button"
+                        className="row ai-center gap8"
+                        onClick={() => toggleGenClass(c.key)}
+                        style={{
+                          margin: 0,
+                          padding: '8px 10px',
+                          borderRadius: 8,
+                          border: `1px solid ${on ? 'var(--brand-600)' : 'var(--border)'}`,
+                          background: on ? 'color-mix(in srgb, var(--brand-600) 10%, transparent)' : 'transparent',
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                          color: 'inherit',
+                          font: 'inherit',
+                          opacity: hasAmt ? 1 : 0.72,
+                        }}
+                      >
+                        <span style={{ pointerEvents: 'none' }}>
+                          <Checkbox checked={on} />
+                        </span>
+                        <span className="col" style={{ gap: 2, minWidth: 0 }}>
+                          <span className="t-sm fw6">{c.label}</span>
+                          <span className="t-xs muted">{hasAmt ? fmtMoney(rowTotal(c), meta.currency || cur) : 'No amount'}</span>
+                        </span>
+                      </button>
+                    )
+                  })}
+                  {!structureClasses.length && (
+                    <div className="t-sm muted">No classes in the current class / section filter.</div>
+                  )}
+                </div>
               </div>
             </Field>
             <div className="row jc-end gap8 wrap">
@@ -1125,14 +1451,14 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
               <Btn
                 variant="primary"
                 icon="arrowRight"
-                disabled={busy || generateInvoices.isPending || grandTotal <= 0 || meta.status !== 'active'}
+                disabled={busy || generateInvoices.isPending || selectedWithAmount.length === 0 || meta.status !== 'active'}
                 onClick={() => { void generate() }}
               >
                 {busy ? 'Working…' : 'Save & generate'}
               </Btn>
             </div>
-            {grandTotal <= 0 && (
-              <div className="t-sm muted">Fill at least one class amount above before generating.</div>
+            {selectedWithAmount.length === 0 && (
+              <div className="t-sm muted">Check classes that have fee amounts (or fill amounts first), then generate.</div>
             )}
           </div>
         </Card>
@@ -1218,11 +1544,31 @@ function FeesScreen() {
   const [tab, setTab] = useState('collection')
 
   const invoicesQ = useFeeInvoices()
-  const invoices = useMemo<FeeInvoice[]>(() => invoicesQ.data ?? [], [invoicesQ.data])
   const studentsQ = useStudents()
+  const studentsById = useMemo(() => {
+    const m = new Map<string, Student>()
+    for (const s of studentsQ.data ?? []) m.set(s.id, s)
+    return m
+  }, [studentsQ.data])
+  /** Join SIS student row so Collection shows name / class / photo even when invoice API omits them. */
+  const invoices = useMemo<FeeInvoice[]>(() => {
+    return (invoicesQ.data ?? []).map((inv) => {
+      const s = studentsById.get(inv.studentId)
+      if (!s && inv.studentName && inv.cls) return inv
+      return {
+        ...inv,
+        studentName: (inv.studentName || s?.name || '').trim(),
+        cls: (inv.cls || s?.cls || '').trim(),
+        grade: (inv.grade || s?.grade || '').trim(),
+        studentAdm: inv.studentAdm?.trim() || s?.adm || inv.studentAdm,
+        avatarHue: inv.avatarHue ?? s?.avatarHue,
+        photoUrl: inv.photoUrl || studentPhotoUrl(inv.studentId) || undefined,
+      }
+    })
+  }, [invoicesQ.data, studentsById])
   const admOf = (inv: FeeInvoice) =>
     inv.studentAdm?.trim()
-    || (studentsQ.data ?? []).find((s) => s.id === inv.studentId)?.adm
+    || studentsById.get(inv.studentId)?.adm
     || ''
   const summaryQ = useFeeReportSummary()
   const summary = summaryQ.data
@@ -1331,12 +1677,20 @@ function FeesScreen() {
   const columns: Column<FeeInvoice>[] = [
     {
       key: 'name', label: 'Student', sortValue: (r) => r.studentName,
-      render: (r) => (
-        <div className="row ai-center gap10">
-          <Avatar name={r.studentName} size={34} />
-          <div className="fw6">{properName(r.studentName)}</div>
-        </div>
-      ),
+      render: (r) => {
+        const name = r.studentName || '—'
+        const photo = r.photoUrl || studentPhotoUrl(r.studentId)
+        const hue = r.avatarHue ?? studentsById.get(r.studentId)?.avatarHue
+        return (
+          <div className="row ai-center gap10">
+            <Avatar name={name} hue={hue} size={34} src={photo} />
+            <div>
+              <div className="fw6">{properName(name)}</div>
+              {r.cls ? <div className="t-xs muted">{r.cls}</div> : null}
+            </div>
+          </div>
+        )
+      },
     },
     {
       key: 'adm', label: 'Admission no.', sortValue: (r) => admOf(r),
@@ -1344,7 +1698,7 @@ function FeesScreen() {
     },
     {
       key: 'cls', label: 'Class', sortValue: (r) => r.cls,
-      render: (r) => <span className="t-sm">{r.cls}</span>,
+      render: (r) => <span className="t-sm">{r.cls || '—'}</span>,
     },
     { key: 'term', label: 'Term fee', align: 'right', sortValue: (r) => r.total, render: (r) => fmtMoney(r.total, cur) },
     { key: 'paid', label: 'Paid', align: 'right', sortValue: (r) => r.paid, render: (r) => fmtMoney(r.paid, cur) },
@@ -1405,18 +1759,23 @@ function FeesScreen() {
       )}
 
       {tab === 'collection' && (<>
-      {/* Live "payment received" cue */}
-      {latest && (
+      {/* Live "payment received" cue — only when summary has a real payment today */}
+      {latest && latest.amount > 0 && (
         <Card className="row ai-center jc-between gap12 wrap" style={{ marginBottom: 16, borderColor: 'var(--success)' }}>
           <div className="row ai-center gap10">
             <span className="sm-dot-live" />
             <span className="sm-kpi-ic" style={{ background: 'var(--success-bg)', color: 'var(--success)' }}><Icon name="rupee" size={18} /></span>
             <div>
               <div className="fw6">Payment received · {fmtMoney(latest.amount, cur)}</div>
-              <div className="t-xs muted">{latest.studentName} ({latest.cls}) · just now via {latest.mode}</div>
+              <div className="t-xs muted">
+                {properName(latest.studentName || 'Student')}
+                {latest.cls ? ` (${latest.cls})` : ''}
+                {latest.mode ? ` · via ${latest.mode}` : ''}
+                {latest.date ? ` · ${paymentDateIso(latest.date) === localDateIso() ? 'today' : paymentDateIso(latest.date)}` : ''}
+              </div>
             </div>
           </div>
-          <Badge tone="success" soft>Live</Badge>
+          <Badge tone="success" soft>Today</Badge>
         </Card>
       )}
 

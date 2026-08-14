@@ -6,7 +6,7 @@ import { useApp, useToast } from '@/lib/hooks'
 import { tierIncludes } from '@/lib/gating'
 import { useCreateTeacher, useUpdateTeacher } from '@/api/hooks/useTeacherMutations'
 import { useTeacher, useTeachers } from '@/api/hooks/useTeachers'
-import { loadTeacherExtras, persistTeacherExtras } from '@/api/teacherExtras'
+import { fetchTeacherExtras, persistTeacherExtras, mergeTeacherExtras } from '@/api/teacherExtras'
 import { updateTeacherPhoto } from '@/api/teachers'
 import { upsertSalaryProfile, type SalaryStructure } from '@/api/payroll'
 import { toAmount, computeSalary } from '@/lib/payroll'
@@ -95,7 +95,7 @@ function splitName(full: string): { first: string; last: string } {
   return { first: parts[0], last: parts.slice(1).join(' ') }
 }
 
-function teacherToForm(t: Teacher): Form {
+export function teacherToForm(t: Teacher): Form {
   const { first, last } = splitName(t.name)
   return {
     ...INITIAL_FORM,
@@ -257,18 +257,28 @@ function TeacherFormScreen({ mode }: { mode: 'add' | 'edit' }) {
     const form = payrollEnabled ? { ...base, ...salaryFields } : base
 
     setForm(form)
-    const ex = loadTeacherExtras(existing.id)
-    const next: Partial<Record<keyof typeof INITIAL_FILES, string>> = {}
-    const map = Object.fromEntries(
-      TEACHER_FILE_PICKS.map((p) => [p.key, p.formKey]),
-    ) as Record<string, keyof typeof INITIAL_FILES>
-    for (const d of ex?.files ?? []) {
-      if (!d.dataUrl) continue
-      const formKey = map[d.key]
-      if (formKey) next[formKey] = d.dataUrl
-    }
-    setSavedUrls(next)
-    setHydrated(true)
+    let cancelled = false
+    void fetchTeacherExtras(existing.id)
+      .then((ex) => {
+        if (cancelled) return
+        const withExtras = teacherToForm(mergeTeacherExtras({ ...existing }))
+        setForm(payrollEnabled ? { ...withExtras, ...salaryFields } : withExtras)
+        const next: Partial<Record<keyof typeof INITIAL_FILES, string>> = {}
+        const map = Object.fromEntries(
+          TEACHER_FILE_PICKS.map((p) => [p.key, p.formKey]),
+        ) as Record<string, keyof typeof INITIAL_FILES>
+        for (const d of ex?.files ?? []) {
+          if (!d.dataUrl) continue
+          const formKey = map[d.key]
+          if (formKey) next[formKey] = d.dataUrl
+        }
+        setSavedUrls(next)
+        setHydrated(true)
+      })
+      .catch(() => {
+        if (!cancelled) setHydrated(true)
+      })
+    return () => { cancelled = true }
   }, [mode, existing, payrollEnabled, profilesQ.data, profilesQ.isLoading, structuresQ.data, structuresQ.isLoading])
 
   const classNames = useClassNames()
@@ -473,25 +483,35 @@ function TeacherFormScreen({ mode }: { mode: 'add' | 'edit' }) {
             }
           })()
         }
-        void persistTeacherExtras(
-          saved.id,
-          { ...teacher, id: saved.id },
-          TEACHER_FILE_PICKS.map((p) => ({ key: p.key, label: p.label, file: files[p.formKey] })),
-        ).finally(() => {
+        try {
+          await persistTeacherExtras(
+            saved.id,
+            { ...teacher, id: saved.id },
+            TEACHER_FILE_PICKS.map((p) => ({ key: p.key, label: p.label, file: files[p.formKey] })),
+          )
+        } catch (err) {
           setSaving(false)
-          const replaced = previousHolders.length
-            ? ` · replaced CT on ${classKey}`
-            : classKey
-              ? ` · class teacher of ${classKey}`
-              : ''
-          toast.success(mode === 'edit' ? 'Teacher updated' : 'Teacher added', `${name} · ${f.department}${replaced}.`)
+          toast.danger(
+            'Teacher saved, extras failed',
+            err instanceof Error ? err.message : 'Onboarding details could not be saved to the server.',
+          )
           if (mode === 'edit') app.go('school.teachers', { focus: saved.id })
           else app.go('school.teachers')
-        })
+          return
+        }
+        setSaving(false)
+        const replaced = previousHolders.length
+          ? ` · replaced CT on ${classKey}`
+          : classKey
+            ? ` · class teacher of ${classKey}`
+            : ''
+        toast.success(mode === 'edit' ? 'Teacher updated' : 'Teacher added', `${name} · ${f.department}${replaced}.`)
+        if (mode === 'edit') app.go('school.teachers', { focus: saved.id })
+        else app.go('school.teachers')
       }
       /* Clear other teachers who held this class so only one CT per class. */
       if (previousHolders.length === 0) {
-        finish()
+        void finish()
         return
       }
       let left = previousHolders.length

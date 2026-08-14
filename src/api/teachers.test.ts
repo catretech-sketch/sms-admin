@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { listTeachers, createTeacher, normalizeSubjects } from './teachers'
+import { listTeachers, createTeacher, updateTeacher, normalizeSubjects, fromTeacherUpdate } from './teachers'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -80,5 +80,32 @@ describe('createTeacher', () => {
     expect(body.dept).toBeUndefined()
     expect(body.desig).toBeUndefined()
     expect(created).toMatchObject({ dept: 'Math', desig: 'Teacher' })
+  })
+})
+
+describe('updateTeacher', () => {
+  it('PATCHes gender, experience, and employee code — not only name/dept/phone', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: wireTeacher }))
+    vi.stubGlobal('fetch', fetchMock)
+    await updateTeacher('T-01', {
+      id: 'T-01', name: 'Meera', gender: 'F', dept: 'Science', desig: 'HOD',
+      subjects: ['Physics'], classTeacher: '10-A', phone: '99', email: 'm@s.edu',
+      exp: 12, rating: 4.6, attendance: 97, result: 88, load: 24, status: 'active',
+      avatarHue: 180, top: true, code: 'TCH/26/0001',
+    } as Parameters<typeof updateTeacher>[1])
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
+    expect(fromTeacherUpdate({
+      id: 'T-01', name: 'Meera', gender: 'F', dept: 'Science', desig: 'HOD',
+      subjects: ['Physics'], classTeacher: '10-A', phone: '99', email: 'm@s.edu',
+      exp: 12, rating: 4.6, attendance: 97, result: 88, load: 24, status: 'active',
+      avatarHue: 180, top: true, code: 'TCH/26/0001',
+    } as Parameters<typeof fromTeacherUpdate>[0])).toMatchObject({
+      gender: 'F',
+      exp: 12,
+      employee_code: 'TCH/26/0001',
+    })
+    expect(body.gender).toBe('F')
+    expect(body.exp).toBe(12)
+    expect(body.employee_code).toBe('TCH/26/0001')
   })
 })

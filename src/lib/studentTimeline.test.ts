@@ -59,6 +59,27 @@ describe('buildStudentTimeline', () => {
     expect(events.some((e) => e.id === 'pay-2')).toBe(false)
   })
 
+  it('includes payments linked via invoice id when studentId differs', () => {
+    const invoices: FeeInvoice[] = [
+      { id: 'INV9', studentId: 's1', studentName: 'Rahul', cls: 'IV-B', grade: 'IV', academicYear: '2026-27', term: 'Term 1', lines: [], total: 1000, paid: 500, waived: 0, due: 500, status: 'partial', dueDate: '2026-04-15' },
+    ]
+    const payments: FeePayment[] = [
+      { id: 9, studentId: 'legacy', invoiceId: 'INV9', studentName: 'Rahul', cls: 'IV-B', amount: 500, mode: 'UPI', ref: 'r9', date: '2026-05-01', headName: 'Tuition' },
+    ]
+    const events = buildStudentTimeline({ student, payments, invoices, feeOnly: true })
+    expect(events.some((e) => e.id === 'pay-9')).toBe(true)
+    expect(events.every((e) => e.title.startsWith('Fee') || e.title.startsWith('Invoice'))).toBe(true)
+  })
+
+  it('feeOnly omits attendance and enrolment', () => {
+    const events = buildStudentTimeline({
+      student,
+      attendance: [{ id: 'a1', classId: 'c1', studentId: 's1', date: '2026-05-02', status: 'absent' }],
+      feeOnly: true,
+    })
+    expect(events).toEqual([])
+  })
+
   it('caps attendance exceptions and total events', () => {
     const attendance: AttendanceRecord[] = Array.from({ length: 20 }, (_, i) => ({
       id: `a${i}`, classId: 'c1', studentId: 's1',

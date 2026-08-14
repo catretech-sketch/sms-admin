@@ -1,13 +1,24 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AttendanceRecord, AttendanceStatus } from '@/api/attendance'
+import { ApiError } from '@/api/ApiError'
+import { persistAlertConfig } from '@/api/attendanceAlertConfig'
 import {
   DEFAULT_ALERT_CONFIG,
   absenceStreakFor,
+  clearAlertConfigMemory,
   dueForAutoSend,
   flagAbsenceStreaks,
   loadAlertConfig,
+  normalizeAlertConfig,
   saveAlertConfig,
 } from './attendanceAlerts'
+
+vi.mock('@/api/client', () => ({
+  request: vi.fn(),
+}))
+
+import { request } from '@/api/client'
+const mockedRequest = vi.mocked(request)
 
 function rec(studentId: string, date: string, status: AttendanceStatus): AttendanceRecord {
   return { id: `${studentId}-${date}`, classId: 'c1', studentId, date, status }
@@ -83,33 +94,68 @@ describe('flagAbsenceStreaks', () => {
   })
 })
 
-describe('alert config', () => {
-  beforeEach(() => localStorage.clear())
-
-  it('defaults when nothing is stored', () => {
-    expect(loadAlertConfig()).toEqual(DEFAULT_ALERT_CONFIG)
+describe('alert config cache', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    clearAlertConfigMemory()
+    mockedRequest.mockReset()
   })
 
-  it('persists and reloads, clamping and keeping email ≥ notice', () => {
+  it('returns null when API has not populated session memory', () => {
+    expect(loadAlertConfig()).toBeNull()
+  })
+
+  it('normalizeAlertConfig clamps and keeps email ≥ notice without writing storage', () => {
+    const cfg = normalizeAlertConfig({ noticeDays: 4, emailDays: 2 })
+    expect(cfg.noticeDays).toBe(4)
+    expect(cfg.emailDays).toBe(4)
+    expect(loadAlertConfig()).toBeNull()
+    expect(localStorage.getItem('sms_attendance_alert_config')).toBeNull()
+  })
+
+  it('caches in memory after saveAlertConfig (no localStorage)', () => {
     saveAlertConfig({ noticeDays: 4, emailDays: 2 })
     const cfg = loadAlertConfig()
-    expect(cfg.noticeDays).toBe(4)
-    expect(cfg.emailDays).toBe(4) // email cannot be earlier than notice
+    expect(cfg?.noticeDays).toBe(4)
+    expect(cfg?.emailDays).toBe(4) // email cannot be earlier than notice
+    expect(localStorage.getItem('sms_attendance_alert_config')).toBeNull()
   })
 
   it('clamps out-of-range values', () => {
     saveAlertConfig({ noticeDays: 0, emailDays: 999 })
     const cfg = loadAlertConfig()
-    expect(cfg.noticeDays).toBe(1)
-    expect(cfg.emailDays).toBe(60)
+    expect(cfg?.noticeDays).toBe(1)
+    expect(cfg?.emailDays).toBe(60)
   })
 
-  it('persists schedule settings and normalizes a bad time', () => {
+  it('caches schedule settings and normalizes a bad time', () => {
     const saved = saveAlertConfig({ noticeDays: 2, emailDays: 4, autoSend: true, autoTime: '25:99', autoChannel: 'email' })
     expect(saved.autoSend).toBe(true)
     expect(saved.autoTime).toBe('09:00') // invalid time falls back to default
     expect(saved.autoChannel).toBe('email')
-    expect(loadAlertConfig().autoSend).toBe(true)
+    expect(loadAlertConfig()?.autoSend).toBe(true)
+  })
+
+  it('persistAlertConfig caches only after a successful PUT', async () => {
+    mockedRequest.mockResolvedValueOnce({
+      notice_days: 3,
+      email_days: 6,
+      auto_send: false,
+      auto_time: '09:00',
+      auto_channel: 'app',
+    })
+    const saved = await persistAlertConfig(normalizeAlertConfig({ noticeDays: 3, emailDays: 6 }))
+    expect(saved.emailDays).toBe(6)
+    expect(loadAlertConfig()?.emailDays).toBe(6)
+    expect(localStorage.getItem('sms_attendance_alert_config')).toBeNull()
+  })
+
+  it('persistAlertConfig throws and does not keep stale browser config', async () => {
+    localStorage.setItem('sms_attendance_alert_config', JSON.stringify({ noticeDays: 9 }))
+    mockedRequest.mockRejectedValueOnce(new ApiError(404, 'not_found', 'missing'))
+    await expect(persistAlertConfig(DEFAULT_ALERT_CONFIG)).rejects.toBeInstanceOf(ApiError)
+    expect(loadAlertConfig()).toBeNull()
+    expect(localStorage.getItem('sms_attendance_alert_config')).toBeNull()
   })
 })
 

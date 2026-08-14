@@ -4,7 +4,7 @@
    NOTE: per the design, calling/phone-call actions were removed —
    these screens only ever offer "Message", never a Call button.
    ============================================================ */
-import { useMemo, useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import { can } from '@/lib/gating'
 import {
@@ -20,10 +20,12 @@ import { useTeachers } from '@/api/hooks/useTeachers'
 import { normalizeSubjects } from '@/api/teachers'
 import { useStaff } from '@/api/hooks/useStaff'
 import { useStudents } from '@/api/hooks/useStudents'
-import { studentParentLabel } from '@/api/students'
+import { studentParentLabel, parentMailFromStudent } from '@/api/students'
 import {
   listPeopleDocs, resolvePeoplePhoto, openStoredDoc, downloadStoredDoc, isStoredImage,
 } from '@/api/peopleExtras'
+import { fetchTeacherExtras } from '@/api/teacherExtras'
+import { fetchStaffExtras } from '@/api/staffExtras'
 import { openMailCompose } from '@/lib/composeMail'
 
 /* ---------- shared helpers ---------- */
@@ -61,7 +63,16 @@ function PeopleDocsList({
   personId: string
   toast: ReturnType<typeof useToast>
 }) {
-  const docs = listPeopleDocs(kind, personId)
+  const [docs, setDocs] = useState(() => listPeopleDocs(kind, personId))
+  useEffect(() => {
+    let cancelled = false
+    setDocs(listPeopleDocs(kind, personId))
+    const load = kind === 'teacher' ? fetchTeacherExtras : fetchStaffExtras
+    void load(personId)
+      .then(() => { if (!cancelled) setDocs(listPeopleDocs(kind, personId)) })
+      .catch(() => { /* keep cache/legacy */ })
+    return () => { cancelled = true }
+  }, [kind, personId])
   if (docs.length === 0) {
     return (
       <Empty
@@ -639,7 +650,7 @@ function ParentsScreen() {
     students.forEach((s) => {
       const name = studentParentLabel(s)
       const phone = (s.phone || s.father?.phone || s.mother?.phone || '').trim()
-      const email = (s.father?.email || s.mother?.email || s.email || '').trim()
+      const email = parentMailFromStudent(s)
       const key = `${name.toLowerCase()}|${phone}`
       const ward: Ward = { id: s.id, name: s.name, cls: s.cls }
       const existing = map.get(key)
@@ -668,6 +679,7 @@ function ParentsScreen() {
     return parents.filter((p) =>
       p.name.toLowerCase().includes(needle)
       || p.phone.includes(needle)
+      || p.email.toLowerCase().includes(needle)
       || p.wards.some((w) => w.name.toLowerCase().includes(needle)),
     )
   }, [q, parents])
@@ -710,6 +722,10 @@ function ParentsScreen() {
       render: (p) => <span className="t-sm muted">{p.phone || '—'}</span>,
     },
     {
+      key: 'email', label: 'Email', sortValue: (p) => p.email,
+      render: (p) => <span className="t-sm muted">{p.email || '—'}</span>,
+    },
+    {
       key: 'due', label: 'Outstanding dues', align: 'right', sortValue: (p) => p.due,
       render: (p) => <Badge tone={p.due > 0 ? 'danger' : 'success'}>{p.due > 0 ? fmtMoney(p.due) : 'Cleared'}</Badge>,
     },
@@ -737,7 +753,7 @@ function ParentsScreen() {
 
       <Card pad={false}>
         <div className="row ai-center gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
-          <Search value={q} onChange={setQ} placeholder="Search guardian, phone, or student…" style={{ flex: 1, minWidth: 220 }} />
+          <Search value={q} onChange={setQ} placeholder="Search guardian, email, phone, or student…" style={{ flex: 1, minWidth: 220 }} />
         </div>
 
         <DataTable<Parent>

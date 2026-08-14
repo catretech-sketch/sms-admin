@@ -3,7 +3,7 @@ import { render, screen, fireEvent, within, waitFor } from '@testing-library/rea
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AppProvider, useApp } from '@/context/AppProvider'
 import { ToastProvider } from '@/context/ToastProvider'
-import { teacherAddScreens } from './teacherAdd'
+import { teacherAddScreens, teacherToForm } from './teacherAdd'
 
 const AddTeacherScreen = teacherAddScreens['school.teachers.add']
 
@@ -88,5 +88,20 @@ describe('Add Teacher form', () => {
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('/teachers')
 
     vi.unstubAllGlobals()
+  })
+})
+
+describe('teacherToForm extras', () => {
+  it('hydrates father name and PAN from extras fields on the teacher', () => {
+    const f = teacherToForm({
+      id: 't1', name: 'Amit Yadav', gender: 'M', dept: 'Music', desig: 'Teacher',
+      subjects: ['Music'], classTeacher: null, phone: '900', email: 'a@s.edu',
+      exp: 3, rating: 0, attendance: 0, result: 0, load: 0, status: 'active',
+      avatarHue: 1, top: false,
+      fatherName: 'Ramesh Yadav', pan: 'ABCDE1234F', aadhaar: '123412341234',
+    })
+    expect(f.fatherName).toBe('Ramesh Yadav')
+    expect(f.pan).toBe('ABCDE1234F')
+    expect(f.aadhaar).toBe('123412341234')
   })
 })

@@ -184,6 +184,7 @@ export function paperToSlot(p: ExamPaper): import('@/types').PaperSlot {
     room: p.room,
     inv1: p.inv1,
     inv2: p.inv2,
+    maxMarks: Number(p.maxMarks) > 0 ? Number(p.maxMarks) : 100,
   }
 }
 
@@ -199,7 +200,7 @@ export function slotToCreateInput(examId: string, s: import('@/types').PaperSlot
     room: s.room,
     inv1: s.inv1,
     inv2: s.inv2,
-    maxMarks: 100,
+    maxMarks: Number(s.maxMarks) > 0 ? Math.round(Number(s.maxMarks)) : 100,
   }
 }
 
@@ -214,5 +215,6 @@ export function slotToUpdateInput(s: import('@/types').PaperSlot): UpdateExamPap
     room: s.room,
     inv1: s.inv1,
     inv2: s.inv2,
+    maxMarks: Number(s.maxMarks) > 0 ? Math.round(Number(s.maxMarks)) : 100,
   }
 }

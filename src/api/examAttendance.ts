@@ -1,4 +1,4 @@
-/* Exam-day attendance per paper — API when available, tenant-local fallback. */
+/* Exam-day attendance per paper — API is source of truth; in-memory cache only after successful PUT. */
 import { request } from './client'
 import { ApiError } from './ApiError'
 import { tokenStore } from './auth/tokenStore'
@@ -6,10 +6,12 @@ import { camelToSnake, snakeToCamel } from './mapper'
 
 export type ExamAttStatus = 'present' | 'absent'
 
-function storageKey(examId: string, paperId: string, subject: string, date: string): string {
+const memory = new Map<string, Record<string, ExamAttStatus>>()
+
+function cacheKey(examId: string, paperId: string, subject: string, date: string): string {
   const tenant = tokenStore.getTenantId() || 'default'
   const paper = paperId || `${subject}:${date}`
-  return `sms_exam_attendance:${tenant}:${examId}:${paper}`
+  return `${tenant}:${examId}:${paper}`
 }
 
 function asStatus(v: unknown): ExamAttStatus {
@@ -17,39 +19,24 @@ function asStatus(v: unknown): ExamAttStatus {
   return s === 'absent' ? 'absent' : 'present'
 }
 
+/** Test helper — drop in-memory exam-attendance cache. */
+export function clearExamAttendanceMemory(): void {
+  memory.clear()
+}
+
+/** Read marks from the in-memory session cache (empty if never fetched/saved this session). */
 export function loadExamAttendanceLocal(
   examId: string,
   paperId: string,
   subject: string,
   date: string,
 ): Record<string, ExamAttStatus> {
-  try {
-    const raw = localStorage.getItem(storageKey(examId, paperId, subject, date))
-    if (!raw) {
-      /* Legacy key without paperId */
-      const legacy = localStorage.getItem(
-        `sms_exam_attendance:${tokenStore.getTenantId() || 'default'}:${examId}:${subject}:${date}`,
-      )
-      if (!legacy) return {}
-      return parseMap(legacy)
-    }
-    return parseMap(raw)
-  } catch {
-    return {}
-  }
-}
-
-function parseMap(raw: string): Record<string, ExamAttStatus> {
-  const parsed = JSON.parse(raw) as Record<string, string>
-  const out: Record<string, ExamAttStatus> = {}
-  for (const [id, st] of Object.entries(parsed)) {
-    if (st === 'present' || st === 'absent') out[id] = st
-  }
-  return out
+  return memory.get(cacheKey(examId, paperId, subject, date)) ?? {}
 }
 
 export const EXAM_ATTENDANCE_CHANGED = 'sms:exam-attendance-changed'
 
+/** Update the in-memory read cache only after a successful API write/read. */
 export function saveExamAttendanceLocal(
   examId: string,
   paperId: string,
@@ -57,7 +44,7 @@ export function saveExamAttendanceLocal(
   date: string,
   marks: Record<string, ExamAttStatus>,
 ): void {
-  localStorage.setItem(storageKey(examId, paperId, subject, date), JSON.stringify(marks))
+  memory.set(cacheKey(examId, paperId, subject, date), { ...marks })
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(EXAM_ATTENDANCE_CHANGED, {
       detail: { examId, paperId, subject, date },
@@ -65,51 +52,44 @@ export function saveExamAttendanceLocal(
   }
 }
 
-/** Load attendance for a paper — API first, then local. */
+/**
+ * Load attendance for a paper from the API. Fail-closed: throws on any error
+ * (including 404/405). Empty marks only when the API returns an empty array.
+ */
 export async function listExamPaperAttendance(paperId: string): Promise<Record<string, ExamAttStatus>> {
   if (!paperId) return {}
-  try {
-    const data = await request<Record<string, unknown>[] | { data?: Record<string, unknown>[] } | null>(
-      `/exam-papers/${paperId}/attendance`,
-    )
-    const rows = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : [])
-    const out: Record<string, ExamAttStatus> = {}
-    for (const row of rows) {
-      const c = snakeToCamel<Record<string, unknown>>(row)
-      const sid = String(c.studentId ?? '')
-      if (sid) out[sid] = asStatus(c.status)
-    }
-    return out
-  } catch (err) {
-    if (err instanceof ApiError && (err.status === 404 || err.status === 405)) return {}
-    throw err
+  const data = await request<Record<string, unknown>[] | { data?: Record<string, unknown>[] } | null>(
+    `/exam-papers/${paperId}/attendance`,
+  )
+  const rows = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : [])
+  const out: Record<string, ExamAttStatus> = {}
+  for (const row of rows) {
+    const c = snakeToCamel<Record<string, unknown>>(row)
+    const sid = String(c.studentId ?? '')
+    if (sid) out[sid] = asStatus(c.status)
   }
+  return out
 }
 
-/** Save attendance — try API, always mirror to local for CRM / offline. */
+/**
+ * Save attendance via API first; cache in memory only after success.
+ * Throws on missing paper, empty marks, or any API failure (404/405/5xx included).
+ */
 export async function saveExamPaperAttendance(
   paperId: string,
   examId: string,
   subject: string,
   date: string,
   marks: Record<string, ExamAttStatus>,
-): Promise<'api' | 'local'> {
-  saveExamAttendanceLocal(examId, paperId, subject, date, marks)
-  if (!paperId) return 'local'
+): Promise<void> {
+  if (!paperId) throw new ApiError(400, 'bad_request', 'Missing exam paper id')
   const records = Object.entries(marks).map(([studentId, status]) => ({ studentId, status }))
-  if (!records.length) return 'local'
-  try {
-    await request<unknown>(`/exam-papers/${paperId}/attendance`, {
-      method: 'PUT',
-      body: camelToSnake({ records }),
-    })
-    return 'api'
-  } catch (err) {
-    if (err instanceof ApiError && (err.status === 404 || err.status === 405)) return 'local'
-    /* Keep local copy; rethrow only for unexpected errors if desired — prefer soft local. */
-    if (err instanceof ApiError && err.status >= 500) return 'local'
-    return 'local'
-  }
+  if (!records.length) throw new Error('No students to save')
+  await request<unknown>(`/exam-papers/${paperId}/attendance`, {
+    method: 'PUT',
+    body: camelToSnake({ records }),
+  })
+  saveExamAttendanceLocal(examId, paperId, subject, date, marks)
 }
 
 /** @deprecated use loadExamAttendanceLocal / listExamPaperAttendance */
@@ -121,12 +101,12 @@ export function loadExamAttendance(
   return loadExamAttendanceLocal(examId, '', subject, date)
 }
 
-/** @deprecated use saveExamAttendanceLocal / saveExamPaperAttendance */
+/** @deprecated Removed — local-only writes are not allowed. Use {@link saveExamPaperAttendance}. */
 export function saveExamAttendance(
-  examId: string,
-  subject: string,
-  date: string,
-  marks: Record<string, ExamAttStatus>,
-): void {
-  saveExamAttendanceLocal(examId, '', subject, date, marks)
+  _examId: string,
+  _subject: string,
+  _date: string,
+  _marks: Record<string, ExamAttStatus>,
+): never {
+  throw new Error('saveExamAttendance requires the API; use saveExamPaperAttendance')
 }

@@ -14,17 +14,20 @@ import {
   loadExamAttendanceLocal,
   saveExamAttendanceLocal,
   saveExamPaperAttendance,
+  saveExamAttendance,
+  clearExamAttendanceMemory,
 } from './examAttendance'
 
 const mockedRequest = vi.mocked(request)
 
 describe('examAttendance', () => {
   beforeEach(() => {
+    clearExamAttendanceMemory()
     localStorage.clear()
     mockedRequest.mockReset()
   })
 
-  it('mirrors saves to local storage by paper id', () => {
+  it('mirrors saves to in-memory cache by paper id (no localStorage)', () => {
     saveExamAttendanceLocal('ex1', 'p1', 'Math', '2026-07-01', {
       s1: 'present',
       s2: 'absent',
@@ -33,6 +36,7 @@ describe('examAttendance', () => {
       s1: 'present',
       s2: 'absent',
     })
+    expect(localStorage.length).toBe(0)
   })
 
   it('lists attendance from API when available', async () => {
@@ -47,30 +51,47 @@ describe('examAttendance', () => {
     expect(mockedRequest).toHaveBeenCalledWith('/exam-papers/p1/attendance')
   })
 
-  it('returns empty map when attendance API is missing', async () => {
+  it('throws (fail-closed) when attendance API is missing', async () => {
     mockedRequest.mockRejectedValueOnce(new ApiError(404, 'not_found', 'missing'))
+    await expect(listExamPaperAttendance('p1')).rejects.toBeInstanceOf(ApiError)
+  })
+
+  it('returns empty map when API returns an empty array', async () => {
+    mockedRequest.mockResolvedValueOnce([])
     await expect(listExamPaperAttendance('p1')).resolves.toEqual({})
   })
 
-  it('saves via API and always keeps a local copy', async () => {
+  it('saves via API and caches in memory only after success', async () => {
     mockedRequest.mockResolvedValueOnce({})
-    const mode = await saveExamPaperAttendance('p1', 'ex1', 'Math', '2026-07-01', {
+    await saveExamPaperAttendance('p1', 'ex1', 'Math', '2026-07-01', {
       s1: 'absent',
     })
-    expect(mode).toBe('api')
     expect(loadExamAttendanceLocal('ex1', 'p1', 'Math', '2026-07-01')).toEqual({ s1: 'absent' })
+    expect(localStorage.length).toBe(0)
     expect(mockedRequest).toHaveBeenCalledWith(
       '/exam-papers/p1/attendance',
       expect.objectContaining({ method: 'PUT' }),
     )
   })
 
-  it('falls back to local when PUT attendance is not supported', async () => {
+  it('throws and does not cache when PUT attendance is not supported', async () => {
     mockedRequest.mockRejectedValueOnce(new ApiError(404, 'not_found', 'nope'))
-    const mode = await saveExamPaperAttendance('p1', 'ex1', 'Math', '2026-07-01', {
+    await expect(saveExamPaperAttendance('p1', 'ex1', 'Math', '2026-07-01', {
       s1: 'present',
-    })
-    expect(mode).toBe('local')
-    expect(loadExamAttendanceLocal('ex1', 'p1', 'Math', '2026-07-01')).toEqual({ s1: 'present' })
+    })).rejects.toBeInstanceOf(ApiError)
+    expect(loadExamAttendanceLocal('ex1', 'p1', 'Math', '2026-07-01')).toEqual({})
+  })
+
+  it('throws on 5xx without caching', async () => {
+    mockedRequest.mockRejectedValueOnce(new ApiError(503, 'unavailable', 'down'))
+    await expect(saveExamPaperAttendance('p1', 'ex1', 'Math', '2026-07-01', {
+      s1: 'present',
+    })).rejects.toMatchObject({ status: 503 })
+    expect(loadExamAttendanceLocal('ex1', 'p1', 'Math', '2026-07-01')).toEqual({})
+  })
+
+  it('saveExamAttendance throws — remote save required', () => {
+    expect(() => saveExamAttendance('ex1', 'Math', '2026-07-01', { s1: 'present' }))
+      .toThrow(/saveExamPaperAttendance/)
   })
 })

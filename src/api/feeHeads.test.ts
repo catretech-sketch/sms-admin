@@ -17,13 +17,9 @@ describe('listFeeHeads', () => {
     expect(rows[0]).toMatchObject({ id: 'h1', name: 'Academic', isSystem: true, active: true })
   })
 
-  it('falls back to local heads when API is 404', async () => {
+  it('throws when API is 404 (no local fallback)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error: { code: 'not_found', message: 'missing' } }, 404)))
-    expect(await listFeeHeads()).toEqual([])
-    /* Seed via create, then list again under 404 */
-    await createFeeHead({ name: 'Transport' })
-    const rows = await listFeeHeads()
-    expect(rows.some((h) => h.name === 'Transport')).toBe(true)
+    await expect(listFeeHeads()).rejects.toBeInstanceOf(ApiError)
   })
 })
 
@@ -38,32 +34,23 @@ describe('createFeeHead', () => {
     expect(JSON.parse((init as RequestInit).body as string)).toMatchObject({ name: 'Lab' })
   })
 
-  it('stores locally when POST /fees/heads is 404', async () => {
+  it('throws when POST /fees/heads is 404 (no local save)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error: { code: 'not_found', message: 'x' } }, 404)))
-    const head = await createFeeHead({ name: 'Lab fee' })
-    expect(head.name).toBe('Lab fee')
-    expect(head.id).toBeTruthy()
-    expect(head.active).toBe(true)
-    const listed = await listFeeHeads()
-    expect(listed.find((h) => h.name === 'Lab fee')).toBeTruthy()
+    await expect(createFeeHead({ name: 'Lab fee' })).rejects.toBeInstanceOf(ApiError)
   })
 })
 
 describe('deleteFeeHead', () => {
-  it('removes from local store when DELETE is 404', async () => {
+  it('throws when DELETE is 404 (no local store)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error: { code: 'not_found', message: 'x' } }, 404)))
-    const head = await createFeeHead({ name: 'Temp' })
-    await deleteFeeHead(head.id)
-    expect((await listFeeHeads()).find((h) => h.id === head.id)).toBeUndefined()
+    await expect(deleteFeeHead('h1')).rejects.toBeInstanceOf(ApiError)
   })
 })
 
 describe('updateFeeHead', () => {
-  it('patches local head when API is 404', async () => {
+  it('throws when PATCH is 404 (no local store)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error: { code: 'not_found', message: 'x' } }, 404)))
-    const head = await createFeeHead({ name: 'Old' })
-    const updated = await updateFeeHead(head.id, { name: 'New' })
-    expect(updated.name).toBe('New')
+    await expect(updateFeeHead('h1', { name: 'New' })).rejects.toBeInstanceOf(ApiError)
   })
 })
 

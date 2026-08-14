@@ -45,6 +45,10 @@ export interface ExamAutoConfig {
   room?: string
   classId?: string | null
   className?: string
+  /** Per-subject max marks (default 100). */
+  maxMarksBySubject?: Record<string, number>
+  /** Fallback when a subject is missing from maxMarksBySubject. */
+  maxMarks?: number
 }
 
 export interface ExamAutoSlot {
@@ -56,6 +60,14 @@ export interface ExamAutoSlot {
   classId?: string | null
   className?: string
   session?: string
+  maxMarks: number
+}
+
+/** Clamp paper max marks to a sensible school range. */
+export function clampExamMaxMarks(raw: unknown, fallback = 100): number {
+  const n = Math.round(Number(raw))
+  if (!Number.isFinite(n) || n <= 0) return fallback
+  return Math.min(999, Math.max(1, n))
 }
 
 function addDays(iso: string, n: number): string {
@@ -84,6 +96,7 @@ export function autoBuildExamSlots(cfg: ExamAutoConfig): ExamAutoSlot[] {
   const gap = Math.max(0, Math.floor(cfg.gapDays ?? 0))
   const duration = Math.max(1, Math.round(cfg.duration || 180))
   const room = cfg.room ?? ''
+  const defaultMax = clampExamMaxMarks(cfg.maxMarks, 100)
   const out: ExamAutoSlot[] = []
 
   let date = cfg.startDate
@@ -95,8 +108,9 @@ export function autoBuildExamSlots(cfg: ExamAutoConfig): ExamAutoSlot[] {
 
     for (const session of sessions) {
       if (si >= subjects.length) break
+      const subject = subjects[si]
       out.push({
-        subject: subjects[si],
+        subject,
         date,
         start: session.start.trim(),
         duration,
@@ -104,6 +118,7 @@ export function autoBuildExamSlots(cfg: ExamAutoConfig): ExamAutoSlot[] {
         classId: cfg.classId ?? null,
         className: cfg.className,
         session: session.label,
+        maxMarks: clampExamMaxMarks(cfg.maxMarksBySubject?.[subject], defaultMax),
       })
       si += 1
     }

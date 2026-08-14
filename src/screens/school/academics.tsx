@@ -16,19 +16,23 @@ import { useTeachers } from '@/api/hooks/useTeachers'
 import { useUpdateTeacher } from '@/api/hooks/useTeacherMutations'
 import { useSubjects, useCreateSubject, useUpdateSubject, useDeleteSubject, useEnsureDefaultSubjects, useSubjectNames } from '@/api/hooks/useSubjects'
 import { addSchoolHouse, listSchoolHouses, removeSchoolHouse, renameSchoolHouse } from '@/api/schoolHouses'
-import { getClassSubjects, setClassSubjects, saveClassSubjects, teachingPeriodCount, subjectsMatchPeriodsHint } from '@/api/classSubjects'
-import { useClassSubjectsMap } from '@/api/hooks/useClassSubjects'
+import { getClassSubjects, saveClassSubjects, teachingPeriodCount, subjectsMatchPeriodsHint } from '@/api/classSubjects'
+import { useClassSubjectsMap, useListClassSubjects } from '@/api/hooks/useClassSubjects'
 import { DEFAULT_GRADES, DEFAULT_SECTIONS } from '@/lib/defaultClasses'
-import { cellKey, clashingClass, clashingClasses, pickTeacher, conflictsFor, teacherLoads, clashingTeachers, teacherSchedule, subjectSchedule, planTimetableSync, type Cell, type Grid } from '@/lib/timetable'
+import { cellKey, clashingClass, clashingClasses, pickTeacher, conflictsFor, teacherLoads, clashingTeachers, teacherSchedule, subjectSchedule, planTimetableSync, bellTimesFromPeriodRows, gridsFromRemoteSlots, hasFilledGrid, generateAutoTimetableGrid, DEFAULT_CLASS_BELL_TIMES, type Cell, type Grid } from '@/lib/timetable'
 import { exportTimetablePdf, hasPrintableTimetable, type TimetablePrintView } from '@/lib/timetablePrint'
-import { listTimetable, createTimetableSlot, deleteTimetableSlot } from '@/api/timetable'
+import { listTimetable, replaceTimetableSlots } from '@/api/timetable'
+import { ensureSubjectsNamed, ensureDefaultSubjects } from '@/api/subjects'
+import { useQueryClient } from '@tanstack/react-query'
+import { queryKeys } from '@/api/queryKeys'
 import {
-  activeSnapshot, loadPublishEnvelope, publishSnapshot, publishStatusOf, saveDraftSnapshot,
-  statusLabel, statusTone, publishMetaLine, showPublishButton,
+  activeSnapshot, fetchPublishEnvelope, loadPublishEnvelope, publishSnapshot, publishStatusOf, saveDraftSnapshot,
+  statusLabel, statusTone, publishMetaLine, showPublishButton, type PublishEnvelope,
 } from '@/lib/academicsPublish'
 import { useAssignments, useCreateAssignment } from '@/api/hooks/useAssignments'
 import { homeworkStatusLabel } from '@/api/assignments'
 import { AcademicsActionsProvider, useAcademicsActions } from './academicsActions'
+import { subjStyle } from '@/lib/subjectStyle'
 
 /* ---------- shared helpers / constants ---------- */
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -54,12 +58,6 @@ function teacherOptsOf(pool: Teacher[]): { value: string; label: string }[] {
 function qualified(pool: Teacher[], subject: string): Teacher[] {
   const q = pool.filter((t) => t.subjects.includes(subject))
   return q.length ? q : pool
-}
-
-/* deterministic colour per subject */
-function subjStyle(s: string): { bg: string; fg: string; bd: string } {
-  const hue = ([...s].reduce((a, c) => a + c.charCodeAt(0), 0) * 7) % 360
-  return { bg: `hsl(${hue} 65% 94%)`, fg: `hsl(${hue} 55% 32%)`, bd: `hsl(${hue} 50% 80%)` }
 }
 
 /* ============================================================
@@ -169,9 +167,19 @@ function ClassesTab({ editable }: { editable: boolean }) {
       { id: editRow.id, patch: { name, grade, section, room, subjects: eSubjects } },
       {
         onSuccess: () => {
-          void saveClassSubjects(editRow.id!, name, eSubjects).catch(() => {
-            setClassSubjects(editRow.id, name, eSubjects)
-          })
+          void saveClassSubjects(editRow.id!, name, eSubjects).then(
+            () => {
+              const subLabel = eSubjects.length ? ` · ${eSubjects.length} subjects` : ''
+              toast.success('Class updated', `${name}${room !== '—' ? ` · Room ${room}` : ''}${subLabel}.`)
+              setEditRow(null)
+            },
+            (err) => {
+              toast.danger(
+                'Class saved, subjects not stored',
+                err instanceof Error ? err.message : 'Could not save subjects to the server.',
+              )
+            },
+          )
           /* If class was renamed, keep class-teacher link in sync on teachers. */
           if (name !== editRow.name && editRow.teacherId) {
             const t = liveTeachers.find((x) => x.id === editRow.teacherId)
@@ -179,9 +187,6 @@ function ClassesTab({ editable }: { editable: boolean }) {
               updateTeacher.mutate({ id: t.id, teacher: { ...t, classTeacher: name } })
             }
           }
-          const subLabel = eSubjects.length ? ` · ${eSubjects.length} subjects` : ''
-          toast.success('Class updated', `${name}${room !== '—' ? ` · Room ${room}` : ''}${subLabel}.`)
-          setEditRow(null)
         },
         onError: (err) => {
           toast.danger('Could not update class', err instanceof Error ? err.message : 'Please try again.')
@@ -263,16 +268,23 @@ function ClassesTab({ editable }: { editable: boolean }) {
       { name, grade, section, teacherId: '', students: 0, room: aRoom.trim() || '—', subjects: aSubjects },
       {
         onSuccess: (created) => {
-          void saveClassSubjects(created.id ?? '', name, aSubjects).catch(() => {
-            setClassSubjects(created.id, name, aSubjects)
-          })
-          const subLabel = aSubjects.length ? ` · ${aSubjects.length} subjects for timetable` : ''
-          toast.success('Class added', `${name} created${subLabel}.`)
-          setAddOpen(false)
-          setAGrade('')
-          setASec('')
-          setARoom('')
-          setASubjects([])
+          void saveClassSubjects(created.id ?? '', name, aSubjects).then(
+            () => {
+              const subLabel = aSubjects.length ? ` · ${aSubjects.length} subjects for timetable` : ''
+              toast.success('Class added', `${name} created${subLabel}.`)
+              setAddOpen(false)
+              setAGrade('')
+              setASec('')
+              setARoom('')
+              setASubjects([])
+            },
+            (err) => {
+              toast.danger(
+                'Class created, subjects not stored',
+                err instanceof Error ? err.message : 'Could not save subjects to the server.',
+              )
+            },
+          )
         },
         onError: (err) => { toast.danger('Could not add class', err instanceof Error ? err.message : 'Please try again.') },
       },
@@ -543,7 +555,13 @@ type GridsState = Record<string, Grid>
 interface ViewProps { grids: GridsState; setGrids: Dispatch<SetStateAction<GridsState>>; editable: boolean }
 interface PivotEdit { cls: string; d: number; p: number; subject: string; current: string }
 
-function PivotGrid({ renderCell }: { renderCell: (d: number, p: number) => ReactNode }) {
+function PivotGrid({
+  renderCell,
+  bellTimes,
+}: {
+  renderCell: (d: number, p: number) => ReactNode
+  bellTimes?: typeof DEFAULT_CLASS_BELL_TIMES
+}) {
   const rowsDesc: ({ type: 'period'; p: number } | { type: 'lunch' })[] = []
   for (let p = 0; p < PERIODS; p++) { rowsDesc.push({ type: 'period', p }); if (p === LUNCH_AFTER - 1) rowsDesc.push({ type: 'lunch' }) }
   return (
@@ -558,7 +576,14 @@ function PivotGrid({ renderCell }: { renderCell: (d: number, p: number) => React
           </Fragment>
         ) : (
           <Fragment key={`p-${rd.p}`}>
-            <div className="t-xs fw6 muted" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>P{rd.p + 1}</div>
+            <div className="t-xs fw6 muted" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', lineHeight: 1.15, gap: 1 }}>
+              <span>P{rd.p + 1}</span>
+              {bellTimes?.[rd.p + 1] ? (
+                <span className="t-xs muted3" style={{ fontWeight: 500, fontSize: 9 }}>
+                  {bellTimes[rd.p + 1].start}
+                </span>
+              ) : null}
+            </div>
             {DAYS.map((_d, di) => <Fragment key={di}>{renderCell(di, rd.p)}</Fragment>)}
           </Fragment>
         ))}
@@ -756,6 +781,7 @@ function ClassOverview({ grids, classList }: { grids: GridsState; classList: str
 function TimetableTab({ editable }: { editable: boolean }) {
   const toast = useToast()
   const app = useApp()
+  const qc = useQueryClient()
   const { register } = useAcademicsActions()
   const classList = useClassNames()
   const { data: classesData } = useClasses()
@@ -770,6 +796,23 @@ function TimetableTab({ editable }: { editable: boolean }) {
   const [grids, setGrids] = useState<Record<string, Grid>>(() => initialSnap.grids ?? {})
   const [mode, setMode] = useState<Record<string, 'choice' | 'build'>>(() => initialSnap.mode ?? {})
   const [classTeachers, setClassTeachers] = useState<Record<string, string>>({})
+  const [bellTimes, setBellTimes] = useState(DEFAULT_CLASS_BELL_TIMES)
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const periodsEnv = await fetchPublishEnvelope<PeriodRow[]>('periods')
+        if (cancelled) return
+        const periodRows = activeSnapshot(periodsEnv, true, DEFAULT_PERIODS)
+        const fromPeriods = bellTimesFromPeriodRows(periodRows)
+        if (Object.keys(fromPeriods).length) setBellTimes(fromPeriods)
+      } catch {
+        /* keep DEFAULT_CLASS_BELL_TIMES */
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
 
   const selectedClassRow = useMemo(
     () => (classesData ?? []).find((c) => (c.name || `${c.grade}-${c.section}`) === cls),
@@ -864,47 +907,154 @@ function TimetableTab({ editable }: { editable: boolean }) {
   }, [grids])
 
   const saveDraft = () => {
-    const next = saveDraftSnapshot('timetable', snap)
-    setPubMeta(next)
-    const n = conflicts.size
-    if (n > 0) toast.danger('Draft saved with clashes', `${cls} draft (${filled}/${TOTAL_SLOTS}) · ${n} clash${n > 1 ? 'es' : ''} — resolve before publishing.`)
-    else toast.success('Draft saved', `${cls} routine saved as draft (${filled}/${TOTAL_SLOTS} periods).`)
+    void (async () => {
+      try {
+        const next = await saveDraftSnapshot('timetable', snap)
+        setPubMeta(next)
+        const n = conflicts.size
+        if (n > 0) toast.danger('Draft saved with clashes', `${cls} draft (${filled}/${TOTAL_SLOTS}) · ${n} clash${n > 1 ? 'es' : ''} — resolve before publishing.`)
+        else toast.success('Draft saved', `${cls} routine saved as draft (${filled}/${TOTAL_SLOTS} periods).`)
+      } catch (err) {
+        toast.danger('Could not save draft', err instanceof Error ? err.message : 'Please try again.')
+      }
+    })()
   }
+  const [publishing, setPublishing] = useState(false)
   const publish = () => {
-    if (anyClash) {
-      toast.danger('Cannot publish', 'Resolve all teacher clashes before publishing the timetable.')
+    if (anyClash || publishing) {
+      if (anyClash) toast.danger('Cannot publish', 'Resolve all teacher clashes before publishing the timetable.')
       return
     }
-    const next = publishSnapshot('timetable', snap)
-    setPubMeta(next)
-    toast.success('Timetable published', 'Live routine is now available for attendance and teachers.')
-    void syncTimetableToBackend()
+    void (async () => {
+      setPublishing(true)
+      try {
+        const { slotCount, subjectsCreated } = await syncTimetableToBackend()
+        const next = await publishSnapshot('timetable', snap)
+        setPubMeta(next)
+        void qc.invalidateQueries({ queryKey: queryKeys.subjects.all })
+        toast.success(
+          'Timetable published',
+          `${slotCount} periods saved with bell times` +
+            (subjectsCreated > 0 ? ` · ${subjectsCreated} subjects added to catalog` : '') +
+            ' · all apps notified.',
+        )
+      } catch (err) {
+        toast.danger(
+          'Publish failed',
+          err instanceof Error ? err.message : 'Could not save timetable to the server. Draft is unchanged — retry when online.',
+        )
+      } finally {
+        setPublishing(false)
+      }
+    })()
   }
 
-  /* Best-effort backend reconciliation — localStorage publish above is the
-     source of truth for this UI, so a backend failure here must not block it. */
-  const syncTimetableToBackend = async () => {
-    try {
-      const classIdFor = (className: string) =>
-        (classesData ?? []).find((c) => (c.name || `${c.grade}-${c.section}`) === className)?.id ?? null
-      const remote = await listTimetable()
-      const plan = planTimetableSync(
-        grids,
-        DAYS,
-        classIdFor,
-        remote.map((r) => ({ id: r.id, day: r.day, period: r.period, classId: r.classId })),
-      )
-      for (const id of plan.toDeleteIds) await deleteTimetableSlot(id)
-      for (const t of plan.toCreate) {
-        await createTimetableSlot({
-          day: t.day, period: t.period, subject: t.subject, classId: t.classId, className: t.className,
-          teacherId: t.teacherId,
-        })
-      }
-    } catch {
-      toast.danger('Backend sync failed', 'Timetable is published locally but may not be visible to the teacher app yet.')
+  /** Persist subjects + published slots to SQL. Throws on failure — caller must not toast success. */
+  const syncTimetableToBackend = async (): Promise<{ slotCount: number; subjectsCreated: number }> => {
+    const classIdFor = (className: string) => {
+      const row = (classesData ?? []).find((c) => (c.name || `${c.grade}-${c.section}`) === className)
+      return row?.id ?? null
     }
+    const unresolved = Object.keys(grids).filter((name) => hasFilledGrid({ [name]: grids[name] ?? {} }) && !classIdFor(name))
+    if (unresolved.length) {
+      throw new Error(
+        `Class name(s) not found in Classes: ${unresolved.join(', ')}. Rename the grid to match People → Classes exactly.`,
+      )
+    }
+
+    const usedSubjects = new Set<string>()
+    for (const grid of Object.values(grids)) {
+      for (const cell of Object.values(grid)) {
+        if (cell?.subject?.trim()) usedSubjects.add(cell.subject.trim())
+      }
+    }
+    // Seed defaults once, then ensure every grid subject exists in /subjects.
+    await ensureDefaultSubjects()
+    const { created: subjectsCreated } = await ensureSubjectsNamed([...usedSubjects])
+
+    const remote = await listTimetable()
+    let bell = DEFAULT_CLASS_BELL_TIMES
+    try {
+      const periodsEnv = await fetchPublishEnvelope<PeriodRow[]>('periods')
+      const periodRows = activeSnapshot(periodsEnv, true, DEFAULT_PERIODS)
+      const fromPeriods = bellTimesFromPeriodRows(periodRows)
+      if (Object.keys(fromPeriods).length) bell = fromPeriods
+    } catch {
+      /* use DEFAULT_CLASS_BELL_TIMES */
+    }
+    const plan = planTimetableSync(
+      grids,
+      DAYS,
+      classIdFor,
+      remote.map((r) => ({ id: r.id, day: r.day, period: r.period, classId: r.classId })),
+      bell,
+    )
+    if (plan.ownedClassIds.length === 0) {
+      throw new Error('No classes to publish. Build at least one class timetable first.')
+    }
+    if (plan.toCreate.length === 0) {
+      throw new Error('Timetable grids are empty. Place periods before publishing.')
+    }
+    const missingBell = plan.toCreate.filter((t) => !t.startTime || !t.endTime)
+    if (missingBell.length) {
+      throw new Error(
+        `${missingBell.length} periods have no bell time. Publish Periods first, or use the default Class schedule (P1–P8).`,
+      )
+    }
+    await replaceTimetableSlots({
+      classIds: plan.ownedClassIds,
+      slots: plan.toCreate.map((t) => ({
+        day: t.day,
+        period: t.period,
+        subject: t.subject,
+        classId: t.classId,
+        className: t.className,
+        teacherId: t.teacherId,
+        startTime: t.startTime,
+        endTime: t.endTime,
+      })),
+    })
+    return { slotCount: plan.toCreate.length, subjectsCreated }
   }
+
+  /* Hydrate editor from session draft/published, else from live GET /timetable. */
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const env = await fetchPublishEnvelope<TimetableSnap>('timetable')
+        if (cancelled) return
+        setPubMeta(env)
+        const snap = activeSnapshot(env, editable, { grids: {}, mode: {} } as TimetableSnap)
+        if (hasFilledGrid(snap.grids ?? {})) {
+          setGrids(snap.grids ?? {})
+          setMode(snap.mode ?? {})
+          return
+        }
+        const remote = await listTimetable()
+        if (cancelled || !remote.length) return
+        const hydrated = gridsFromRemoteSlots(remote, DAYS, (name) => {
+          const t = teachers.find((x) => x.name === name)
+          return t?.id ?? null
+        })
+        if (!hasFilledGrid(hydrated)) return
+        const modeMap = Object.fromEntries(Object.keys(hydrated).map((c) => [c, 'build' as const]))
+        setGrids(hydrated)
+        setMode(modeMap)
+        setPubMeta({
+          draft: null,
+          published: { grids: hydrated, mode: modeMap },
+          draftSavedAt: null,
+          publishedAt: new Date().toISOString(),
+        })
+      } catch {
+        /* leave empty grids — admin can still build */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [editable, teachers])
 
   useEffect(() => {
     if (!editable) { register('timetable', null); return }
@@ -912,14 +1062,14 @@ function TimetableTab({ editable }: { editable: boolean }) {
       saveDraft,
       publish,
       status,
-      canPublish: !anyClash && subjectNames.length > 0,
+      canPublish: !anyClash && !publishing && subjectNames.length > 0,
       showPublish: showPublishButton(status, pubMeta, snap),
       draftSavedAt: pubMeta.draftSavedAt,
       publishedAt: pubMeta.publishedAt,
     })
     return () => register('timetable', null)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editable, status, snap, anyClash, pubMeta.draftSavedAt, pubMeta.publishedAt, subjectNames.length])
+  }, [editable, status, snap, anyClash, publishing, pubMeta.draftSavedAt, pubMeta.publishedAt, subjectNames.length])
 
   const setSubjTeam = (s: string, ids: string[]) => setSubjTeachers((p) => ({ ...p, [s]: ids }))
 
@@ -962,34 +1112,26 @@ function TimetableTab({ editable }: { editable: boolean }) {
   const clearGrid = () => { setGrids((p) => ({ ...p, [cls]: {} })); setPlaceCounts({}) }
   const restart = () => { setMode((p) => ({ ...p, [cls]: 'choice' })); setGrids((p) => ({ ...p, [cls]: {} })); setPlaceCounts({}) }
 
-  /* ---- auto generate: round-robin so subjects spread diagonally ---- */
+  /* ---- auto generate: diagonal walk so periods don't repeat the same day-row ---- */
   const cfgTotal = Object.values(ppw).reduce((a, b) => a + b, 0)
   const generate = () => {
-    const left: Record<string, number> = { ...ppw }
-    const tokens: string[] = []
-    let remaining = Math.min(cfgTotal, TOTAL_SLOTS)
-    while (tokens.length < remaining) {
-      for (const s of subjectNames) { if (left[s] > 0 && tokens.length < remaining) { tokens.push(s); left[s]-- } }
-    }
-    const next: Grid = {}
+    const next = generateAutoTimetableGrid(DAYS.length, PERIODS, subjectNames, ppw)
     const rot: Record<string, number> = {}
-    let ti = 0
-    for (let p = 0; p < PERIODS; p++) {
-      for (let d = 0; d < DAYS.length; d++) {
-        if (ti >= tokens.length) continue
-        const s = tokens[ti++]
-        const team = subjTeachers[s] ?? []
-        const tid = pickTeacher(grids, team, d, p, cls, rot[s] ?? 0)
-        rot[s] = (rot[s] ?? 0) + 1
-        next[cellKey(d, p)] = { subject: s, teacherId: tid }
-      }
+    for (const [key, cell] of Object.entries(next)) {
+      if (!cell) continue
+      const [d, p] = key.split('-').map(Number)
+      const team = subjTeachers[cell.subject] ?? []
+      const tid = pickTeacher(grids, team, d, p, cls, rot[cell.subject] ?? 0)
+      rot[cell.subject] = (rot[cell.subject] ?? 0) + 1
+      cell.teacherId = tid
     }
     setGrids((prev) => ({ ...prev, [cls]: next }))
     setMode((prev) => ({ ...prev, [cls]: 'build' }))
     setPlaceCounts({})
     setCfgOpen(false)
     const clashCount = conflictsFor({ ...grids, [cls]: next }, cls).size
-    toast.success('Timetable generated', `${Math.min(tokens.length, TOTAL_SLOTS)} periods placed for ${cls} · ${clashCount === 0 ? '0 clashes' : `${clashCount} clash${clashCount > 1 ? 'es' : ''} to review`}.`)
+    const filledCount = Object.values(next).filter(Boolean).length
+    toast.success('Timetable generated', `${filledCount} periods placed for ${cls} · ${clashCount === 0 ? '0 clashes' : `${clashCount} clash${clashCount > 1 ? 'es' : ''} to review`}.`)
   }
 
   /* grid rows incl. fixed lunch break */
@@ -1100,7 +1242,9 @@ function TimetableTab({ editable }: { editable: boolean }) {
               {editable && <Btn size="sm" variant="ghost" icon="refresh" onClick={restart}>Restart</Btn>}
               {editable && <Btn size="sm" variant="ghost" icon="check" onClick={saveDraft}>Save draft</Btn>}
               {editable && showPublishButton(status, pubMeta, snap) && (
-                <Btn size="sm" variant="primary" icon="check" onClick={publish} disabled={anyClash}>Save & publish</Btn>
+                <Btn size="sm" variant="primary" icon="check" onClick={publish} disabled={anyClash || publishing}>
+                  {publishing ? 'Publishing…' : 'Save & publish'}
+                </Btn>
               )}
             </div>
           )}
@@ -1171,7 +1315,14 @@ function TimetableTab({ editable }: { editable: boolean }) {
                 </Fragment>
               ) : (
                 <Fragment key={`p-${rd.p}`}>
-                  <div className="t-xs fw6 muted" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>P{rd.p + 1}</div>
+                  <div className="t-xs fw6 muted" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', lineHeight: 1.15, gap: 1 }}>
+                    <span>P{rd.p + 1}</span>
+                    {bellTimes[rd.p + 1] ? (
+                      <span className="t-xs muted3" style={{ fontWeight: 500, fontSize: 9 }}>
+                        {bellTimes[rd.p + 1].start}
+                      </span>
+                    ) : null}
+                  </div>
                   {DAYS.map((_d, di) => {
                     const ck = cellKey(di, rd.p)
                     const cell = g[ck]
@@ -1371,7 +1522,7 @@ function TimetableTab({ editable }: { editable: boolean }) {
    ============================================================ */
 interface PeriodRow { label: string; start: string; end: string; type: string }
 const PTYPES = ['Class', 'Library', 'Lab', 'Break', 'Assembly']
-const toMin = (s: string) => { const [h, m] = s.split(':').map(Number); return (h || 0) * 60 + (m || 0) }
+const toMin = (s: string) => { const [h, m] = String(s ?? '0:0').split(':').map(Number); return (h || 0) * 60 + (m || 0) }
 const durOf = (a: string, b: string) => { const d = toMin(b) - toMin(a); return d > 0 ? `${d} min` : '—' }
 
 function periodTypeTone(type: string): BadgeTone {
@@ -1402,20 +1553,51 @@ const DEFAULT_PERIODS: PeriodRow[] = [
 function PeriodsTab({ editable }: { editable: boolean }) {
   const toast = useToast()
   const { register } = useAcademicsActions()
-  const [pubMeta, setPubMeta] = useState(() => loadPublishEnvelope<PeriodRow[]>('periods'))
-  const [rows, setRows] = useState<PeriodRow[]>(() => activeSnapshot(pubMeta, editable, DEFAULT_PERIODS))
+  const [pubMeta, setPubMeta] = useState<PublishEnvelope<PeriodRow[]>>(() => ({
+    draft: null, published: null, draftSavedAt: null, publishedAt: null,
+  }))
+  const [rows, setRows] = useState<PeriodRow[]>(DEFAULT_PERIODS)
+
+  useEffect(() => {
+    let cancelled = false
+    void fetchPublishEnvelope<PeriodRow[]>('periods')
+      .then((env) => {
+        if (cancelled) return
+        setPubMeta(env)
+        setRows(activeSnapshot(env, editable, DEFAULT_PERIODS))
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          toast.danger('Could not load periods', err instanceof Error ? err.message : 'Please try again.')
+        }
+      })
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editable])
 
   const status = publishStatusOf(pubMeta, rows)
 
   const saveDraft = () => {
-    const next = saveDraftSnapshot('periods', rows)
-    setPubMeta(next)
-    toast.success('Draft saved', `${rows.length} periods saved as draft.`)
+    void (async () => {
+      try {
+        const next = await saveDraftSnapshot('periods', rows)
+        setPubMeta(next)
+        toast.success('Draft saved', `${rows.length} periods saved as draft.`)
+      } catch (err) {
+        toast.danger('Could not save draft', err instanceof Error ? err.message : 'Please try again.')
+      }
+    })()
   }
   const publish = () => {
-    const next = publishSnapshot('periods', rows)
-    setPubMeta(next)
-    toast.success('Schedule published', `${rows.length} periods are now live.`)
+    void (async () => {
+      try {
+        const next = await publishSnapshot('periods', rows)
+        setPubMeta(next)
+        toast.success('Schedule published', `${rows.length} periods are now live.`)
+      } catch (err) {
+        toast.danger('Could not publish', err instanceof Error ? err.message : 'Please try again.')
+      }
+    })()
   }
 
   useEffect(() => {
@@ -1808,15 +1990,42 @@ interface Test {
 }
 const testTone: Record<Test['status'], BadgeTone> = { Scheduled: 'brand', Completed: 'info', Graded: 'success' }
 
+function classLabelOf(c: { name?: string; grade?: string; section?: string }): string {
+  return (c.name || `${c.grade ?? ''}-${c.section ?? ''}`).trim()
+}
+
+function parseClassTests(raw: unknown): Test[] {
+  if (!Array.isArray(raw)) return []
+  return raw.map((item, i) => {
+    const r = (item && typeof item === 'object') ? item as Record<string, unknown> : {}
+    const status: Test['status'] = r.status === 'Completed' || r.status === 'Graded' ? r.status : 'Scheduled'
+    return {
+      id: Number(r.id) || i + 1,
+      cls: String(r.cls ?? r.className ?? r.class_name ?? '').trim(),
+      subject: String(r.subject ?? ''),
+      title: String(r.title ?? ''),
+      date: String(r.date ?? '').slice(0, 10),
+      maxMarks: Number(r.maxMarks ?? r.max_marks ?? 0) || 0,
+      teacher: String(r.teacher ?? ''),
+      source: r.source === 'admin' ? 'admin' : 'teacher_app',
+      status,
+    }
+  })
+}
+
 function TestsTab({ editable }: { editable: boolean }) {
   const toast = useToast()
   const app = useApp()
   const { register } = useAcademicsActions()
+  const classesQ = useClasses()
   const classList = useClassNames()
-  const subjectNames = useSubjectNames()
-  const [pubMeta, setPubMeta] = useState(() => loadPublishEnvelope<Test[]>('tests'))
-  const [rows, setRows] = useState<Test[]>(() => activeSnapshot(pubMeta, editable, []))
+  const classSubjectsMap = useClassSubjectsMap()
+  const [pubMeta, setPubMeta] = useState<PublishEnvelope<Test[]>>(() => ({
+    draft: null, published: null, draftSavedAt: null, publishedAt: null,
+  }))
+  const [rows, setRows] = useState<Test[]>([])
   const [open, setOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [editId, setEditId] = useState<number | null>(null)
   const [cls, setCls] = useState('')
   const [subject, setSubject] = useState('')
@@ -1824,17 +2033,90 @@ function TestsTab({ editable }: { editable: boolean }) {
   const [date, setDate] = useState('2026-06-20')
   const [maxMarks, setMaxMarks] = useState('20')
 
+  const selectedClass = useMemo(
+    () => (classesQ.data ?? []).find((c) => classLabelOf(c) === cls),
+    [classesQ.data, cls],
+  )
+  const fetchedSubjectsQ = useListClassSubjects(open ? (selectedClass?.id ?? null) : null)
+  const mappedSubjects = useMemo(() => {
+    if (fetchedSubjectsQ.isSuccess && fetchedSubjectsQ.data) return fetchedSubjectsQ.data
+    if (!cls) return []
+    const byId = selectedClass?.id ? classSubjectsMap[selectedClass.id] : undefined
+    const byName = classSubjectsMap[cls]
+    return (byId?.length ? byId : byName) ?? []
+  }, [fetchedSubjectsQ.isSuccess, fetchedSubjectsQ.data, selectedClass, classSubjectsMap, cls])
+  const subjectOpts = mappedSubjects
+  const subjectOptions = !cls
+    ? [{ value: '', label: 'Select a class first' }]
+    : fetchedSubjectsQ.isLoading && mappedSubjects.length === 0
+      ? [{ value: '', label: 'Loading subjects…' }]
+      : mappedSubjects.length
+        ? mappedSubjects
+        : [{ value: '', label: 'No subjects mapped — map them in Classes' }]
+  const classOptions = classList.length
+    ? classList
+    : [{ value: '', label: classesQ.isLoading ? 'Loading classes…' : 'No classes yet — add in Classes' }]
+
+  useEffect(() => {
+    let cancelled = false
+    void fetchPublishEnvelope<Test[]>('tests')
+      .then((env) => {
+        if (cancelled) return
+        const parsed: PublishEnvelope<Test[]> = {
+          ...env,
+          draft: env.draft != null ? parseClassTests(env.draft) : null,
+          published: env.published != null ? parseClassTests(env.published) : null,
+        }
+        setPubMeta(parsed)
+        setRows(activeSnapshot(parsed, editable, []))
+      })
+      .catch((err) => {
+        if (!cancelled) toast.danger('Could not load tests', err instanceof Error ? err.message : 'Please try again.')
+      })
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editable])
+
   const status = publishStatusOf(pubMeta, rows)
 
+  const persistTests = async (nextRows: Test[]): Promise<PublishEnvelope<Test[]>> => {
+    const env = await saveDraftSnapshot('tests', nextRows)
+    const parsed: PublishEnvelope<Test[]> = {
+      ...env,
+      draft: env.draft != null ? parseClassTests(env.draft) : nextRows,
+      published: env.published != null ? parseClassTests(env.published) : env.published,
+    }
+    setPubMeta(parsed)
+    setRows(activeSnapshot(parsed, editable, nextRows))
+    return parsed
+  }
+
   const saveDraft = () => {
-    const next = saveDraftSnapshot('tests', rows)
-    setPubMeta(next)
-    toast.success('Draft saved', `${rows.length} test${rows.length === 1 ? '' : 's'} saved as draft.`)
+    void (async () => {
+      try {
+        await persistTests(rows)
+        toast.success('Draft saved', `${rows.length} test${rows.length === 1 ? '' : 's'} saved as draft.`)
+      } catch (err) {
+        toast.danger('Could not save draft', err instanceof Error ? err.message : 'Please try again.')
+      }
+    })()
   }
   const publish = () => {
-    const next = publishSnapshot('tests', rows)
-    setPubMeta(next)
-    toast.success('Tests published', `${rows.length} test${rows.length === 1 ? '' : 's'} are now live.`)
+    void (async () => {
+      try {
+        const next = await publishSnapshot('tests', rows)
+        const parsed: PublishEnvelope<Test[]> = {
+          ...next,
+          draft: next.draft != null ? parseClassTests(next.draft) : null,
+          published: next.published != null ? parseClassTests(next.published) : null,
+        }
+        setPubMeta(parsed)
+        setRows(activeSnapshot(parsed, editable, rows))
+        toast.success('Tests published', `${rows.length} test${rows.length === 1 ? '' : 's'} are now live.`)
+      } catch (err) {
+        toast.danger('Could not publish', err instanceof Error ? err.message : 'Please try again.')
+      }
+    })()
   }
 
   useEffect(() => {
@@ -1858,9 +2140,9 @@ function TestsTab({ editable }: { editable: boolean }) {
   }, [classList, cls])
 
   useEffect(() => {
-    if (!subject && subjectNames.length) setSubject(subjectNames[0])
-    else if (subject && subjectNames.length && !subjectNames.includes(subject)) setSubject(subjectNames[0])
-  }, [subjectNames, subject])
+    if (!subject && subjectOpts.length) setSubject(subjectOpts[0])
+    else if (subject && subjectOpts.length && !subjectOpts.includes(subject)) setSubject(subjectOpts[0])
+  }, [subjectOpts, subject])
 
   const resetForm = () => {
     setTitle('')
@@ -1875,7 +2157,7 @@ function TestsTab({ editable }: { editable: boolean }) {
     setMaxMarks('20')
     setDate('2026-06-20')
     if (classList[0]) setCls(classList[0])
-    if (subjectNames[0]) setSubject(subjectNames[0])
+    if (subjectOpts[0]) setSubject(subjectOpts[0])
     setOpen(true)
   }
 
@@ -1892,26 +2174,37 @@ function TestsTab({ editable }: { editable: boolean }) {
   const saveForm = () => {
     if (!classList.length) { toast.danger('No classes', 'Add a class in Academics → Classes first.'); return }
     if (!cls) { toast.danger('Class required', 'Select a class.'); return }
+    if (!mappedSubjects.length || !mappedSubjects.includes(subject)) {
+      toast.danger('Subject required', 'Map subjects on this class in Academics → Classes first.')
+      return
+    }
     if (!title.trim()) { toast.danger('Title required', 'Enter a test title.'); return }
     const marks = Math.max(0, Number(maxMarks) || 0)
-    if (editId != null) {
-      setRows((r) => r.map((t) => t.id === editId
+    const next = editId != null
+      ? rows.map((t) => t.id === editId
         ? { ...t, cls, subject, title: title.trim(), date, maxMarks: marks }
-        : t))
-      toast.success('Test updated', `${subject} → ${cls}.`)
-    } else {
-      setRows((r) => [{
-        id: Date.now(), cls, subject, title: title.trim(), date, maxMarks: marks,
-        teacher: app.user?.name ?? 'Admin', source: 'admin', status: 'Scheduled',
-      }, ...r])
-      toast.success('Test added', `${subject} → ${cls}.`)
-    }
-    resetForm()
+        : t)
+      : [{
+          id: Date.now(), cls, subject, title: title.trim(), date, maxMarks: marks,
+          teacher: app.user?.name ?? 'Admin', source: 'admin' as const, status: 'Scheduled' as const,
+        }, ...rows]
+    setSaving(true)
+    void persistTests(next)
+      .then(() => {
+        toast.success(editId != null ? 'Test updated' : 'Test added', `${subject} → ${cls}.`)
+        resetForm()
+      })
+      .catch((err) => {
+        toast.danger(editId != null ? 'Could not update test' : 'Could not add test', err instanceof Error ? err.message : 'Please try again.')
+      })
+      .finally(() => setSaving(false))
   }
 
   const remove = (id: number) => {
-    setRows((r) => r.filter((t) => t.id !== id))
-    toast.success('Test removed', 'Removed from draft.')
+    const next = rows.filter((t) => t.id !== id)
+    void persistTests(next)
+      .then(() => toast.success('Test removed', 'Removed from the server draft.'))
+      .catch((err) => toast.danger('Could not remove test', err instanceof Error ? err.message : 'Please try again.'))
   }
 
   const cols: Column<Test>[] = [
@@ -1956,12 +2249,12 @@ function TestsTab({ editable }: { editable: boolean }) {
         )}
       </div>
       <DataTable<Test> columns={cols} rows={rows} rowKey={(r) => r.id} pageSize={10} initialSort={{ key: 'date', dir: 'asc' }}
-        empty={<Empty icon="clipboard" title="No tests yet" body="Add a test, then Save draft or Save & publish." />} />
+        empty={<Empty icon="clipboard" title="No tests yet" body="Add a test — it is saved to the server. Use Save & publish when it should go live." />} />
       <Modal open={open} onClose={resetForm} icon="clipboard" title={editId != null ? 'Edit class test' : 'Add class test'}
-        footer={<div className="row gap8 jc-end"><Btn variant="ghost" onClick={resetForm}>Cancel</Btn><Btn variant="primary" icon="check" onClick={saveForm}>{editId != null ? 'Save' : 'Add'}</Btn></div>}>
+        footer={<div className="row gap8 jc-end"><Btn variant="ghost" onClick={resetForm} disabled={saving}>Cancel</Btn><Btn variant="primary" icon="check" onClick={saveForm} disabled={saving || !classList.length || !mappedSubjects.length}>{saving ? 'Saving…' : editId != null ? 'Save' : 'Add'}</Btn></div>}>
         <div className="sm-grid-2 gap12">
-          <Field label="Class"><Select options={classList} value={cls} onChange={(e) => setCls(e.target.value)} /></Field>
-          <Field label="Subject"><Select options={subjectNames} value={subject} onChange={(e) => setSubject(e.target.value)} /></Field>
+          <Field label="Class"><Select options={classOptions} value={cls} onChange={(e) => setCls(e.target.value)} /></Field>
+          <Field label="Subject"><Select options={subjectOptions} value={subject} onChange={(e) => setSubject(e.target.value)} /></Field>
         </div>
         <Field label="Title" required><Input icon="clipboard" value={title} placeholder="e.g. Unit Test 2" onChange={(e) => setTitle(e.target.value)} /></Field>
         <div className="sm-grid-2 gap12">
@@ -1978,33 +2271,52 @@ function TestsTab({ editable }: { editable: boolean }) {
    ============================================================ */
 function HousesTab({ editable }: { editable: boolean }) {
   const toast = useToast()
-  const [rows, setRows] = useState(() => listSchoolHouses())
+  const [rows, setRows] = useState<string[]>([])
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [editFrom, setEditFrom] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
 
-  const add = () => {
+  useEffect(() => {
+    let cancelled = false
+    void listSchoolHouses()
+      .then((list) => { if (!cancelled) setRows(list) })
+      .catch((err) => {
+        if (!cancelled) toast.danger('Could not load houses', err instanceof Error ? err.message : 'Please try again.')
+      })
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const add = async () => {
     const n = name.trim()
     if (!n) { toast.danger('Name required', 'Enter a house name.'); return }
     if (rows.some((h) => h.toLowerCase() === n.toLowerCase())) {
       toast.danger('Already exists', `${n} is already in the list.`)
       return
     }
-    const next = addSchoolHouse(n)
-    setRows(next)
-    setName('')
-    setOpen(false)
-    toast.success('House added', `${n} will show in Add student.`)
+    try {
+      const next = await addSchoolHouse(n)
+      setRows(next)
+      setName('')
+      setOpen(false)
+      toast.success('House added', `${n} will show in Add student.`)
+    } catch (err) {
+      toast.danger('Could not save house', err instanceof Error ? err.message : 'Please try again.')
+    }
   }
 
-  const remove = (h: string) => {
-    const next = removeSchoolHouse(h)
-    setRows(next)
-    toast.success('House removed', h)
+  const remove = async (h: string) => {
+    try {
+      const next = await removeSchoolHouse(h)
+      setRows(next)
+      toast.success('House removed', h)
+    } catch (err) {
+      toast.danger('Could not remove house', err instanceof Error ? err.message : 'Please try again.')
+    }
   }
 
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (!editFrom) return
     const n = editName.trim()
     if (!n) { toast.danger('Name required', 'Enter a house name.'); return }
@@ -2012,9 +2324,13 @@ function HousesTab({ editable }: { editable: boolean }) {
       toast.danger('Already exists', `${n} is already in the list.`)
       return
     }
-    setRows(renameSchoolHouse(editFrom, n))
-    toast.success('House updated', n)
-    setEditFrom(null)
+    try {
+      setRows(await renameSchoolHouse(editFrom, n))
+      toast.success('House updated', n)
+      setEditFrom(null)
+    } catch (err) {
+      toast.danger('Could not update house', err instanceof Error ? err.message : 'Please try again.')
+    }
   }
 
   return (

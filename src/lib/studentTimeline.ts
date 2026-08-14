@@ -49,6 +49,22 @@ export interface BuildTimelineOpts {
   limit?: number
   /** Cap on attendance exception events so a long history can't flood the feed. */
   attendanceLimit?: number
+  /** When true, only fee payments + invoices (no attendance / enrolment). */
+  feeOnly?: boolean
+}
+
+function paymentBelongsToStudent(
+  p: FeePayment,
+  student: Student,
+  invoiceIds: Set<string>,
+): boolean {
+  if (p.studentId && p.studentId === student.id) return true
+  if (p.invoiceId && invoiceIds.has(p.invoiceId)) return true
+  // Legacy rows sometimes lack studentId — match name + class carefully.
+  if (!p.studentId && p.studentName && p.cls) {
+    return p.studentName === student.name && p.cls === student.cls
+  }
+  return false
 }
 
 /**
@@ -56,19 +72,24 @@ export interface BuildTimelineOpts {
  * to this student, merged, sorted newest-first, and capped for scalability.
  */
 export function buildStudentTimeline(opts: BuildTimelineOpts): TimelineEvent[] {
-  const { student, payments = [], invoices = [], attendance = [] } = opts
-  const limit = opts.limit ?? 20
+  const { student, payments = [], invoices = [], attendance = [], feeOnly = false } = opts
+  const limit = opts.limit ?? (feeOnly ? 50 : 20)
   const attendanceLimit = opts.attendanceLimit ?? 6
   const events: TimelineEvent[] = []
+  const invoiceIds = new Set(
+    invoices
+      .filter((inv) => inv.studentId === student.id || (student.adm && inv.studentAdm === student.adm))
+      .map((inv) => inv.id),
+  )
 
   // Fee payments received
   for (const p of payments) {
-    if (p.studentId && p.studentId !== student.id) continue
+    if (!paymentBelongsToStudent(p, student, invoiceIds)) continue
     events.push({
       id: `pay-${p.id}`,
       tone: 'var(--success)',
       title: 'Fee payment received',
-      body: `${fmtMoney(p.amount)} — ${paymentLabel(p)}`,
+      body: `${fmtMoney(p.amount)} — ${paymentLabel(p)}${p.mode ? ` · ${p.mode}` : ''}`,
       date: formatDate(p.date),
       ts: parseDateTs(p.date),
     })
@@ -88,32 +109,34 @@ export function buildStudentTimeline(opts: BuildTimelineOpts): TimelineEvent[] {
     })
   }
 
-  // Attendance exceptions (late / absent) — most recent few only
-  const exceptions = attendance
-    .filter((r) => r.studentId === student.id && (r.status === 'late' || r.status === 'absent'))
-    .sort((a, b) => parseDateTs(b.date) - parseDateTs(a.date))
-    .slice(0, attendanceLimit)
-  for (const r of exceptions) {
-    events.push({
-      id: `att-${r.id || `${r.date}-${r.status}`}`,
-      tone: r.status === 'absent' ? 'var(--danger)' : 'var(--warning)',
-      title: r.status === 'absent' ? 'Marked absent' : 'Marked late',
-      body: 'Class attendance',
-      date: formatDate(r.date),
-      ts: parseDateTs(r.date),
-    })
-  }
+  if (!feeOnly) {
+    // Attendance exceptions (late / absent) — most recent few only
+    const exceptions = attendance
+      .filter((r) => r.studentId === student.id && (r.status === 'late' || r.status === 'absent'))
+      .sort((a, b) => parseDateTs(b.date) - parseDateTs(a.date))
+      .slice(0, attendanceLimit)
+    for (const r of exceptions) {
+      events.push({
+        id: `att-${r.id || `${r.date}-${r.status}`}`,
+        tone: r.status === 'absent' ? 'var(--danger)' : 'var(--warning)',
+        title: r.status === 'absent' ? 'Marked absent' : 'Marked late',
+        body: 'Class attendance',
+        date: formatDate(r.date),
+        ts: parseDateTs(r.date),
+      })
+    }
 
-  // Enrolment (from admission date)
-  if (student.admissionDate) {
-    events.push({
-      id: 'enrolled',
-      tone: 'var(--brand-600)',
-      title: 'Enrolled',
-      body: `Admission ${student.adm}`,
-      date: formatDate(student.admissionDate),
-      ts: parseDateTs(student.admissionDate),
-    })
+    // Enrolment (from admission date)
+    if (student.admissionDate) {
+      events.push({
+        id: 'enrolled',
+        tone: 'var(--brand-600)',
+        title: 'Enrolled',
+        body: `Admission ${student.adm}`,
+        date: formatDate(student.admissionDate),
+        ts: parseDateTs(student.admissionDate),
+      })
+    }
   }
 
   return events

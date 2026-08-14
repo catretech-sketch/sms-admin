@@ -1,5 +1,6 @@
-/* School-scoped draft / published snapshots for Academics tabs
-   (Periods, Timetable, Tests) until dedicated APIs exist. */
+/* Academics draft/publish snapshots — periods & tests via API; timetable draft/publish session memory only. */
+import { request } from '@/api/client'
+import { snakeToCamel, camelToSnake } from '@/api/mapper'
 import { tokenStore } from '@/api/auth/tokenStore'
 
 export type AcademicsPublishTab = 'periods' | 'timetable' | 'tests'
@@ -25,38 +26,115 @@ function emptyEnvelope<T>(): PublishEnvelope<T> {
   return { draft: null, published: null, draftSavedAt: null, publishedAt: null }
 }
 
-export function loadPublishEnvelope<T>(tab: AcademicsPublishTab): PublishEnvelope<T> {
-  try {
-    const raw = localStorage.getItem(storageKey(tab))
-    if (!raw) return emptyEnvelope()
-    const parsed = JSON.parse(raw) as Partial<PublishEnvelope<T>>
-    return {
-      draft: parsed.draft ?? null,
-      published: parsed.published ?? null,
-      draftSavedAt: parsed.draftSavedAt ?? null,
-      publishedAt: parsed.publishedAt ?? null,
-    }
-  } catch {
-    return emptyEnvelope()
+/** In-memory publish envelopes for the current session (not localStorage SoT). */
+const publishMemory = new Map<string, PublishEnvelope<unknown>>()
+
+function memKey(tab: AcademicsPublishTab): string {
+  return `${tab}:${tenantKey()}`
+}
+
+function readMemory<T>(tab: AcademicsPublishTab): PublishEnvelope<T> {
+  const prev = publishMemory.get(memKey(tab))
+  if (!prev) return emptyEnvelope()
+  return {
+    draft: (prev.draft as T | null) ?? null,
+    published: (prev.published as T | null) ?? null,
+    draftSavedAt: prev.draftSavedAt ?? null,
+    publishedAt: prev.publishedAt ?? null,
   }
 }
 
-function writeEnvelope<T>(tab: AcademicsPublishTab, env: PublishEnvelope<T>): void {
-  localStorage.setItem(storageKey(tab), JSON.stringify(env))
+function writeMemory<T>(tab: AcademicsPublishTab, env: PublishEnvelope<T>): void {
+  publishMemory.set(memKey(tab), env as PublishEnvelope<unknown>)
 }
 
-export function saveDraftSnapshot<T>(tab: AcademicsPublishTab, draft: T): PublishEnvelope<T> {
-  const prev = loadPublishEnvelope<T>(tab)
+function apiPath(tab: 'periods' | 'tests'): string {
+  return tab === 'periods' ? '/academic-periods' : '/class-tests'
+}
+
+function parseJsonField<T>(raw: unknown): T | null {
+  if (raw == null) return null
+  if (typeof raw === 'string') {
+    try {
+      return JSON.parse(raw) as T
+    } catch {
+      return null
+    }
+  }
+  return raw as T
+}
+
+function fromWire<T>(wire: Record<string, unknown>): PublishEnvelope<T> {
+  const c = snakeToCamel<Record<string, unknown>>(wire)
+  return {
+    draft: parseJsonField<T>(c.draftJson ?? c.draft),
+    published: parseJsonField<T>(c.publishedJson ?? c.published),
+    draftSavedAt: c.draftSavedAt != null ? String(c.draftSavedAt) : null,
+    publishedAt: c.publishedAt != null ? String(c.publishedAt) : null,
+  }
+}
+
+function clearLegacy(tab: AcademicsPublishTab): void {
+  try { localStorage.removeItem(storageKey(tab)) } catch { /* ignore */ }
+}
+
+/** Sync load — session memory only (never localStorage business SoT). */
+export function loadPublishEnvelope<T>(tab: AcademicsPublishTab): PublishEnvelope<T> {
+  return readMemory<T>(tab)
+}
+
+async function upsertRemote<T>(
+  tab: 'periods' | 'tests',
+  env: PublishEnvelope<T>,
+): Promise<PublishEnvelope<T>> {
+  const wire = await request<Record<string, unknown>>(apiPath(tab), {
+    method: 'PUT',
+    body: camelToSnake({
+      draftJson: env.draft == null ? null : JSON.stringify(env.draft),
+      publishedJson: env.published == null ? null : JSON.stringify(env.published),
+      draftSavedAt: env.draftSavedAt,
+      publishedAt: env.publishedAt,
+    }),
+  })
+  clearLegacy(tab)
+  const next = fromWire<T>(wire)
+  writeMemory(tab, next)
+  return next
+}
+
+export async function fetchPublishEnvelope<T>(tab: AcademicsPublishTab): Promise<PublishEnvelope<T>> {
+  clearLegacy(tab)
+  if (tab === 'timetable') {
+    return readMemory<T>('timetable')
+  }
+  const wire = await request<Record<string, unknown>>(apiPath(tab))
+  const remote = fromWire<T>(wire)
+  writeMemory(tab, remote)
+  return remote
+}
+
+export async function saveDraftSnapshot<T>(tab: AcademicsPublishTab, draft: T): Promise<PublishEnvelope<T>> {
+  if (tab === 'timetable') {
+    const prev = readMemory<T>('timetable')
+    const next: PublishEnvelope<T> = {
+      ...prev,
+      draft,
+      draftSavedAt: new Date().toISOString(),
+    }
+    writeMemory('timetable', next)
+    clearLegacy('timetable')
+    return next
+  }
+  const prev = await fetchPublishEnvelope<T>(tab)
   const next: PublishEnvelope<T> = {
     ...prev,
     draft,
     draftSavedAt: new Date().toISOString(),
   }
-  writeEnvelope(tab, next)
-  return next
+  return upsertRemote(tab, next)
 }
 
-export function publishSnapshot<T>(tab: AcademicsPublishTab, draft: T): PublishEnvelope<T> {
+export async function publishSnapshot<T>(tab: AcademicsPublishTab, draft: T): Promise<PublishEnvelope<T>> {
   const now = new Date().toISOString()
   const next: PublishEnvelope<T> = {
     draft,
@@ -64,8 +142,12 @@ export function publishSnapshot<T>(tab: AcademicsPublishTab, draft: T): PublishE
     draftSavedAt: now,
     publishedAt: now,
   }
-  writeEnvelope(tab, next)
-  return next
+  if (tab === 'timetable') {
+    writeMemory('timetable', next)
+    clearLegacy('timetable')
+    return next
+  }
+  return upsertRemote(tab, next)
 }
 
 export function publishStatusOf<T>(env: PublishEnvelope<T>, current: T): PublishStatus {
@@ -118,7 +200,6 @@ export function formatPublishTime(iso: string | null): string | null {
   }
 }
 
-/** Human-readable draft / published timestamps for tab headers. */
 export function publishMetaLine(draftSavedAt: string | null, publishedAt: string | null): string | null {
   const draft = formatPublishTime(draftSavedAt)
   const pub = formatPublishTime(publishedAt)
@@ -128,9 +209,13 @@ export function publishMetaLine(draftSavedAt: string | null, publishedAt: string
   return null
 }
 
-/** Show Publish only when work is saved as draft and differs from the live published copy. */
 export function showPublishButton<T>(status: PublishStatus, env: PublishEnvelope<T>, current: T): boolean {
   if (status === 'published' || status === 'empty') return false
   if (env.draft == null) return false
   return JSON.stringify(env.draft) === JSON.stringify(current)
+}
+
+/** Test helper: clear in-memory publish envelopes. */
+export function __resetTimetablePublishMemoryForTests(): void {
+  publishMemory.clear()
 }

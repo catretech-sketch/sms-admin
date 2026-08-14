@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   cellKey, clashingClass, clashingClasses, teacherBusyElsewhere, pickTeacher, conflictsFor,
   teacherLoads, clashingTeachers, teacherSchedule, subjectSchedule, planTimetableSync,
+  gridsFromRemoteSlots, generateAutoTimetableGrid,
   type Grids, type RemoteTimetableSlot,
 } from './timetable'
 
@@ -91,10 +92,35 @@ describe('planTimetableSync', () => {
     expect(plan.toCreate).toHaveLength(2)
     expect(plan.toCreate).toContainEqual({
       day: 'Mon', period: 1, subject: 'Math', classId: 'class-a', className: 'IX-A', teacherId: 't1',
+      startTime: null, endTime: null,
     })
     expect(plan.toCreate).toContainEqual({
       day: 'Tue', period: 3, subject: 'Sci', classId: 'class-a', className: 'IX-A', teacherId: 't2',
+      startTime: null, endTime: null,
     })
+  })
+
+  it('attaches bell start/end from the period map', () => {
+    const localGrids: Grids = {
+      'IX-A': { [cellKey(0, 0)]: { subject: 'Math', teacherId: 't1' } },
+    }
+    const plan = planTimetableSync(localGrids, days, classIdFor, [], {
+      1: { start: '08:15', end: '09:00' },
+    })
+    expect(plan.toCreate[0]).toMatchObject({ startTime: '08:15', endTime: '09:00' })
+  })
+
+  it('hydrates grids from remote slots', () => {
+    const g = gridsFromRemoteSlots(
+      [
+        { day: 'Mon', period: 1, subject: 'Math', className: 'IX-A', teacherId: 't1' },
+        { day: 'Tue', period: 2, subject: 'Sci', className: 'IX-A', teacherName: 'Ada' },
+      ],
+      days,
+      (name) => (name === 'Ada' ? 't-ada' : null),
+    )
+    expect(g['IX-A'][cellKey(0, 0)]).toEqual({ subject: 'Math', teacherId: 't1' })
+    expect(g['IX-A'][cellKey(1, 1)]).toEqual({ subject: 'Sci', teacherId: 't-ada' })
   })
 
   it('carries a null teacherId when a cell has no teacher assigned', () => {
@@ -105,13 +131,14 @@ describe('planTimetableSync', () => {
     expect(plan.toCreate[0].teacherId).toBeNull()
   })
 
-  it('skips null cells and classes with no resolvable id', () => {
+  it('does not own empty / all-null grids (avoids wiping published timetable on publish)', () => {
     const localGrids: Grids = {
       'IX-A': { [cellKey(0, 0)]: null },
       Unmapped: { [cellKey(0, 0)]: { subject: 'Math', teacherId: 't1' } },
     }
     const plan = planTimetableSync(localGrids, days, classIdFor, [])
     expect(plan.toCreate).toEqual([])
+    expect(plan.ownedClassIds).toEqual([])
   })
 
   it('marks every remote slot belonging to an owned class as stale (delete+recreate)', () => {
@@ -133,5 +160,36 @@ describe('planTimetableSync', () => {
     }
     const plan = planTimetableSync(localGrids, days, classIdFor, [])
     expect(plan.toCreate).toEqual([])
+  })
+})
+
+describe('generateAutoTimetableGrid', () => {
+  const subjects = ['Computer', 'Hindi', 'Mathematics', 'Music', 'Physical Education', 'Science']
+  const days = 6
+  const periods = 8
+  const ppw = Object.fromEntries(subjects.map((s) => [s, 8])) // 48 slots
+
+  it('does not repeat the same Mon–Sat subject row every period', () => {
+    const grid = generateAutoTimetableGrid(days, periods, subjects, ppw)
+    const row = (p: number) => Array.from({ length: days }, (_, d) => grid[cellKey(d, p)]?.subject)
+    expect(row(0)).not.toEqual(row(1))
+    expect(row(0)).not.toEqual(row(2))
+    // Same weekday must change subject across consecutive periods
+    expect(grid[cellKey(0, 0)]?.subject).not.toBe(grid[cellKey(0, 1)]?.subject)
+  })
+
+  it('respects periods-per-week quotas', () => {
+    const grid = generateAutoTimetableGrid(days, periods, subjects, ppw)
+    const counts: Record<string, number> = {}
+    for (const cell of Object.values(grid)) {
+      if (!cell) continue
+      counts[cell.subject] = (counts[cell.subject] ?? 0) + 1
+    }
+    for (const s of subjects) expect(counts[s]).toBe(8)
+  })
+
+  it('leaves teacherId empty for the placer to fill', () => {
+    const grid = generateAutoTimetableGrid(2, 2, ['Math', 'Sci'], { Math: 2, Sci: 2 })
+    expect(Object.values(grid).every((c) => c && c.teacherId === '')).toBe(true)
   })
 })

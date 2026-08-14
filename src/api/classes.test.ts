@@ -16,6 +16,11 @@ describe('listClasses', () => {
     expect(rows[0]).toEqual({ id: 'c1', name: 'X-A', grade: 'X', section: 'A', teacherId: 'T1', students: 40, room: 'R1' })
   })
 
+  it('returns an empty list when data is missing so class pickers stay usable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: null })))
+    expect(await listClasses()).toEqual([])
+  })
+
   it('maps subjects when the API returns them', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
       data: [{

@@ -3,20 +3,27 @@ import {
   getClassSubjects, setClassSubjects, subjectsForClass, loadClassSubjectsMap,
   subjectsMatchPeriodsHint, hydrateClassSubjectsFromClasses, unionMappedSubjects,
   parseSubjectsFromClassWire, listClassSubjects, saveClassSubjects,
+  __resetClassSubjectsMemoryForTests,
 } from './classSubjects'
+import { ApiError } from './ApiError'
 import type { SchoolClass } from './classes'
 
-beforeEach(() => { localStorage.clear(); vi.restoreAllMocks() })
+beforeEach(() => {
+  localStorage.clear()
+  __resetClassSubjectsMemoryForTests()
+  vi.restoreAllMocks()
+})
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
 describe('classSubjects', () => {
-  it('stores and returns subjects by class id', () => {
+  it('stores and returns subjects by class id in memory', () => {
     setClassSubjects('c1', 'IV-B', ['Math', 'English'])
     expect(getClassSubjects('c1', 'IV-B')).toEqual(['Math', 'English'])
     expect(loadClassSubjectsMap().c1).toEqual(['Math', 'English'])
+    expect(localStorage.getItem('sms_class_subjects:default')).toBeNull()
   })
 
   it('falls back to catalog when class has no subjects', () => {
@@ -62,23 +69,40 @@ describe('classSubjects', () => {
     expect(subjectsMatchPeriodsHint(5, 8)).toMatch(/add 3 more/)
   })
 
-  it('GETs /classes/{id}/subjects and caches locally via save', async () => {
+  it('GETs /classes/{id}/subjects and caches in memory', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
       data: [{ name: 'Math' }, { name: 'Science' }],
     })))
     const names = await listClassSubjects('c1')
     expect(names).toEqual(['Math', 'Science'])
+    expect(getClassSubjects('c1', '')).toEqual(['Math', 'Science'])
   })
 
-  it('falls back to local map when /classes/{id}/subjects is 404', async () => {
+  it('trusts an empty API list instead of the memory map', async () => {
+    setClassSubjects('c1', 'VI-A', ['Hindi'])
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: [] })))
+    expect(await listClassSubjects('c1')).toEqual([])
+  })
+
+  it('fails closed when /classes/{id}/subjects is 404', async () => {
     setClassSubjects('c1', 'VI-A', ['Hindi'])
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error: { code: 'not_found', message: 'x' } }, 404)))
-    expect(await listClassSubjects('c1')).toEqual(['Hindi'])
+    await expect(listClassSubjects('c1')).rejects.toBeInstanceOf(ApiError)
   })
 
-  it('PUTs subjects and keeps local map even if API 404s', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error: { code: 'not_found', message: 'x' } }, 404)))
+  it('PUTs subjects and caches the saved list in memory', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: ['Math', 'English'] })))
     await saveClassSubjects('c1', 'VI-A', ['Math', 'English'])
     expect(getClassSubjects('c1', 'VI-A')).toEqual(['Math', 'English'])
+  })
+
+  it('requires class id for save', async () => {
+    await expect(saveClassSubjects('', 'VI-A', ['Math'])).rejects.toThrow('Class id is required')
+  })
+
+  it('does not keep a memory map when PUT fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error: { code: 'not_found', message: 'x' } }, 404)))
+    await expect(saveClassSubjects('c1', 'VI-A', ['Math', 'English'])).rejects.toThrow()
+    expect(getClassSubjects('c1', 'VI-A')).toEqual([])
   })
 })

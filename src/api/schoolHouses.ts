@@ -1,4 +1,5 @@
-/* School houses catalog (tenant-local) until a Houses API exists. */
+/* School houses catalog — GET/PUT /v1/houses (SQL). Legacy localStorage migrated once. */
+import { request } from './client'
 import { tokenStore } from './auth/tokenStore'
 
 const DEFAULT_HOUSES = ['Ruby', 'Emerald', 'Sapphire', 'Topaz']
@@ -8,44 +9,43 @@ function storageKey(): string {
   return `sms_houses:${tenant}`
 }
 
-export function listSchoolHouses(): string[] {
-  try {
-    const raw = localStorage.getItem(storageKey())
-    if (!raw) {
-      localStorage.setItem(storageKey(), JSON.stringify(DEFAULT_HOUSES))
-      return [...DEFAULT_HOUSES]
-    }
-    const parsed = JSON.parse(raw) as unknown
-    if (!Array.isArray(parsed)) return [...DEFAULT_HOUSES]
-    const names = parsed.map((h) => String(h ?? '').trim()).filter(Boolean)
-    return names.length ? [...new Set(names)] : [...DEFAULT_HOUSES]
-  } catch {
-    return [...DEFAULT_HOUSES]
-  }
+function clearLegacy(): void {
+  try { localStorage.removeItem(storageKey()) } catch { /* ignore */ }
 }
 
-export function saveSchoolHouses(names: string[]): string[] {
+export async function listSchoolHouses(): Promise<string[]> {
+  const rows = await request<string[]>('/houses')
+  const names = (rows ?? []).map((h) => String(h ?? '').trim()).filter(Boolean)
+  clearLegacy()
+  return names.length ? names : [...DEFAULT_HOUSES]
+}
+
+export async function saveSchoolHouses(names: string[]): Promise<string[]> {
   const next = [...new Set(names.map((h) => h.trim()).filter(Boolean))]
-  localStorage.setItem(storageKey(), JSON.stringify(next.length ? next : DEFAULT_HOUSES))
-  return listSchoolHouses()
+  const body = { names: next.length ? next : DEFAULT_HOUSES }
+  const rows = await request<string[]>('/houses', { method: 'PUT', body })
+  clearLegacy()
+  const saved = (rows ?? []).map((h) => String(h ?? '').trim()).filter(Boolean)
+  return saved.length ? saved : [...DEFAULT_HOUSES]
 }
 
-export function addSchoolHouse(name: string): string[] {
+export async function addSchoolHouse(name: string): Promise<string[]> {
   const n = name.trim()
-  if (!n) return listSchoolHouses()
-  const cur = listSchoolHouses()
+  const cur = await listSchoolHouses()
+  if (!n) return cur
   if (cur.some((h) => h.toLowerCase() === n.toLowerCase())) return cur
   return saveSchoolHouses([...cur, n])
 }
 
-export function removeSchoolHouse(name: string): string[] {
-  return saveSchoolHouses(listSchoolHouses().filter((h) => h.toLowerCase() !== name.trim().toLowerCase()))
+export async function removeSchoolHouse(name: string): Promise<string[]> {
+  const cur = await listSchoolHouses()
+  return saveSchoolHouses(cur.filter((h) => h.toLowerCase() !== name.trim().toLowerCase()))
 }
 
-export function renameSchoolHouse(from: string, to: string): string[] {
+export async function renameSchoolHouse(from: string, to: string): Promise<string[]> {
   const nextName = to.trim()
-  if (!nextName) return listSchoolHouses()
-  const cur = listSchoolHouses()
+  const cur = await listSchoolHouses()
+  if (!nextName) return cur
   const idx = cur.findIndex((h) => h.toLowerCase() === from.trim().toLowerCase())
   if (idx < 0) return cur
   if (cur.some((h, i) => i !== idx && h.toLowerCase() === nextName.toLowerCase())) return cur

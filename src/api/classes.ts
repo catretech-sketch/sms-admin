@@ -14,8 +14,6 @@ export interface SchoolClass {
   subjects?: string[]
 }
 
-interface ListEnvelope { data: Record<string, unknown>[]; next_cursor: string | null }
-
 function parseSubjectNames(wire: Record<string, unknown>): string[] | undefined {
   const raw = wire.subjects ?? wire.subject_names ?? wire.subject
   if (raw == null) return undefined
@@ -54,9 +52,18 @@ export function toSchoolClass(wire: Record<string, unknown>): SchoolClass {
   }
 }
 
+function listRows(json: unknown): Record<string, unknown>[] {
+  if (Array.isArray(json)) return json as Record<string, unknown>[]
+  if (json && typeof json === 'object') {
+    const data = (json as { data?: unknown }).data
+    if (Array.isArray(data)) return data as Record<string, unknown>[]
+  }
+  return []
+}
+
 export async function listClasses(): Promise<SchoolClass[]> {
-  const env = await listRequest<ListEnvelope>('/classes')
-  return env.data.map(toSchoolClass)
+  const env = await listRequest<unknown>('/classes')
+  return listRows(env).map(toSchoolClass)
 }
 
 export async function createClass(c: SchoolClass): Promise<SchoolClass> {

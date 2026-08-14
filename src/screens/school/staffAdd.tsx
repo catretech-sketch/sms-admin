@@ -7,7 +7,7 @@ import { tierIncludes } from '@/lib/gating'
 import { TierGate } from '@/components/shell/gates'
 import { useStaff, useStaffById } from '@/api/hooks/useStaff'
 import { useCreateStaff, useUpdateStaff } from '@/api/hooks/useStaffMutations'
-import { loadStaffExtras, persistStaffExtras } from '@/api/staffExtras'
+import { fetchStaffExtras, persistStaffExtras, mergeStaffExtras } from '@/api/staffExtras'
 import { updateStaffPhoto } from '@/api/staff'
 import { upsertSalaryProfile, type SalaryStructure } from '@/api/payroll'
 import { toAmount, computeSalary } from '@/lib/payroll'
@@ -97,7 +97,7 @@ function splitName(full: string): { first: string; last: string } {
   return { first: parts[0], last: parts.slice(1).join(' ') }
 }
 
-function staffToForm(s: Staff): Form {
+export function staffToForm(s: Staff): Form {
   const { first, last } = splitName(s.name)
   return {
     ...INITIAL_FORM,
@@ -245,18 +245,28 @@ function StaffFormScreen({ mode }: { mode: 'add' | 'edit' }) {
     const form = payrollEnabled ? { ...base, ...salaryFields } : base
 
     setForm(form)
-    const ex = loadStaffExtras(existing.id)
-    const next: Partial<Record<keyof typeof INITIAL_FILES, string>> = {}
-    const map = Object.fromEntries(
-      STAFF_FILE_PICKS.map((p) => [p.key, p.formKey]),
-    ) as Record<string, keyof typeof INITIAL_FILES>
-    for (const d of ex?.files ?? []) {
-      if (!d.dataUrl) continue
-      const formKey = map[d.key]
-      if (formKey) next[formKey] = d.dataUrl
-    }
-    setSavedUrls(next)
-    setHydrated(true)
+    let cancelled = false
+    void fetchStaffExtras(existing.id)
+      .then((ex) => {
+        if (cancelled) return
+        const withExtras = staffToForm(mergeStaffExtras({ ...existing }))
+        setForm(payrollEnabled ? { ...withExtras, ...salaryFields } : withExtras)
+        const next: Partial<Record<keyof typeof INITIAL_FILES, string>> = {}
+        const map = Object.fromEntries(
+          STAFF_FILE_PICKS.map((p) => [p.key, p.formKey]),
+        ) as Record<string, keyof typeof INITIAL_FILES>
+        for (const d of ex?.files ?? []) {
+          if (!d.dataUrl) continue
+          const formKey = map[d.key]
+          if (formKey) next[formKey] = d.dataUrl
+        }
+        setSavedUrls(next)
+        setHydrated(true)
+      })
+      .catch(() => {
+        if (!cancelled) setHydrated(true)
+      })
+    return () => { cancelled = true }
   }, [mode, existing, payrollEnabled, profilesQ.data, profilesQ.isLoading, structuresQ.data, structuresQ.isLoading])
 
   const deptOptions = useMemo(
@@ -405,18 +415,28 @@ function StaffFormScreen({ mode }: { mode: 'add' | 'edit' }) {
           }
         })()
       }
-      void persistStaffExtras(
-        saved.id,
-        { ...staffMember, id: saved.id },
-        STAFF_FILE_PICKS.map((p) => ({ key: p.key, label: p.label, file: files[p.formKey] })),
-      ).finally(() => {
+      try {
+        await persistStaffExtras(
+          saved.id,
+          { ...staffMember, id: saved.id },
+          STAFF_FILE_PICKS.map((p) => ({ key: p.key, label: p.label, file: files[p.formKey] })),
+        )
+      } catch (err) {
         setSaving(false)
-        toast.success(mode === 'edit' ? 'Staff updated' : 'Staff added', `${name} · ${f.department}.`)
+        toast.danger(
+          'Staff saved, extras failed',
+          err instanceof Error ? err.message : 'Onboarding details could not be saved to the server.',
+        )
         if (mode === 'edit') app.go('school.staff', { focus: saved.id })
         else app.go('school.staff')
-      })
+        return
       }
-      finish()
+      setSaving(false)
+      toast.success(mode === 'edit' ? 'Staff updated' : 'Staff added', `${name} · ${f.department}.`)
+      if (mode === 'edit') app.go('school.staff', { focus: saved.id })
+      else app.go('school.staff')
+      }
+      void finish()
     }
 
     if (mode === 'edit' && existing) {

@@ -77,6 +77,7 @@ export async function getTeacher(id: string): Promise<Teacher> {
 export function fromTeacherUpdate(t: Teacher): Record<string, unknown> {
   return {
     name: t.name,
+    gender: t.gender,
     department: t.dept,
     designation: t.desig,
     subjects: t.subjects,
@@ -84,6 +85,8 @@ export function fromTeacherUpdate(t: Teacher): Record<string, unknown> {
     phone: t.phone,
     email: t.email,
     status: t.status,
+    exp: t.exp,
+    employee_code: t.code?.trim() || undefined,
   }
 }
 

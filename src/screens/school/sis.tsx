@@ -2,7 +2,7 @@
    SchoolMate — Students (SIS) list + Student 360 profile.
    Phase 1 flagship screen. Live /students list + create.
    ============================================================ */
-import { useMemo, useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import {
   PageHead, Card, CardHead, Btn, Badge, Avatar, Search, Select,
@@ -13,13 +13,14 @@ import { gateRole } from '@/lib/gating'
 import { useStudents, useStudent } from '@/api/hooks/useStudents'
 import { useExams } from '@/api/hooks/useExams'
 import { useExamPapers } from '@/api/hooks/useExamPapers'
-import { useExamMarksMap } from '@/api/hooks/useGrades'
+import { useExamMarksMap, useStudentGrades } from '@/api/hooks/useGrades'
 import { useClasses } from '@/api/hooks/useClasses'
 import { studentGuardianName } from '@/api/students'
-import { listStoredDocs, downloadStoredDoc, openStoredDoc, isStoredImage, studentPhotoUrl } from '@/api/studentExtras'
+import { listStoredDocs, downloadStoredDoc, openStoredDoc, isStoredImage, studentPhotoUrl, fetchStudentExtras } from '@/api/studentExtras'
 import { openMailCompose, guardianEmailsFromStudent } from '@/lib/composeMail'
 import { markKey } from '@/lib/examData'
-import { properName } from '@/lib/properCase'
+import { properName, properPlace } from '@/lib/properCase'
+import { printReportCard } from '@/lib/reportCardPrint'
 import {
   reportFor, classRank, fmtMoney,
   overallToppers, classToppers,
@@ -29,8 +30,8 @@ import { useStudentMonthlyAttendance } from '@/api/hooks/useStudentMonthlyAttend
 import { useFeeInvoices } from '@/api/hooks/useFeeInvoices'
 import { useFeePayments } from '@/api/hooks/useFeePayments'
 import { buildStudentTimeline } from '@/lib/studentTimeline'
-import { monthlyBreakdown, monthlySeriesForKeys, academicYearMonthKeys, academicYearStart, monthDailyGrid, attendancePctByStudent } from '@/api/studentAttendance'
-import { listAllLocalAttendance, type AttendanceStatus } from '@/api/attendance'
+import { monthlyBreakdown, monthlySeriesForKeys, academicYearMonthKeys, academicYearStart, monthDailyGrid } from '@/api/studentAttendance'
+import { type AttendanceStatus } from '@/api/attendance'
 import type { Student, FeeStatus, Role, Exam } from '@/types'
 import type { SchoolClass } from '@/api/classes'
 import { DEFAULT_GRADES } from '@/lib/defaultClasses'
@@ -227,6 +228,7 @@ function ToppersView({ students, onPick }: { students: Student[]; onPick: (id: s
   const [cat, setCat] = useState<TopperMetric>('exam')
   const examsQ = useExams()
   const latestExam = useMemo(() => pickLatestExam(examsQ.data), [examsQ.data])
+
   const marksQ = useExamMarksMap(latestExam?.id ?? null)
   const papersQ = useExamPapers(latestExam?.id ?? null)
   const examSubjects = useMemo(
@@ -242,10 +244,13 @@ function ToppersView({ students, onPick }: { students: Student[]; onPick: (id: s
     return m
   }, [papersQ.data])
   const getMax = useMemo(() => (subject: string) => subjectMax[subject] ?? 100, [subjectMax])
-  const attMap = useMemo(() => attendancePctByStudent(listAllLocalAttendance()), [])
+  /* Official period attendance % from student API (PeriodAttendanceRecords aggregate). */
   const getAttendance = useMemo(
-    () => (sid: string): number | null => (attMap.has(sid) ? attMap.get(sid)! : null),
-    [attMap],
+    () => (sid: string): number | null => {
+      const s = students.find((x) => x.id === sid)
+      return s?.attendance == null ? null : Number(s.attendance)
+    },
+    [students],
   )
   const scoreOpts = useMemo<TopperScoreOpts>(() => {
     /* Always resolve exam % from live marks (never the seeded/dummy report),
@@ -332,10 +337,10 @@ function StudentsScreen() {
   const editable = canEdit(app.role)
   const { data } = useStudents()
   const students = data ?? []
-  /* Real attendance %, never the seeded/dummy `attendance_pct` wire field —
-     null when the student has no marked days at all (shown as "Not marked"). */
-  const attMap = useMemo(() => attendancePctByStudent(listAllLocalAttendance()), [])
-  const attendancePctOf = (s: Student): number | null => (attMap.has(s.id) ? attMap.get(s.id)! : null)
+
+  /* Official period attendance % from student API; null when unmarked. */
+  const attendancePctOf = (s: Student): number | null =>
+    s.attendance == null ? null : Number(s.attendance)
 
   const gradeOptions = useMemo(() => {
     const unique = new Set<string>([...DEFAULT_GRADES])
@@ -542,11 +547,18 @@ function Student360() {
   const classesQ = useClasses()
   const studentsQ = useStudents()
   const latestExam = useMemo(() => pickLatestExam(examsQ.data), [examsQ.data])
-  const marksQ = useExamMarksMap(latestExam?.id ?? null)
-  const papersQ = useExamPapers(latestExam?.id ?? null)
   // NOTE: keep every hook above the loading/error guards below so the hook
   // order stays stable across renders (React crashes otherwise).
   const classId = (classesQ.data ?? []).find((c) => classLabelOf(c) === fetched?.cls)?.id
+  const papersQ = useExamPapers(latestExam?.id ?? null)
+  /* One request for this student's marks — not N× /exam-papers/{id}/grades. */
+  const studentGradesQ = useStudentGrades(fetched?.id ?? null)
+  /* Peer marks for class rank: only this class's papers, and only when rank UI needs them. */
+  const needPeerMarks = tab === 'overview' || tab === 'academics'
+  const marksQ = useExamMarksMap(latestExam?.id ?? null, {
+    classId: classId ?? null,
+    enabled: needPeerMarks && !!classId,
+  })
   const monthsQ = useStudentMonthlyAttendance(
     fetched?.id,
     classId,
@@ -554,6 +566,16 @@ function Student360() {
   )
   const invoicesQ = useFeeInvoices()
   const paymentsQ = useFeePayments()
+  const [extrasTick, setExtrasTick] = useState(0)
+
+  useEffect(() => {
+    if (!fetched?.id) return
+    let cancelled = false
+    void fetchStudentExtras(fetched.id)
+      .then(() => { if (!cancelled) setExtrasTick((n) => n + 1) })
+      .catch(() => { /* keep cache/legacy */ })
+    return () => { cancelled = true }
+  }, [fetched?.id])
 
   if (isLoading) {
     return <div className="col ai-center jc-center gap12" style={{ minHeight: 240 }}><div className="t-sm muted">Loading student…</div></div>
@@ -567,28 +589,36 @@ function Student360() {
     )
   }
   const stu = fetched
-  const examSubjects = [...new Set(
-    (papersQ.data ?? [])
-      .filter((p) => !classId || !p.classId || p.classId === classId)
-      .map((p) => p.subject)
-      .filter(Boolean),
-  )]
+  const classPapers = (papersQ.data ?? []).filter((p) => !classId || !p.classId || p.classId === classId)
+  const examSubjects = [...new Set(classPapers.map((p) => p.subject).filter(Boolean))]
   const examId = latestExam?.id
   const liveMarks = marksQ.data ?? {}
   const subjectMax: Record<string, number> = {}
-  for (const p of papersQ.data ?? []) {
+  for (const p of classPapers) {
     if (p.subject) subjectMax[p.subject] = p.maxMarks || 100
   }
   const getMax = (subject: string) => subjectMax[subject] ?? 100
-  const getMark = (sid: string, subject: string) =>
-    examId ? liveMarks[markKey(examId, sid, subject)] : undefined
+  const paperIds = new Set(classPapers.map((p) => p.id))
+  const studentMarkBySubject = new Map<string, number>()
+  for (const g of studentGradesQ.data ?? []) {
+    if (!paperIds.has(g.examPaperId)) continue
+    const subject = g.subject || classPapers.find((p) => p.id === g.examPaperId)?.subject
+    if (subject) studentMarkBySubject.set(subject, g.marks)
+  }
+  const getMark = (sid: string, subject: string) => {
+    if (sid === stu.id) {
+      const own = studentMarkBySubject.get(subject)
+      if (own != null) return own
+    }
+    return examId ? liveMarks[markKey(examId, sid, subject)] : undefined
+  }
   const peers = (studentsQ.data ?? []).filter((s) => s.cls === stu.cls)
   const live = { liveOnly: true as const, getMax }
   const report = examId && examSubjects.length
     ? reportFor(stu, examId, getMark, examSubjects, live)
     : { rows: [], total: 0, maxTotal: 0, pct: 0, grade: '—', gpa: 0, result: 'PASS' as const }
   const hasLiveMarks = report.rows.length > 0
-  const rank = hasLiveMarks && examId
+  const rank = hasLiveMarks && examId && needPeerMarks && marksQ.data
     ? classRank(stu, examId, getMark, peers, examSubjects, live)
     : { rank: 0, classSize: peers.length }
   const academicsSub = hasLiveMarks && latestExam
@@ -597,9 +627,8 @@ function Student360() {
   const guardian = studentGuardianName(stu) || stu.guardian
   const attRecords = monthsQ.data ?? []
   const months = monthlyBreakdown(attRecords, stu.id)
-  /* Real % from this student's own marked days — never the seeded `attendance_pct`
-     field. null when the student has no marked days at all. */
-  const attPct = attendancePctByStudent(attRecords).get(stu.id) ?? null
+  /* Official period % from API (PeriodAttendanceRecords); null when unmarked. */
+  const attPct = stu.attendance == null ? null : Number(stu.attendance)
   const attPctLabel = attPct == null ? 'Not marked' : `${attPct}%`
   const academicStartYear = (() => {
     const m = String(stu.academicYear || '').match(/\d{4}/)
@@ -609,6 +638,7 @@ function Student360() {
   const markedMonths = months // months that actually have marks (for stats)
   const openMonthDays = openMonth ? monthDailyGrid(attRecords, stu.id, openMonth) : []
   const docs = listStoredDocs(stu.id, stu)
+  void extrasTick
   const photoUrl = studentPhotoUrl(stu.id) ?? docs.find((d) => d.key === 'photo' && d.dataUrl)?.dataUrl
   const fatherPhotoUrl = docs.find((d) => d.key === 'fatherPhoto' && d.dataUrl)?.dataUrl
   const motherPhotoUrl = docs.find((d) => d.key === 'motherPhoto' && d.dataUrl)?.dataUrl
@@ -646,7 +676,14 @@ function Student360() {
     invoices: studentInvoices,
     attendance: attRecords,
   })
+  const feeTimeline = buildStudentTimeline({
+    student: stu,
+    payments: paymentsQ.data ?? [],
+    invoices: studentInvoices,
+    feeOnly: true,
+  })
   const timelineLoading = paymentsQ.isLoading || invoicesQ.isLoading || monthsQ.isLoading
+  const feeTimelineLoading = paymentsQ.isLoading || invoicesQ.isLoading
 
   const fmtSize = (n: number) => (n > 0 ? `${Math.max(1, Math.round(n / 1024))} KB` : '—')
 
@@ -679,7 +716,7 @@ function Student360() {
             <StatTile icon="calendar" label="Attendance" value={attPctLabel} color={attPct == null ? 'var(--text-3)' : attColor(attPct)} />
             <StatTile
               icon="cap"
-              label={hasLiveMarks ? `Rank · ${rank.rank}/${rank.classSize}` : 'Exam %'}
+              label={hasLiveMarks && rank.rank > 0 ? `Rank · ${rank.rank}/${rank.classSize}` : 'Exam %'}
               value={hasLiveMarks ? `${report.pct}%` : '—'}
               color="var(--brand-600)"
             />
@@ -766,6 +803,7 @@ function Student360() {
                 )}
                 <DetailRow label="Guardian" value={guardian} />
                 <DetailRow label="Phone" value={stu.phone} />
+                <DetailRow label="Guardian email" value={stu.guardianEmail} />
                 <DetailRow label="Father" value={stu.father?.name} />
                 <DetailRow label="Father phone" value={stu.father?.phone} />
                 <DetailRow label="Father email" value={stu.father?.email} />
@@ -807,7 +845,7 @@ function Student360() {
             <CardHead title="Snapshot" icon="user" />
             <div className="col gap14" style={{ marginTop: 8 }}>
               <div className="row ai-center jc-between"><span className="muted t-sm">Overall</span><span className="fw7">{hasLiveMarks ? `${report.pct}% · ${report.grade}` : '—'}</span></div>
-              <div className="row ai-center jc-between"><span className="muted t-sm">Class rank</span><span className="fw7">{hasLiveMarks ? `${rank.rank} / ${rank.classSize}` : '—'}</span></div>
+              <div className="row ai-center jc-between"><span className="muted t-sm">Class rank</span><span className="fw7">{hasLiveMarks && rank.rank > 0 ? `${rank.rank} / ${rank.classSize}` : '—'}</span></div>
               <div className="row ai-center jc-between"><span className="muted t-sm">GPA</span><span className="fw7">{hasLiveMarks ? report.gpa : '—'}</span></div>
               <div className="row ai-center jc-between"><span className="muted t-sm">Result</span>{hasLiveMarks ? <Badge tone={report.result === 'PASS' ? 'success' : 'danger'}>{report.result}</Badge> : <span className="fw7">—</span>}</div>
               <div className="row ai-center jc-between">
@@ -829,7 +867,42 @@ function Student360() {
               title="Subject-wise marks"
               sub={academicsSub}
               icon="cap"
-              action={hasLiveMarks ? <Badge tone={report.result === 'PASS' ? 'success' : 'danger'}>{report.result}</Badge> : undefined}
+              action={hasLiveMarks ? (
+                <div className="row ai-center gap8">
+                  <Badge tone={report.result === 'PASS' ? 'success' : 'danger'}>{report.result}</Badge>
+                  <Btn
+                    variant="secondary"
+                    size="sm"
+                    icon="download"
+                    onClick={() => {
+                      const school = app.school
+                      const ok = printReportCard({
+                        schoolName: properName(school.name),
+                        schoolCity: properPlace(school.city),
+                        schoolSlug: school.slug,
+                        schoolLogoInitials: (school.logo || school.name.slice(0, 2)).toUpperCase(),
+                        schoolLogoUrl: school.logoUrl,
+                        schoolImageUrl: school.imageUrl,
+                        schoolBrandColor: school.color,
+                        examName: properName(latestExam?.name) || latestExam?.name,
+                        student: {
+                          ...stu,
+                          name: properName(stu.name),
+                          guardian: properName(guardian) || guardian,
+                          attendance: attPct ?? stu.attendance,
+                        },
+                        report,
+                        rank: rank.rank,
+                        classSize: rank.classSize || peers.length,
+                      })
+                      if (!ok) toast.danger('Could not open print', 'Allow pop-ups, then try Print again.')
+                      else toast.success('Print / PDF', 'In the print dialog choose Save as PDF if you want a file.')
+                    }}
+                  >
+                    Print
+                  </Btn>
+                </div>
+              ) : undefined}
             />
           </div>
           {!hasLiveMarks ? (
@@ -955,50 +1028,89 @@ function Student360() {
       )}
 
       {tab === 'fees' && (
-        <Card pad={false}>
-          <div style={{ padding: 16 }}>
-            <CardHead
-              title="Fee ledger"
-              sub={invoicesQ.isLoading
-                ? 'Loading invoices…'
-                : `Outstanding ${fmtMoney(ledgerOutstanding)} · ${ledger.length} invoice${ledger.length === 1 ? '' : 's'}`}
-              icon="rupee"
-              action={<Badge tone={feeTone[stu.feeStatus]} dot>{feeLabel[stu.feeStatus]}</Badge>}
-            />
-          </div>
-          {invoicesQ.isLoading ? (
-            <div className="t-sm muted" style={{ padding: '0 16px 20px' }}>Loading fee invoices…</div>
-          ) : ledger.length === 0 ? (
-            <div style={{ padding: '0 16px 16px' }}>
-              <Empty
+        <div className="col gap16">
+          <Card pad={false}>
+            <div style={{ padding: 16 }}>
+              <CardHead
+                title="Fee ledger"
+                sub={invoicesQ.isLoading
+                  ? 'Loading invoices…'
+                  : `Outstanding ${fmtMoney(ledgerOutstanding)} · ${ledger.length} invoice${ledger.length === 1 ? '' : 's'}`}
                 icon="rupee"
-                title="No invoices yet"
-                body="No fee invoices for this student. Generate invoices under Fees to see the live ledger here."
+                action={<Badge tone={feeTone[stu.feeStatus]} dot>{feeLabel[stu.feeStatus]}</Badge>}
               />
             </div>
-          ) : (
-          <table className="sm-table">
-            <thead>
-              <tr><th>Invoice</th><th>Description</th><th className="ta-right">Amount</th><th className="ta-right">Paid</th><th className="ta-right">Balance</th><th>Due date</th></tr>
-            </thead>
-            <tbody>
-              {ledger.map((l) => {
-                const bal = l.amount - l.paid
-                return (
-                  <tr key={l.id}>
-                    <td className="fw6">{l.id}</td>
-                    <td>{l.label}</td>
-                    <td className="ta-right">{fmtMoney(l.amount)}</td>
-                    <td className="ta-right">{fmtMoney(l.paid)}</td>
-                    <td className="ta-right"><Badge tone={bal > 0 ? 'danger' : 'success'}>{fmtMoney(bal)}</Badge></td>
-                    <td className="muted">{l.date}</td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-          )}
-        </Card>
+            {invoicesQ.isLoading ? (
+              <div className="t-sm muted" style={{ padding: '0 16px 20px' }}>Loading fee invoices…</div>
+            ) : ledger.length === 0 ? (
+              <div style={{ padding: '0 16px 16px' }}>
+                <Empty
+                  icon="rupee"
+                  title="No invoices yet"
+                  body="No fee invoices for this student. Generate invoices under Fees to see the live ledger here."
+                />
+              </div>
+            ) : (
+            <table className="sm-table">
+              <thead>
+                <tr><th>Invoice</th><th>Description</th><th className="ta-right">Amount</th><th className="ta-right">Paid</th><th className="ta-right">Balance</th><th>Due date</th></tr>
+              </thead>
+              <tbody>
+                {ledger.map((l) => {
+                  const bal = l.amount - l.paid
+                  return (
+                    <tr key={l.id}>
+                      <td className="fw6">{l.id}</td>
+                      <td>{l.label}</td>
+                      <td className="ta-right">{fmtMoney(l.amount)}</td>
+                      <td className="ta-right">{fmtMoney(l.paid)}</td>
+                      <td className="ta-right"><Badge tone={bal > 0 ? 'danger' : 'success'}>{fmtMoney(bal)}</Badge></td>
+                      <td className="muted">{l.date}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+            )}
+          </Card>
+
+          <Card>
+            <CardHead
+              title="Fee timeline"
+              sub={feeTimelineLoading
+                ? 'Loading…'
+                : `${feeTimeline.length} event${feeTimeline.length === 1 ? '' : 's'} · invoices & payments`}
+              icon="clock"
+            />
+            {feeTimelineLoading ? (
+              <div className="t-sm muted" style={{ padding: '16px 0' }}>Loading fee activity…</div>
+            ) : feeTimeline.length === 0 ? (
+              <Empty
+                icon="clock"
+                title="No fee activity yet"
+                body="Invoices and payments for this student will appear here in date order."
+              />
+            ) : (
+              <div className="col" style={{ marginTop: 8 }}>
+                {feeTimeline.map((t, i) => (
+                  <div key={t.id} className="row gap12" style={{ paddingBottom: 16 }}>
+                    <div className="col ai-center" style={{ width: 12 }}>
+                      <span style={{ width: 10, height: 10, borderRadius: 99, background: t.tone, marginTop: 4, flex: '0 0 auto' }} />
+                      {i < feeTimeline.length - 1 && <span style={{ width: 2, flex: 1, background: 'var(--border)', marginTop: 4 }} />}
+                    </div>
+                    <div className="col" style={{ flex: 1, minWidth: 0 }}>
+                      <div className="row ai-center jc-between gap8 wrap">
+                        <div className="fw6">{t.title}</div>
+                        <div className="t-xs muted">{t.date}</div>
+                      </div>
+                      <div className="t-sm muted">{t.body}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
       )}
 
       {tab === 'documents' && (

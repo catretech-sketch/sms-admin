@@ -38,6 +38,8 @@ async function rawFetch(path: string, opts: RequestOpts, accessToken: string | n
     method: opts.method ?? 'GET',
     headers,
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    /* Hard cap so a wedged API cannot freeze CRM screens (esp. attendance fan-out). */
+    signal: AbortSignal.timeout(25_000),
   })
 }
 

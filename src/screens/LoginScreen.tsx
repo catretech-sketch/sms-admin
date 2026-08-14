@@ -62,24 +62,28 @@ const POINTS = [
   { icon: 'sparkle', t: 'Open a school console for day-to-day ops' },
 ]
 
-/** Browser-local “Remember me” for login id + password (this device only). */
+/** Browser-local “Remember me” for login id only (never store passwords). */
 const REMEMBER_KEY = 'sm.login.remember'
 
-function loadRemembered(): { id: string; pw: string } | null {
+export function loadRemembered(): { id: string } | null {
   try {
     const raw = localStorage.getItem(REMEMBER_KEY)
     if (!raw) return null
     const parsed = JSON.parse(raw) as { id?: unknown; pw?: unknown }
     const id = typeof parsed.id === 'string' ? parsed.id : ''
     if (!id.trim()) return null
-    return { id, pw: typeof parsed.pw === 'string' ? parsed.pw : '' }
+    /* Drop any legacy password that may still be on disk. */
+    if (typeof parsed.pw === 'string' && parsed.pw) {
+      localStorage.setItem(REMEMBER_KEY, JSON.stringify({ id }))
+    }
+    return { id }
   } catch {
     return null
   }
 }
 
-function saveRemembered(id: string, pw: string) {
-  localStorage.setItem(REMEMBER_KEY, JSON.stringify({ id, pw }))
+function saveRemembered(id: string) {
+  localStorage.setItem(REMEMBER_KEY, JSON.stringify({ id }))
 }
 
 function clearRemembered() {
@@ -90,7 +94,7 @@ export function LoginScreen() {
   const app = useApp()
   const toast = useToast()
   const [email, setEmail] = useState(() => loadRemembered()?.id ?? '')
-  const [pw, setPw] = useState(() => loadRemembered()?.pw ?? '')
+  const [pw, setPw] = useState('')
   const [showPw, setShowPw] = useState(false)
   const [remember, setRemember] = useState(() => !!loadRemembered())
   const busy = app.authBusy
@@ -101,7 +105,7 @@ export function LoginScreen() {
   const signIn = (e: string) => {
     const id = e.trim()
     const password = pw.trim()
-    if (remember) saveRemembered(id, password)
+    if (remember) saveRemembered(id)
     else clearRemembered()
     void app.loginWithPassword(id, password)
   }
@@ -332,11 +336,27 @@ export function LoginScreen() {
 
               <form className="col gap14" onSubmit={(e) => { e.preventDefault(); signIn(email) }}>
                 <Field label="Email or mobile number">
-                  <Input icon="user" type="text" value={email} onChange={(e) => { setEmail(e.target.value); setResetDone(false) }} placeholder="you@school.edu or +91…" />
+                  <Input
+                    icon="user"
+                    type="text"
+                    name="username"
+                    autoComplete="username"
+                    value={email}
+                    onChange={(e) => { setEmail(e.target.value); setResetDone(false) }}
+                    placeholder="you@school.edu or +91…"
+                  />
                 </Field>
                 <Field label="Password" error={app.authError ?? undefined}>
                   <div style={{ position: 'relative' }}>
-                    <Input icon="lock" type={showPw ? 'text' : 'password'} value={pw} onChange={(e) => setPw(e.target.value)} placeholder="••••••••" />
+                    <Input
+                      icon="lock"
+                      name="password"
+                      type={showPw ? 'text' : 'password'}
+                      autoComplete="current-password"
+                      value={pw}
+                      onChange={(e) => setPw(e.target.value)}
+                      placeholder="••••••••"
+                    />
                     <button type="button" className="sm-login-pw-toggle" onClick={() => setShowPw((s) => !s)} aria-label="Toggle password">
                       <Icon name="eye" size={16} />
                     </button>

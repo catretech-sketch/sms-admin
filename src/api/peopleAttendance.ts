@@ -1,7 +1,5 @@
-/* Daily teacher/staff roll-call. localStorage is the fast synchronous cache the
-   UI reads/writes directly; `/v1/staff-attendance` is synced best-effort in the
-   background (fetch-and-merge on load, push-after-save on submit) so a slow or
-   unreachable backend never blocks the roster screen. */
+/* Daily teacher/staff roll-call. `/v1/staff-attendance` is the source of truth;
+   in-memory Map is a session read cache populated only after successful fetch/save. */
 import { request } from './client'
 import { camelToSnake } from './mapper'
 import { ApiError } from './ApiError'
@@ -15,10 +13,6 @@ function personTypeOf(group: PeopleAttGroup): 'teacher' | 'staff' {
   return group === 'teachers' ? 'teacher' : 'staff'
 }
 
-function isMissingEndpoint(err: unknown): boolean {
-  return err instanceof ApiError && (err.status === 404 || err.status === 405)
-}
-
 /** `null` for anything that isn't a real mark — a malformed/missing status must
  *  never be silently treated as "present". */
 function asStatus(v: unknown): AttendanceStatus | null {
@@ -27,96 +21,110 @@ function asStatus(v: unknown): AttendanceStatus | null {
   return null
 }
 
-/** Best-effort GET of a day's marks from the backend; null on any failure (caller keeps local cache). */
+const memory = new Map<string, Record<string, AttendanceStatus>>()
+
+function cacheKey(group: PeopleAttGroup, date: string): string {
+  const tenant = tokenStore.getTenantId() || 'default'
+  return `${tenant}:${group}:${date}`
+}
+
+/** Test helper — drop in-memory people-attendance cache. */
+export function clearPeopleAttendanceMemory(): void {
+  memory.clear()
+}
+
+/**
+ * GET a day's marks from the backend. Fail-closed: throws on any error
+ * (including 404/405). Callers must not fall back to browser storage.
+ */
 export async function fetchRemotePeopleAttendance(
   group: PeopleAttGroup,
   date: string,
-): Promise<Record<string, AttendanceStatus> | null> {
-  try {
-    const rows = await request<Record<string, unknown>[] | null>('/staff-attendance', {
-      query: { person_type: personTypeOf(group), date },
-    })
-    const out: Record<string, AttendanceStatus> = {}
-    for (const row of rows ?? []) {
-      const id = row.person_id != null ? String(row.person_id) : ''
-      const status = asStatus(row.status)
-      if (id && status) out[id] = status
-    }
-    return out
-  } catch (err) {
-    if (isMissingEndpoint(err)) return null
-    return null // best-effort — never block the roster screen on a backend hiccup
+): Promise<Record<string, AttendanceStatus>> {
+  const rows = await request<Record<string, unknown>[] | null>('/staff-attendance', {
+    query: { person_type: personTypeOf(group), date },
+  })
+  const out: Record<string, AttendanceStatus> = {}
+  for (const row of rows ?? []) {
+    const id = row.person_id != null ? String(row.person_id) : ''
+    const status = asStatus(row.status)
+    if (id && status) out[id] = status
   }
+  cachePeopleAttendance(group, date, out)
+  return out
 }
 
-/** Best-effort push of a day's marks to the backend; swallows all failures. */
-export async function pushPeopleAttendance(
+/**
+ * Persist a day's marks to `/staff-attendance`, then update the in-memory cache.
+ * Throws on API failure — callers must not toast success unless this resolves.
+ */
+export async function savePeopleAttendanceRemote(
   group: PeopleAttGroup,
   date: string,
   marks: Record<string, AttendanceStatus>,
 ): Promise<void> {
   const records = Object.entries(marks).map(([personId, status]) => ({ personId, status }))
-  if (!records.length) return
-  try {
-    await request<unknown>('/staff-attendance', {
-      method: 'POST',
-      body: camelToSnake({ personType: personTypeOf(group), date, records }),
-    })
-  } catch {
-    // best-effort — localStorage already has the authoritative save
-  }
+  if (!records.length) throw new Error('No people to save')
+  await request<unknown>('/staff-attendance', {
+    method: 'POST',
+    body: camelToSnake({ personType: personTypeOf(group), date, records }),
+  })
+  cachePeopleAttendance(group, date, marks)
 }
 
-function storageKey(group: PeopleAttGroup, date: string): string {
-  const tenant = tokenStore.getTenantId() || 'default'
-  return `sms_${group}_attendance:${tenant}:${date}`
+/** @deprecated Use {@link savePeopleAttendanceRemote}. POST-only; throws on failure. */
+export async function pushPeopleAttendance(
+  group: PeopleAttGroup,
+  date: string,
+  marks: Record<string, AttendanceStatus>,
+): Promise<void> {
+  await savePeopleAttendanceRemote(group, date, marks)
 }
 
+/** Read marks from the in-memory session cache (empty if never fetched/saved this session). */
 export function loadPeopleAttendance(group: PeopleAttGroup, date: string): Record<string, AttendanceStatus> {
-  try {
-    const raw = localStorage.getItem(storageKey(group, date))
-    if (!raw) return {}
-    const parsed = JSON.parse(raw) as Record<string, string>
-    const out: Record<string, AttendanceStatus> = {}
-    for (const [id, st] of Object.entries(parsed)) {
-      if (st === 'present' || st === 'late' || st === 'absent') out[id] = st
-    }
-    return out
-  } catch {
-    return {}
-  }
+  return memory.get(cacheKey(group, date)) ?? {}
 }
 
-/** All locally-saved roll-call marks for a group, as attendance records (for trends/export). */
-export function listAllLocalPeopleAttendance(group: PeopleAttGroup): AttendanceRecord[] {
+/** All in-memory roll-call marks for a group (session cache only — not browser SoT). */
+export function listCachedPeopleAttendance(group: PeopleAttGroup): AttendanceRecord[] {
   const out: AttendanceRecord[] = []
-  try {
-    const tenant = tokenStore.getTenantId() || 'default'
-    const prefix = `sms_${group}_attendance:${tenant}:`
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i)
-      if (!key || !key.startsWith(prefix)) continue
-      const date = key.slice(prefix.length)
-      const marks = loadPeopleAttendance(group, date)
-      for (const [id, status] of Object.entries(marks)) {
-        out.push({ id: `${group}-${id}-${date}`, classId: '', studentId: id, date, status })
-      }
+  const tenant = tokenStore.getTenantId() || 'default'
+  const prefix = `${tenant}:${group}:`
+  for (const [key, marks] of memory) {
+    if (!key.startsWith(prefix)) continue
+    const date = key.slice(prefix.length)
+    for (const [id, status] of Object.entries(marks)) {
+      out.push({ id: `${group}-${id}-${date}`, classId: '', studentId: id, date, status })
     }
-  } catch { /* storage disabled */ }
+  }
   return out
 }
 
+/** @deprecated Use {@link listCachedPeopleAttendance}. */
+export const listAllLocalPeopleAttendance = listCachedPeopleAttendance
+
 export const PEOPLE_ATTENDANCE_CHANGED = 'sms:people-attendance-changed'
 
-export function savePeopleAttendance(
+/** Update the in-memory read cache only (not an authoritative save). Prefer {@link savePeopleAttendanceRemote}. */
+export function cachePeopleAttendance(
   group: PeopleAttGroup,
   date: string,
   marks: Record<string, AttendanceStatus>,
 ): void {
-  localStorage.setItem(storageKey(group, date), JSON.stringify(marks))
+  memory.set(cacheKey(group, date), { ...marks })
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(PEOPLE_ATTENDANCE_CHANGED, { detail: { group, date } }))
   }
+}
+
+/** @deprecated Removed — local-only writes are not allowed. Use {@link savePeopleAttendanceRemote}. */
+export function savePeopleAttendance(
+  _group: PeopleAttGroup,
+  _date: string,
+  _marks: Record<string, AttendanceStatus>,
+): never {
+  throw new Error('savePeopleAttendance requires the API; use savePeopleAttendanceRemote')
 }
 
 export function isPeoplePresent(status: AttendanceStatus | undefined): boolean {

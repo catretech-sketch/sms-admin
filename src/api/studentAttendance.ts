@@ -1,7 +1,7 @@
-/* Student monthly attendance — real class marks only (no hash/dummy series). */
+/* Student monthly attendance — API/SQL only (no browser SoT). */
 import { request } from './client'
 import { ApiError } from './ApiError'
-import { listAttendance, listLocalAttendanceRange, listLocalAttendanceForStudent, toAttendanceDate, type AttendanceRecord, type AttendanceStatus } from './attendance'
+import { listAttendance, listClassAttendanceRange, toAttendanceDate, type AttendanceRecord, type AttendanceStatus } from './attendance'
 import type { MonthValue } from '@/types'
 
 function isMissingEndpoint(err: unknown): boolean {
@@ -228,10 +228,7 @@ async function tryClassRangeAttendanceApi(
   to: string,
 ): Promise<AttendanceRecord[] | null> {
   try {
-    const data = await request<Record<string, unknown>[] | null>(`/classes/${classId}/attendance`, {
-      query: { from, to },
-    })
-    return (data ?? []).map((row) => toRecord(row)).filter((r): r is AttendanceRecord => r != null)
+    return await listClassAttendanceRange(classId, from, to)
   } catch (err) {
     if (isMissingEndpoint(err)) return null
     throw err
@@ -264,38 +261,28 @@ export async function listStudentAttendanceHistory(
   const from = opts.from || localDateIso(fromDefault)
 
   const studentRows = await tryStudentAttendanceApi(studentId, from, to)
-  if (studentRows && studentRows.length) {
-    return studentRows.filter((r) => r.studentId === studentId || !r.studentId)
+  if (studentRows !== null) {
+    return studentRows
+      .filter((r) => r.studentId === studentId || !r.studentId)
       .map((r) => ({ ...r, studentId: r.studentId || studentId }))
   }
-
-  // Robust local fast path: find this student's marks regardless of which class
-  // id they were saved under (the attendance screen and SIS can resolve the
-  // class differently). Works even when classId is unknown here.
-  const localByStudent = listLocalAttendanceForStudent(studentId, from, to)
-  if (localByStudent.length) return localByStudent
 
   if (!classId) return []
 
   const classRange = await tryClassRangeAttendanceApi(classId, from, to)
-  if (classRange) {
+  if (classRange !== null) {
     return classRange.filter((r) => r.studentId === studentId)
   }
 
-  // Local marks scoped to the resolved class id (populated when attendance was
-  // marked while the API was unavailable). Avoids ~one 404 request per weekday.
-  const localRange = listLocalAttendanceRange(classId, from, to)
-  if (localRange.length) {
-    return localRange.filter((r) => r.studentId === studentId)
-  }
-
+  /* Student + class-range endpoints missing → weekday day-scan via class API. */
   const days = weekdaysBetween(from, to)
   const batches = await mapPool(days, 6, async (day) => {
     try {
       const rows = await listAttendance(classId, day)
       return rows.filter((r) => r.studentId === studentId)
-    } catch {
-      return [] as AttendanceRecord[]
+    } catch (err) {
+      if (isMissingEndpoint(err)) return [] as AttendanceRecord[]
+      throw err
     }
   })
   return batches.flat()
@@ -308,9 +295,72 @@ export function monthlyAttendanceFromHistory(
   return rollupMonthlyAttendance(records, studentId)
 }
 
+/** Official period attendance summary from SaaS API (same formula for all apps). */
+export interface PeriodAttendanceSummary {
+  totalMarkedPeriods: number
+  presentPeriods: number
+  latePeriods: number
+  absentPeriods: number
+  leavePeriods: number
+  /** null when unmarked — do not display as 0%. */
+  attendancePercentage: number | null
+  /** UI-only day badge; never use as official %. */
+  presentTodayBadge: boolean | null
+}
+
+export async function getStudentAttendanceSummary(
+  studentId: string,
+  from?: string,
+  to?: string,
+): Promise<PeriodAttendanceSummary> {
+  const query: Record<string, string> = {}
+  if (from) query.from = from
+  if (to) query.to = to
+  const wire = await request<Record<string, unknown>>(
+    `/students/${encodeURIComponent(studentId)}/attendance/summary`,
+    { query },
+  )
+  const pct = wire.attendance_percentage ?? wire.attendancePercentage
+  const badge = wire.present_today_badge ?? wire.presentTodayBadge
+  return {
+    totalMarkedPeriods: Number(wire.total_marked_periods ?? wire.totalMarkedPeriods ?? 0),
+    presentPeriods: Number(wire.present_periods ?? wire.presentPeriods ?? 0),
+    latePeriods: Number(wire.late_periods ?? wire.latePeriods ?? 0),
+    absentPeriods: Number(wire.absent_periods ?? wire.absentPeriods ?? 0),
+    leavePeriods: Number(wire.leave_periods ?? wire.leavePeriods ?? 0),
+    attendancePercentage: pct == null || pct === '' ? null : Number(pct),
+    presentTodayBadge: badge == null || badge === '' ? null : Boolean(badge),
+  }
+}
+
+export async function getClassAttendanceSummary(
+  classId: string,
+  from?: string,
+  to?: string,
+): Promise<PeriodAttendanceSummary> {
+  const query: Record<string, string> = {}
+  if (from) query.from = from
+  if (to) query.to = to
+  const wire = await request<Record<string, unknown>>(
+    `/classes/${encodeURIComponent(classId)}/attendance/summary`,
+    { query },
+  )
+  const pct = wire.attendance_percentage ?? wire.attendancePercentage
+  const badge = wire.present_today_badge ?? wire.presentTodayBadge
+  return {
+    totalMarkedPeriods: Number(wire.total_marked_periods ?? wire.totalMarkedPeriods ?? 0),
+    presentPeriods: Number(wire.present_periods ?? wire.presentPeriods ?? 0),
+    latePeriods: Number(wire.late_periods ?? wire.latePeriods ?? 0),
+    absentPeriods: Number(wire.absent_periods ?? wire.absentPeriods ?? 0),
+    leavePeriods: Number(wire.leave_periods ?? wire.leavePeriods ?? 0),
+    attendancePercentage: pct == null || pct === '' ? null : Number(pct),
+    presentTodayBadge: badge == null || badge === '' ? null : Boolean(badge),
+  }
+}
+
 /**
- * Attendance % per student computed from raw day marks (present+late over total).
- * Used to rank Attendance toppers on real data instead of the SIS field.
+ * @deprecated Official attendance % comes from GET .../attendance/summary (period marks).
+ * Kept for any legacy daily rollups; do not use for official CRM/app percentages.
  */
 export function attendancePctByStudent(records: AttendanceRecord[]): Map<string, number> {
   const acc = new Map<string, { attended: number; total: number }>()

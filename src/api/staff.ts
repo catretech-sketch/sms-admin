@@ -60,6 +60,7 @@ export async function getStaff(id: string): Promise<Staff> {
 export function fromStaffUpdate(s: Staff): Record<string, unknown> {
   return {
     name: s.name,
+    gender: s.gender,
     role: s.role,
     category: s.cat,
     department: s.dept,
@@ -68,6 +69,7 @@ export function fromStaffUpdate(s: Staff): Record<string, unknown> {
     route: s.route,
     status: s.status,
     email: s.email?.trim() || undefined,
+    employee_code: s.code?.trim() || undefined,
   }
 }
 

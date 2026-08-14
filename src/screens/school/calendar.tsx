@@ -1,10 +1,9 @@
 /* ============================================================
    SchoolMate — Academic Calendar
-   Month grid + agenda. Events persist per school (local until
-   Calendar API). No seeded dummy events. Email notify uses
-   announcements API; direct person mail uses mailto.
+   Month grid + agenda. Events persist via GET/POST/DELETE /v1/calendar
+   (SQL). Email notify uses announcements API.
    ============================================================ */
-import { useMemo, useState, useCallback, type ComponentType } from 'react'
+import { useMemo, useState, useCallback, useEffect, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import { can } from '@/lib/gating'
 import {
@@ -81,10 +80,21 @@ function CalendarScreen() {
   })
 
   const refresh = useCallback(() => setTick((n) => n + 1), [])
-  const allEvents = useMemo(() => {
-    void tick
-    return listCalendarEvents()
-  }, [tick])
+  const [allEvents, setAllEvents] = useState<CalendarEvent[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    void listCalendarEvents()
+      .then((rows) => { if (!cancelled) setAllEvents(rows) })
+      .catch((err) => {
+        if (!cancelled) {
+          setAllEvents([])
+          toast.danger('Could not load calendar', err instanceof Error ? err.message : 'Please try again.')
+        }
+      })
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tick, app.school.id])
 
   const monthLabel = new Date(cursor.y, cursor.m, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
 
@@ -135,7 +145,7 @@ function CalendarScreen() {
     }
     setSaving(true)
     try {
-      const created = addCalendarEvent({
+      const created = await addCalendarEvent({
         date: form.date,
         type: form.type,
         title: form.title.trim(),
@@ -221,11 +231,15 @@ function CalendarScreen() {
     }
   }
 
-  const deleteEvent = (ev: CalendarEvent) => {
-    removeCalendarEvent(ev.id)
-    refresh()
-    toast.success('Event removed', ev.title)
-    if (selDay && !listCalendarEvents().some((e) => e.date === selDay)) setSelDay(null)
+  const deleteEvent = async (ev: CalendarEvent) => {
+    try {
+      await removeCalendarEvent(ev.id)
+      refresh()
+      toast.success('Event removed', ev.title)
+      if (selDay && !allEvents.some((e) => e.id !== ev.id && e.date === selDay)) setSelDay(null)
+    } catch (err) {
+      toast.danger('Could not remove', err instanceof Error ? err.message : 'Please try again.')
+    }
   }
 
   const agenda = useMemo(() => [...events].sort((a, b) => a.date.localeCompare(b.date)), [events])

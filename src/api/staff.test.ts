@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { listStaff, createStaff } from './staff'
+import { listStaff, createStaff, updateStaff, fromStaffUpdate } from './staff'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -65,5 +65,26 @@ describe('createStaff', () => {
     expect(body.attendance_pct).toBe(0)
     expect(body.cat).toBeUndefined()
     expect(created).toMatchObject({ cat: 'admin', dept: 'Office' })
+  })
+})
+
+describe('updateStaff', () => {
+  it('PATCHes gender and employee code onto the Staff row', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: wireStaff }))
+    vi.stubGlobal('fetch', fetchMock)
+    const staff = {
+      id: 'S-01', name: 'Ramesh', gender: 'M' as const, role: 'Accountant', cat: 'admin',
+      dept: 'Finance', phone: '88', shift: 'day', route: null, attendance: 95,
+      status: 'active' as const, avatarHue: 30, code: 'STF/26/0001', email: 'r@s.edu',
+    }
+    expect(fromStaffUpdate(staff as Parameters<typeof fromStaffUpdate>[0])).toMatchObject({
+      gender: 'M',
+      employee_code: 'STF/26/0001',
+      email: 'r@s.edu',
+    })
+    await updateStaff('S-01', staff as Parameters<typeof updateStaff>[1])
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
+    expect(body.gender).toBe('M')
+    expect(body.employee_code).toBe('STF/26/0001')
   })
 })

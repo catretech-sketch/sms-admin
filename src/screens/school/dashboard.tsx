@@ -22,8 +22,9 @@ import { useAnnouncements } from '@/api/hooks/useAnnouncements'
 import { useFeePayments } from '@/api/hooks/useFeePayments'
 import {
   loadPeopleAttendance, countPeoplePresent, PEOPLE_ATTENDANCE_CHANGED,
-  type CheckInInfo,
+  fetchRemotePeopleAttendance, type CheckInInfo,
 } from '@/api/peopleAttendance'
+import type { AttendanceStatus } from '@/api/attendance'
 import { fmtMoney, fmtNum } from '@/lib/format'
 import { principalStaffToCheckInMap } from '@/lib/geoAttendanceDemo'
 import type { Approval, ApprovalStatus, Role } from '@/types'
@@ -72,17 +73,31 @@ function SchoolDashboard() {
   const paymentsQ = useFeePayments()
   const announcementsQ = useAnnouncements()
 
-  /* Re-read local teacher/staff marks after Attendance save (or window focus). */
-  const [peopleAttTick, setPeopleAttTick] = useState(0)
+  /* Teacher/staff marks from API (memory cache after success); never hydrate from localStorage. */
+  const [teacherMarks, setTeacherMarks] = useState<Record<string, AttendanceStatus>>({})
+  const [staffMarks, setStaffMarks] = useState<Record<string, AttendanceStatus>>({})
   useEffect(() => {
-    const bump = () => setPeopleAttTick((n) => n + 1)
+    let cancelled = false
+    setTeacherMarks({})
+    setStaffMarks({})
+    void fetchRemotePeopleAttendance('teachers', today)
+      .then((m) => { if (!cancelled) setTeacherMarks(m) })
+      .catch(() => { if (!cancelled) setTeacherMarks({}) })
+    void fetchRemotePeopleAttendance('staff', today)
+      .then((m) => { if (!cancelled) setStaffMarks(m) })
+      .catch(() => { if (!cancelled) setStaffMarks({}) })
+    const bump = () => {
+      setTeacherMarks(loadPeopleAttendance('teachers', today))
+      setStaffMarks(loadPeopleAttendance('staff', today))
+    }
     window.addEventListener(PEOPLE_ATTENDANCE_CHANGED, bump)
     window.addEventListener('focus', bump)
     return () => {
+      cancelled = true
       window.removeEventListener(PEOPLE_ATTENDANCE_CHANGED, bump)
       window.removeEventListener('focus', bump)
     }
-  }, [])
+  }, [today])
 
   const liveStudents = studentsQ.data?.length ?? s.students
   const liveTeachers = teachersQ.data?.length ?? Math.round(s.staff * 0.62)
@@ -100,28 +115,26 @@ function SchoolDashboard() {
   const teachersPresent = useMemo(() => {
     const teachers = teachersQ.data ?? []
     if (!teachers.length) return 0
-    const marks = loadPeopleAttendance('teachers', today)
     const checkIn = attQ.isSuccess ? principalStaffToCheckInMap(attQ.data?.staff ?? []) : new Map<string, CheckInInfo>()
     return countPeoplePresent(
       teachers.map((t) => ({ id: t.id, name: t.name })),
-      marks,
+      teacherMarks,
       { checkIn, principalKnown: attQ.isSuccess },
     )
-  }, [teachersQ.data, attQ.data, attQ.isSuccess, today, peopleAttTick])
+  }, [teachersQ.data, attQ.data, attQ.isSuccess, teacherMarks])
 
   const teacherRate = liveTeachers ? Math.round((teachersPresent / liveTeachers) * 100) : 0
 
   const supportPresent = useMemo(() => {
     const staff = staffQ.data ?? []
     if (!staff.length) return 0
-    const marks = loadPeopleAttendance('staff', today)
     const checkIn = attQ.isSuccess ? principalStaffToCheckInMap(attQ.data?.staff ?? []) : new Map<string, CheckInInfo>()
     return countPeoplePresent(
       staff.map((p) => ({ id: p.id, name: p.name })),
-      marks,
+      staffMarks,
       { checkIn, principalKnown: attQ.isSuccess },
     )
-  }, [staffQ.data, attQ.data, attQ.isSuccess, today, peopleAttTick])
+  }, [staffQ.data, attQ.data, attQ.isSuccess, staffMarks])
 
   const supportRate = liveSupport ? Math.round((supportPresent / liveSupport) * 100) : 0
 

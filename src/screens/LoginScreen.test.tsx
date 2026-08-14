@@ -23,6 +23,30 @@ describe('LoginScreen', () => {
     await userEvent.click(screen.getByRole('button', { name: /^Sign in/i }))
     expect(await screen.findByText('Wrong email or password.')).toBeInTheDocument()
   })
+
+  it('Remember me saves login id only — never the password', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      jsonResponse({ error: { code: 'invalid_credentials', message: 'Wrong email or password.' } }, 401)))
+    renderLogin()
+    await userEvent.type(screen.getByPlaceholderText(/you@school.edu or/i), 'owner@school.edu')
+    await userEvent.type(screen.getByPlaceholderText('••••••••'), 'secret123')
+    await userEvent.click(screen.getByLabelText(/remember me/i))
+    await userEvent.click(screen.getByRole('button', { name: /^Sign in/i }))
+    await screen.findByText('Wrong email or password.')
+    const raw = localStorage.getItem('sm.login.remember')
+    expect(raw).toBeTruthy()
+    const parsed = JSON.parse(raw!)
+    expect(parsed.id).toBe('owner@school.edu')
+    expect(parsed.pw).toBeUndefined()
+  })
+
+  it('prefills remembered id on load and strips any legacy stored password', () => {
+    localStorage.setItem('sm.login.remember', JSON.stringify({ id: 'kept@school.edu', pw: 'should-not-keep' }))
+    renderLogin()
+    expect(screen.getByPlaceholderText(/you@school.edu or/i)).toHaveValue('kept@school.edu')
+    expect(screen.getByPlaceholderText('••••••••')).toHaveValue('')
+    expect(JSON.parse(localStorage.getItem('sm.login.remember')!)).toEqual({ id: 'kept@school.edu' })
+  })
 })
 
 describe('LoginScreen password reset', () => {

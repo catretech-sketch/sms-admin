@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { timeHm, toExamPaper } from './examPapers'
+import { timeHm, toExamPaper, paperToSlot, slotToCreateInput, slotToUpdateInput } from './examPapers'
 
 describe('timeHm', () => {
   it('normalizes HH:MM and HH:MM:SS', () => {
@@ -30,5 +30,18 @@ describe('toExamPaper start time', () => {
       start: '13:30', duration_min: 120,
     })
     expect(p.start).toBe('13:30')
+  })
+})
+
+describe('paper max marks round-trip', () => {
+  it('paperToSlot and slot create/update keep maxMarks', () => {
+    const p = toExamPaper({
+      id: 'p1', subject: 'Drawing', date: '2026-09-08',
+      start_time: '09:30', duration_min: 90, max_marks: 70,
+    })
+    const slot = paperToSlot(p)
+    expect(slot.maxMarks).toBe(70)
+    expect(slotToCreateInput('e1', slot).maxMarks).toBe(70)
+    expect(slotToUpdateInput({ ...slot, maxMarks: 80 }).maxMarks).toBe(80)
   })
 })

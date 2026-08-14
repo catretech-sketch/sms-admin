@@ -1,31 +1,29 @@
-/* Selected class/section IDs for an exam (local until API stores class_ids). */
-import { tokenStore } from './auth/tokenStore'
+/* Exam class scope — API class_ids on the exam only (no localStorage SoT). */
+import { updateExam } from './exams'
 
-function storageKey(examId: string): string {
-  const tenant = tokenStore.getTenantId() || 'default'
-  return `sms_exam_classes:${tenant}:${examId}`
+/** @deprecated Prefer exam.classIds from the API. Always returns []. */
+export function loadExamClassIds(_examId: string): string[] {
+  return []
 }
 
-export function loadExamClassIds(examId: string): string[] {
+/** Persist class ids via exam PATCH. */
+export async function saveExamClassIds(examId: string, classIds: string[]): Promise<string[]> {
   if (!examId) return []
-  try {
-    const raw = localStorage.getItem(storageKey(examId))
-    if (!raw) return []
-    const parsed = JSON.parse(raw) as unknown
-    if (!Array.isArray(parsed)) return []
-    return parsed.map(String).filter(Boolean)
-  } catch {
-    return []
-  }
-}
-
-export function saveExamClassIds(examId: string, classIds: string[]): void {
-  if (!examId) return
   const unique = [...new Set(classIds.filter(Boolean))]
-  localStorage.setItem(storageKey(examId), JSON.stringify(unique))
+  await updateExam(examId, { classIds: unique })
+  return unique
 }
 
-export function clearExamClassIds(examId: string): void {
-  if (!examId) return
-  localStorage.removeItem(storageKey(examId))
+export function clearExamClassIds(_examId: string): void {
+  /* no local cache */
+}
+
+/** Prefer API class ids; never hydrate from browser storage. */
+export async function migrateExamClassIdsIfNeeded(
+  examId: string,
+  apiClassIds?: string[],
+): Promise<string[]> {
+  if (apiClassIds?.length) return apiClassIds
+  if (!examId) return []
+  return []
 }

@@ -1,10 +1,11 @@
 /* Server-persisted absence-alert config (thresholds + daily schedule).
-   Falls back to null when the endpoint is unavailable so callers keep the
-   browser-local config. One light GET on open and one PUT on save — no polling. */
+   PUT returns null when the endpoint is missing — callers must treat that as
+   failure (do not pretend the settings were saved to the DB). */
 import { request } from './client'
 import { ApiError } from './ApiError'
 import { snakeToCamel, camelToSnake } from './mapper'
 import type { AttendanceAlertConfig } from '@/lib/attendanceAlerts'
+import { saveAlertConfig } from '@/lib/attendanceAlerts'
 
 function isMissingEndpoint(err: unknown): boolean {
   return err instanceof ApiError && (err.status === 404 || err.status === 405)
@@ -50,4 +51,15 @@ export async function putAlertConfig(cfg: AttendanceAlertConfig): Promise<Attend
     if (isMissingEndpoint(err)) return null
     throw err
   }
+}
+
+/**
+ * PUT alert config, then cache locally. Throws when the endpoint is missing or the request fails.
+ */
+export async function persistAlertConfig(cfg: AttendanceAlertConfig): Promise<AttendanceAlertConfig> {
+  const server = await putAlertConfig(cfg)
+  if (!server) {
+    throw new ApiError(404, 'not_found', 'Alert settings endpoint unavailable')
+  }
+  return saveAlertConfig(server)
 }

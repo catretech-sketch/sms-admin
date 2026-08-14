@@ -14,16 +14,14 @@ import { useTeachers } from '@/api/hooks/useTeachers'
 import { useClasses, useClassNames } from '@/api/hooks/useClasses'
 import {
   listExamPaperAttendance,
-  loadExamAttendanceLocal,
   saveExamPaperAttendance,
 } from '@/api/examAttendance'
-import { loadExamClassIds } from '@/api/examClasses'
 import { paperToSlot, slotToCreateInput, slotToUpdateInput, createExamPaper, updateExamPaper, deleteExamPaper, listExamPapers, notifyExamMarksPublished } from '@/api/examPapers'
 import { queryKeys } from '@/api/queryKeys'
 import { getClassSubjects, listClassSubjects } from '@/api/classSubjects'
 import { useClassSubjectsMap } from '@/api/hooks/useClassSubjects'
 import { notifyExamAudience } from '@/lib/examNotify'
-import { groupExamTimetable, printExamTimetable, autoBuildExamSlots, buildExamPeriodGrid, examSubjectStyle, orderSubjectsBy, shuffleWithSeed } from '@/lib/examTimetable'
+import { groupExamTimetable, printExamTimetable, autoBuildExamSlots, buildExamPeriodGrid, examSubjectStyle, orderSubjectsBy, shuffleWithSeed, clampExamMaxMarks } from '@/lib/examTimetable'
 import { can } from '@/lib/gating'
 import { endTime, findClashes, markKey } from '@/lib/examData'
 import { countRealExamPapers, isDummyExamPaper, isOrphanExamPaper, isPaperInExamScope } from '@/lib/examPaperScope'
@@ -247,6 +245,8 @@ function ExamAutoModal({
   const [shuffleSeed, setShuffleSeed] = useState(1)
   /* Which subjects to actually generate. Empty = "all subjects" (multi-day default). */
   const [subjectPick, setSubjectPick] = useState<Set<string>>(new Set())
+  /** Per-subject max marks when generating (e.g. Drawing 70, Maths 100). */
+  const [subjectMaxMarks, setSubjectMaxMarks] = useState<Record<string, number>>({})
   /** Which Nursery–XII grade is open to show A/B/C sections. */
   const [focusGrade, setFocusGrade] = useState<string>('')
   const [deleteConfirmStep, setDeleteConfirmStep] = useState<0 | 1 | 2>(0)
@@ -281,6 +281,7 @@ function ExamAutoModal({
     setSubjectOrder(initialSubjectOrder?.length ? [...initialSubjectOrder] : [])
     setShuffleSeed(1)
     setSubjectPick(new Set())
+    setSubjectMaxMarks({})
     setDeleteConfirmStep(0)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -467,7 +468,10 @@ function ExamAutoModal({
 
   const preview = useMemo(() => {
     if (!targetSubjects.length || !startDate) return []
-    const common = { startDate, sessions, duration, gapDays, skipSunday, skipSaturday, room }
+    const common = {
+      startDate, sessions, duration, gapDays, skipSunday, skipSaturday, room,
+      maxMarksBySubject: subjectMaxMarks,
+    }
     const priority = orderMode === 'manual' ? subjectOrder : orderMode === 'random' ? randomOrder : null
     const pick = subjectPickRequired ? subjectPick : null
     return targetSubjects.flatMap(({ cls, subjects: classSubjects }) => {
@@ -477,7 +481,7 @@ function ExamAutoModal({
       return autoBuildExamSlots({ ...common, subjects: ordered, classId: cls.value, className: cls.label })
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetSubjects, startDate, sessionMode, morning, afternoon, duration, gapDays, skipSunday, skipSaturday, room, orderMode, subjectOrder, randomOrder, subjectPick, subjectPickRequired])
+  }, [targetSubjects, startDate, sessionMode, morning, afternoon, duration, gapDays, skipSunday, skipSaturday, room, orderMode, subjectOrder, randomOrder, subjectPick, subjectPickRequired, subjectMaxMarks])
 
   const classCount = targets.length
   const subjectCounts = targetSubjects.map((t) => t.subjects.length)
@@ -486,6 +490,21 @@ function ExamAutoModal({
   const sameSubjectCount = minSubjects === maxSubjects
   const papersPerClassLabel = sameSubjectCount ? `${maxSubjects}` : `${minSubjects}–${maxSubjects}`
   const lastDate = preview.length ? preview.reduce((mx, s) => (s.date > mx ? s.date : mx), preview[0].date) : ''
+  const maxMarksSubjects = subjectPickRequired
+    ? [...subjectPick]
+    : unionSubjects
+  const setSubjectMax = (subject: string, raw: string) => {
+    const n = clampExamMaxMarks(raw, 100)
+    setSubjectMaxMarks((prev) => ({ ...prev, [subject]: n }))
+  }
+  const applyMaxToAll = (n: number) => {
+    const max = clampExamMaxMarks(n, 100)
+    setSubjectMaxMarks((prev) => {
+      const next = { ...prev }
+      for (const s of maxMarksSubjects) next[s] = max
+      return next
+    })
+  }
 
   const commitGenerate = () => {
     const now = Date.now()
@@ -500,6 +519,7 @@ function ExamAutoModal({
       room: s.room,
       inv1: '',
       inv2: '',
+      maxMarks: clampExamMaxMarks(s.maxMarks, 100),
     }))
     setDeleteConfirmStep(0)
     onApply(slots, replace)
@@ -800,6 +820,41 @@ function ExamAutoModal({
                   Only these {subjectPick.size === 1 ? 'exam runs' : 'exams run'} on {fmtDate(startDate)}. For all subjects, extend the exam To date.
                 </div>
               )}
+            </div>
+          </Field>
+        )}
+
+        {maxMarksSubjects.length > 0 && (
+          <Field
+            label="Max marks per subject"
+            hint="Some papers can be out of 70, others out of 100 — saved on each paper"
+          >
+            <div className="col gap10">
+              <div className="row ai-center gap8 wrap">
+                <span className="t-xs muted">Apply to all:</span>
+                {[50, 70, 80, 100].map((n) => (
+                  <Btn key={n} size="sm" variant="ghost" onClick={() => applyMaxToAll(n)}>{n}</Btn>
+                ))}
+              </div>
+              <div className="col gap8">
+                {maxMarksSubjects.map((s) => (
+                  <div key={s} className="row ai-center gap12 jc-between wrap">
+                    <span className="fw6 t-sm" style={{ minWidth: 120 }}>{s}</span>
+                    <div className="row ai-center gap8">
+                      <Input
+                        type="number"
+                        min={1}
+                        max={999}
+                        value={String(subjectMaxMarks[s] ?? 100)}
+                        onChange={(e) => setSubjectMax(s, e.target.value)}
+                        style={{ width: 88, textAlign: 'center' }}
+                        aria-label={`${s} max marks`}
+                      />
+                      <span className="t-xs muted">max</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </Field>
         )}
@@ -1323,6 +1378,7 @@ const DatesheetPaperCard = memo(function DatesheetPaperCard({
             <div className="fw6">{s.subject || '—'}</div>
             <div className="t-xs muted">
               {s.className ?? classNameOf(s.classId)} · {s.date ? fmtDate(s.date) : '—'} · {s.start} – {endTime(s.start, s.duration)}
+              {` · /${clampExamMaxMarks(s.maxMarks, 100)}`}
               {s.room ? ` · Room ${s.room}` : ''}
             </div>
           </div>
@@ -1362,6 +1418,16 @@ const DatesheetPaperCard = memo(function DatesheetPaperCard({
           </Field>
           <Field label="Duration (min)">
             <Input type="number" min={0} value={String(s.duration)} disabled={!canEdit} onChange={(e) => onChange(s.id, { duration: Math.max(0, Math.round(Number(e.target.value) || 0)) })} />
+          </Field>
+          <Field label="Max marks">
+            <Input
+              type="number"
+              min={1}
+              max={999}
+              value={String(clampExamMaxMarks(s.maxMarks, 100))}
+              disabled={!canEdit}
+              onChange={(e) => onChange(s.id, { maxMarks: clampExamMaxMarks(e.target.value, 100) })}
+            />
           </Field>
           <Field label="End time">
             <Input value={endTime(s.start, s.duration)} disabled />
@@ -1471,9 +1537,8 @@ function DatesheetDrawer({ exam, onClose }: { exam: Exam | null; onClose: () => 
   /* Always show classes for this exam: selected sections if set, else grade range. */
   const examGrades = useMemo(() => new Set(parseExamGrades(exam?.grades)), [exam?.grades])
   const examClassIdSet = useMemo(() => {
-    const ids = exam?.classIds?.length ? exam.classIds : (exam?.id ? loadExamClassIds(exam.id) : [])
-    return new Set(ids)
-  }, [exam?.id, exam?.classIds])
+    return new Set(exam?.classIds?.filter(Boolean) ?? [])
+  }, [exam?.classIds])
   const datesheetClassList = useMemo(() => {
     if (examClassIdSet.size) {
       return classPickList.filter((c) => examClassIdSet.has(c.value))
@@ -1773,6 +1838,7 @@ function DatesheetDrawer({ exam, onClose }: { exam: Exam | null; onClose: () => 
           room: '',
           inv1: '',
           inv2: '',
+          maxMarks: 100,
         }]
       })
       setExpandedId(id)
@@ -2463,6 +2529,7 @@ function MarksEntryTab() {
   }, [papers, paperId])
 
   const paper = papers.find((p) => p.id === paperId)
+  const paperMax = clampExamMaxMarks(paper?.maxMarks, 100)
   const gradesQ = useGrades(paperId || null)
   const gradesByStudent = useMemo(() => {
     const m = new Map<string, number>()
@@ -2483,13 +2550,16 @@ function MarksEntryTab() {
   }, [roster, gradesByStudent])
 
   const setMark = (id: string, raw: string) => {
-    const n = Math.max(0, Math.min(100, Math.round(Number(raw) || 0)))
+    const n = Math.max(0, Math.min(paperMax, Math.round(Number(raw) || 0)))
     setMarks((m) => ({ ...m, [id]: n }))
   }
 
   const entered = roster.map((s) => marks[s.id] ?? 0)
-  const avg = entered.length ? +(entered.reduce((a, b) => a + b, 0) / entered.length).toFixed(1) : 0
-  const passCount = entered.filter((v) => v >= 33).length
+  const pctOf = (raw: number) => (paperMax > 0 ? (raw / paperMax) * 100 : 0)
+  const avgPct = entered.length
+    ? +(entered.reduce((a, b) => a + pctOf(b), 0) / entered.length).toFixed(1)
+    : 0
+  const passCount = entered.filter((v) => pctOf(v) >= 33).length
   const exam = exams.find((e) => e.id === examId)
 
   const save = async () => {
@@ -2543,7 +2613,10 @@ function MarksEntryTab() {
             onChange={(e) => setCls(e.target.value)}
           />
           <Select
-            options={papers.map((p) => ({ value: p.id, label: `${p.subject || p.name || p.id}${p.classId ? ` · ${classNameById(p.classId)}` : ''}` }))}
+            options={papers.map((p) => ({
+              value: p.id,
+              label: `${p.subject || p.name || p.id}${p.classId ? ` · ${classNameById(p.classId)}` : ''} · /${clampExamMaxMarks(p.maxMarks, 100)}`,
+            }))}
             value={paperId}
             onChange={(e) => setPaperId(e.target.value)}
           />
@@ -2559,16 +2632,16 @@ function MarksEntryTab() {
       ) : (
         <>
           <div className="row ai-center gap20 wrap" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
-            <span className="t-sm">Class average <span className="fw7">{avg}%</span> · Grade <Badge tone={gradeTone(gradeFor(avg))}>{gradeFor(avg)}</Badge></span>
+            <span className="t-sm">Class average <span className="fw7">{avgPct}%</span> · Grade <Badge tone={gradeTone(gradeFor(avgPct))}>{gradeFor(avgPct)}</Badge></span>
             <span className="t-sm">Passing <span className="fw7">{passCount}/{roster.length}</span></span>
-            <span className="t-xs muted">Save sends parent email + student/parent app for this class</span>
+            <span className="t-xs muted">Paper max {paperMax} · Save sends parent email + student/parent app for this class</span>
           </div>
           <table className="sm-table">
             <thead>
               <tr>
                 <th style={{ width: 60 }}>Roll</th>
                 <th>Student</th>
-                <th className="ta-center" style={{ width: 120 }}>Marks /100</th>
+                <th className="ta-center" style={{ width: 140 }}>Marks /{paperMax}</th>
                 <th className="ta-center" style={{ width: 90 }}>Grade</th>
                 <th className="ta-center" style={{ width: 90 }}>Result</th>
               </tr>
@@ -2576,18 +2649,19 @@ function MarksEntryTab() {
             <tbody>
               {roster.map((s) => {
                 const m = marks[s.id] ?? 0
-                const g = gradeFor(m)
+                const pct = pctOf(m)
+                const g = gradeFor(pct)
                 return (
                   <tr key={s.id}>
                     <td className="muted">{s.roll}</td>
                     <td className="fw6">{s.name}</td>
                     <td className="ta-center">
-                      <Input type="number" min={0} max={100} value={String(m)} disabled={!editable}
+                      <Input type="number" min={0} max={paperMax} value={String(m)} disabled={!editable}
                         style={{ width: 80, textAlign: 'center' }}
                         onChange={(e) => setMark(s.id, e.target.value)} />
                     </td>
                     <td className="ta-center"><Badge tone={gradeTone(g)}>{g}</Badge></td>
-                    <td className="ta-center"><Badge tone={m >= 33 ? 'success' : 'danger'}>{m >= 33 ? 'Pass' : 'Fail'}</Badge></td>
+                    <td className="ta-center"><Badge tone={pct >= 33 ? 'success' : 'danger'}>{pct >= 33 ? 'Pass' : 'Fail'}</Badge></td>
                   </tr>
                 )
               })}
@@ -2684,12 +2758,12 @@ function ExamAttendanceTab() {
       if (!examId || !paper?.id || !subject) { setAtt({}); return }
       setLoadingAtt(true)
       try {
-        let saved = loadExamAttendanceLocal(examId, paper.id, subject, date)
+        let saved: Record<string, 'present' | 'absent'> = {}
         try {
-          const api = await listExamPaperAttendance(paper.id)
-          if (Object.keys(api).length) saved = { ...saved, ...api }
+          saved = await listExamPaperAttendance(paper.id)
         } catch {
-          /* keep local */
+          /* fail closed — never hydrate from browser SoT */
+          saved = {}
         }
         if (cancelled) return
         const out: Record<string, 'present' | 'absent'> = {}
@@ -2713,8 +2787,8 @@ function ExamAttendanceTab() {
     try {
       const entries: Record<string, 'present' | 'absent'> = {}
       roster.forEach((s) => { entries[s.id] = att[s.id] ?? 'present' })
-      const mode = await saveExamPaperAttendance(paper.id, examId, subject, date, entries)
-      let notifyBit = mode === 'api' ? 'synced' : 'saved on this device'
+      await saveExamPaperAttendance(paper.id, examId, subject, date, entries)
+      let notifyBit = 'synced'
       if (notifyParents) {
         try {
           const res = await notifyExamAudience(
@@ -3565,9 +3639,7 @@ function PublishResultsModal({ exam, onClose }: { exam: Exam | null; onClose: ()
     const all = [...(classesQ.data ?? [])].filter((c) => c.id).sort(compareClassesAscending)
     const byId = new Map(all.map((c) => [c.id!, classLabel(c)]))
     const paperIds = new Set((papersQ.data ?? []).map((p) => p.classId).filter(Boolean) as string[])
-    const selected = exam?.classIds?.length
-      ? exam.classIds
-      : (exam?.id ? loadExamClassIds(exam.id) : [])
+    const selected = exam?.classIds?.length ? exam.classIds : []
     const ids = selected.length ? selected : [...paperIds]
     const rows = ids
       .map((id) => ({ id, label: byId.get(id) ?? id }))

@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { ApiError } from './ApiError'
 import {
-  loadPeopleAttendance, savePeopleAttendance,
+  loadPeopleAttendance, cachePeopleAttendance, savePeopleAttendance,
+  clearPeopleAttendanceMemory, listCachedPeopleAttendance,
   effectivePeopleStatus, countPeoplePresent, type CheckInInfo,
-  fetchRemotePeopleAttendance, pushPeopleAttendance,
+  fetchRemotePeopleAttendance, savePeopleAttendanceRemote, pushPeopleAttendance,
 } from './peopleAttendance'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -12,14 +14,33 @@ function notFound(): Response {
   return jsonResponse({ error: { code: 'not_found', message: 'x' } }, 404)
 }
 
-beforeEach(() => { localStorage.clear(); vi.restoreAllMocks() })
+beforeEach(() => {
+  clearPeopleAttendanceMemory()
+  localStorage.clear()
+  vi.restoreAllMocks()
+})
 
-describe('peopleAttendance', () => {
-  it('saves and loads marks for a date', () => {
-    savePeopleAttendance('teachers', '2026-07-16', { t1: 'present', t2: 'absent' })
+describe('peopleAttendance cache', () => {
+  it('caches and loads marks for a date in memory only', () => {
+    cachePeopleAttendance('teachers', '2026-07-16', { t1: 'present', t2: 'absent' })
     expect(loadPeopleAttendance('teachers', '2026-07-16')).toEqual({ t1: 'present', t2: 'absent' })
     expect(loadPeopleAttendance('teachers', '2026-07-15')).toEqual({})
     expect(loadPeopleAttendance('staff', '2026-07-16')).toEqual({})
+    expect(localStorage.length).toBe(0)
+  })
+
+  it('savePeopleAttendance throws — remote save required', () => {
+    expect(() => savePeopleAttendance('staff', '2026-07-16', { s1: 'late' }))
+      .toThrow(/savePeopleAttendanceRemote/)
+    expect(loadPeopleAttendance('staff', '2026-07-16')).toEqual({})
+  })
+
+  it('listCachedPeopleAttendance reads only memory', () => {
+    cachePeopleAttendance('teachers', '2026-07-16', { t1: 'present' })
+    cachePeopleAttendance('teachers', '2026-07-15', { t2: 'absent' })
+    const rows = listCachedPeopleAttendance('teachers')
+    expect(rows).toHaveLength(2)
+    expect(rows.map((r) => r.date).sort()).toEqual(['2026-07-15', '2026-07-16'])
   })
 })
 
@@ -88,20 +109,22 @@ describe('fetchRemotePeopleAttendance', () => {
     expect(url).toContain('person_type=teacher')
     expect(url).toContain('date=2026-07-16')
     expect(marks).toEqual({ t1: 'absent', t2: 'present' })
+    expect(loadPeopleAttendance('teachers', '2026-07-16')).toEqual({ t1: 'absent', t2: 'present' })
   })
 
-  it('returns null (never throws) when the endpoint is missing', async () => {
+  it('throws ApiError (fail-closed) when the endpoint is missing', async () => {
     const fetchMock = vi.fn().mockResolvedValue(notFound())
     vi.stubGlobal('fetch', fetchMock)
-    expect(await fetchRemotePeopleAttendance('staff', '2026-07-16')).toBeNull()
+    await expect(fetchRemotePeopleAttendance('staff', '2026-07-16')).rejects.toBeInstanceOf(ApiError)
+    expect(loadPeopleAttendance('staff', '2026-07-16')).toEqual({})
   })
 })
 
-describe('pushPeopleAttendance', () => {
-  it('POSTs /staff-attendance with personType + snake_case records', async () => {
+describe('savePeopleAttendanceRemote', () => {
+  it('POSTs /staff-attendance then updates the memory cache', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: null }))
     vi.stubGlobal('fetch', fetchMock)
-    await pushPeopleAttendance('staff', '2026-07-16', { s1: 'present', s2: 'absent' })
+    await savePeopleAttendanceRemote('staff', '2026-07-16', { s1: 'present', s2: 'absent' })
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toContain('/staff-attendance')
     expect((init as RequestInit).method).toBe('POST')
@@ -111,18 +134,30 @@ describe('pushPeopleAttendance', () => {
     expect(body.records).toEqual(
       expect.arrayContaining([{ person_id: 's1', status: 'present' }, { person_id: 's2', status: 'absent' }]),
     )
+    expect(loadPeopleAttendance('staff', '2026-07-16')).toEqual({ s1: 'present', s2: 'absent' })
+    expect(localStorage.length).toBe(0)
   })
 
-  it('never throws, even when the backend call fails', async () => {
+  it('throws and does not cache when the backend call fails', async () => {
     const fetchMock = vi.fn().mockResolvedValue(notFound())
     vi.stubGlobal('fetch', fetchMock)
-    await expect(pushPeopleAttendance('teachers', '2026-07-16', { t1: 'present' })).resolves.toBeUndefined()
+    await expect(savePeopleAttendanceRemote('teachers', '2026-07-16', { t1: 'present' }))
+      .rejects.toBeInstanceOf(ApiError)
+    expect(loadPeopleAttendance('teachers', '2026-07-16')).toEqual({})
   })
 
-  it('is a no-op with no marks', async () => {
+  it('throws when there are no marks', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
-    await pushPeopleAttendance('teachers', '2026-07-16', {})
+    await expect(savePeopleAttendanceRemote('teachers', '2026-07-16', {})).rejects.toThrow(/No people/)
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('pushPeopleAttendance', () => {
+  it('delegates to savePeopleAttendanceRemote (fail-closed)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(notFound()))
+    await expect(pushPeopleAttendance('teachers', '2026-07-16', { t1: 'present' }))
+      .rejects.toBeInstanceOf(ApiError)
   })
 })

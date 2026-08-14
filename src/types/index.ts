@@ -52,6 +52,9 @@ export interface FeeInvoice {
   due: number
   status: FeeStatus
   dueDate?: string
+  /** From Students join when list API enriches the invoice. */
+  avatarHue?: number
+  photoUrl?: string
 }
 
 export interface FeeCheque {
@@ -195,7 +198,10 @@ export interface Student {
   roll: number
   guardian: string
   phone: string
-  attendance: number
+  /** Parent / guardian login + mail. Distinct from the student's own `email`. */
+  guardianEmail?: string
+  /** Official period attendance % from API; null when no marked periods. */
+  attendance: number | null
   feeStatus: FeeStatus
   feeDue: number
   status: ActiveStatus
@@ -407,6 +413,8 @@ export interface PaperSlot {
   room: string
   inv1: string
   inv2: string
+  /** Paper total marks (e.g. 70 or 100). Defaults to 100 when omitted. */
+  maxMarks?: number
 }
 
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected'

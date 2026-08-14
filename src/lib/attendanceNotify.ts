@@ -43,9 +43,10 @@ export function pickGuardianContacts(
   const phones = new Set<string>()
   for (const s of students) {
     if (!wanted.has(s.id)) continue
-    addEmail(emails, s.email)
+    addEmail(emails, s.guardianEmail)
     addEmail(emails, s.father?.email)
     addEmail(emails, s.mother?.email)
+    addEmail(emails, s.email)
     addPhone(phones, s.phone)
     addPhone(phones, s.father?.phone)
     addPhone(phones, s.mother?.phone)
