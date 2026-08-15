@@ -59,6 +59,14 @@ export const queryKeys = {
     studentMonths: (studentId: string, classId = '') => ['attendance', 'studentMonths', studentId, classId] as const,
     advanced: (filters: import('./periodAttendanceAdvanced').PeriodAttendanceAdvancedFilters = {}) =>
       ['attendance', 'advanced', tenantScope(), filters] as const,
+    classDaySummary: (classId: string, date: string) =>
+      ['attendance', 'advancedClassDaySummary', tenantScope(), classId, date] as const,
+    subjectSummaries: (classId: string, filters: { preset?: string; from?: string; to?: string } = {}) =>
+      ['attendance', 'advancedSubjectSummaries', tenantScope(), classId, filters] as const,
+    teacherSummaries: (filters: { preset?: string; from?: string; to?: string } = {}) =>
+      ['attendance', 'advancedTeacherSummaries', tenantScope(), filters] as const,
+    rangeSummary: (filters: import('./periodAttendanceAdvanced').PeriodAttendanceRangeFilters = {}) =>
+      ['attendance', 'advancedRangeSummary', tenantScope(), filters] as const,
   },
   exams: {
     all: ['exams'] as const,

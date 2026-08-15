@@ -45,6 +45,46 @@ vi.mock('@/api/hooks/usePeriodAttendanceAdvanced', () => ({
       refetch,
     }
   },
+  usePeriodAttendanceClassDaySummary: () => ({
+    data: {
+      totalStudents: 30, present: 25, absent: 3, late: 1, leave: 1, notMarked: 0,
+      attendancePercentage: 86.67, totalPeriods: 30, markedPeriods: 30, pendingPeriods: 0,
+    },
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+  usePeriodAttendanceSubjectSummaries: () => ({
+    data: [{
+      subject: 'Mathematics', teacherName: 'Meera Krishnan', periods: 20, marked: 18, pending: 2,
+      present: 16, absent: 2, late: 0, attendancePercentage: 88.9,
+    }],
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+  usePeriodAttendanceTeacherSummaries: () => ({
+    data: [{
+      teacherId: 'teacher-1', teacherName: 'Meera Krishnan', classes: 3, sections: 4, subjects: 2,
+      expectedPeriods: 40, markedPeriods: 38, pendingPeriods: 2,
+      teacherMarked: 30, staffMarked: 5, principalMarked: 2, adminMarked: 1,
+    }],
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+  usePeriodAttendanceRangeSummary: () => ({
+    data: {
+      totalMarkedPeriods: 120, present: 100, absent: 10, late: 8, leave: 2, attendancePercentage: 90,
+    },
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
 }))
 
 vi.mock('@/api/hooks/useClasses', () => ({
@@ -157,6 +197,51 @@ describe('AttendanceAdvanced', () => {
     await waitFor(() => expect(advancedFilters).toHaveBeenLastCalledWith(expect.objectContaining({
       markedByRole: 'staff',
       page: 1,
+    })))
+  })
+})
+
+describe('AttendanceAdvanced subviews', () => {
+  it('shows the Class KPI summary once a section is chosen', async () => {
+    render(<AttendanceAdvanced />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Class' }))
+    expect(screen.getByText('Choose a section to see its day summary.')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Class for summary'), { target: { value: 'class-1' } })
+    expect(screen.getByText('87%')).toBeInTheDocument()
+  })
+
+  it('shows Subject summary rows and drills into Records on click', async () => {
+    render(<AttendanceAdvanced />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Subject' }))
+    fireEvent.change(screen.getByLabelText('Class for subject summary'), { target: { value: 'class-1' } })
+    expect(screen.getByText('Mathematics')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('Mathematics'))
+    await waitFor(() => expect(screen.getByText('Advanced period attendance')).toBeInTheDocument())
+    expect(advancedFilters).toHaveBeenLastCalledWith(expect.objectContaining({
+      classId: 'class-1', subject: 'Mathematics',
+    }))
+  })
+
+  it('shows Teacher summary rows', () => {
+    render(<AttendanceAdvanced />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Teacher' }))
+    expect(screen.getByText('Meera Krishnan')).toBeInTheDocument()
+  })
+
+  it('shows the Ranges rollup and can drill into Records', async () => {
+    render(<AttendanceAdvanced />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ranges' }))
+    expect(screen.getByText('90%')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'View matching records' }))
+    await waitFor(() => expect(advancedFilters).toHaveBeenLastCalledWith(expect.objectContaining({
+      preset: 'last_30_days',
     })))
   })
 })

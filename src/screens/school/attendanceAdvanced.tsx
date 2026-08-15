@@ -1,8 +1,14 @@
 import { useMemo, useState } from 'react'
-import { Badge, Btn, Card, Empty, Input, Search, Select, type BadgeTone } from '@/components/ui'
+import { Badge, Btn, Card, Empty, Input, Kpi, Search, Segmented, Select, type BadgeTone } from '@/components/ui'
 import { useClasses } from '@/api/hooks/useClasses'
 import { useTeachers } from '@/api/hooks/useTeachers'
-import { usePeriodAttendanceAdvanced } from '@/api/hooks/usePeriodAttendanceAdvanced'
+import {
+  usePeriodAttendanceAdvanced,
+  usePeriodAttendanceClassDaySummary,
+  usePeriodAttendanceSubjectSummaries,
+  usePeriodAttendanceTeacherSummaries,
+  usePeriodAttendanceRangeSummary,
+} from '@/api/hooks/usePeriodAttendanceAdvanced'
 import type {
   PeriodAttendanceAdvancedFilters,
   PeriodAttendanceAdvancedRow,
@@ -21,6 +27,30 @@ const PRESET_OPTIONS = [
   { value: 'this_month', label: 'This month' },
   { value: 'custom', label: 'Custom range' },
 ]
+
+const SUBVIEW_OPTIONS = [
+  { value: 'records', label: 'Records' },
+  { value: 'class', label: 'Class' },
+  { value: 'subject', label: 'Subject' },
+  { value: 'teacher', label: 'Teacher' },
+  { value: 'ranges', label: 'Ranges' },
+]
+
+const RANGE_PRESET_OPTIONS = [
+  { value: 'this_week', label: 'This week' },
+  { value: 'this_month', label: 'This month' },
+  { value: 'last_30_days', label: 'Last 30 days' },
+  { value: 'last_60_days', label: 'Last 60 days' },
+  { value: 'last_90_days', label: 'Last 90 days' },
+]
+
+function pct(value: number | null): string {
+  return value == null ? '—' : `${Math.round(value)}%`
+}
+
+function today(): string {
+  return new Date().toISOString().slice(0, 10)
+}
 
 const STATUS_OPTIONS = [
   { value: '', label: 'All statuses' },
@@ -72,10 +102,30 @@ function markedAt(value?: string | null): string {
 
 export function AttendanceAdvanced() {
   const [filters, setFilters] = useState<PeriodAttendanceAdvancedFilters>(DEFAULT_FILTERS)
+  const [subview, setSubview] = useState<'records' | 'class' | 'subject' | 'teacher' | 'ranges'>('records')
+  const [summaryClassId, setSummaryClassId] = useState('')
+  const [summaryDate, setSummaryDate] = useState(today())
+  const [summaryPreset, setSummaryPreset] = useState('last_30_days')
+  const [rangeSubject, setRangeSubject] = useState('')
+  const [rangeTeacherId, setRangeTeacherId] = useState('')
   const classesQ = useClasses()
   const teachersQ = useTeachers()
   const queryFilters = compactFilters(filters)
-  const attendanceQ = usePeriodAttendanceAdvanced(queryFilters)
+  const attendanceQ = usePeriodAttendanceAdvanced(queryFilters, subview === 'records')
+  const classDaySummaryQ = usePeriodAttendanceClassDaySummary(summaryClassId, summaryDate, subview === 'class')
+  const subjectSummariesQ = usePeriodAttendanceSubjectSummaries(
+    summaryClassId, { preset: summaryPreset }, subview === 'subject' && Boolean(summaryClassId),
+  )
+  const teacherSummariesQ = usePeriodAttendanceTeacherSummaries({ preset: summaryPreset }, subview === 'teacher')
+  const rangeSummaryQ = usePeriodAttendanceRangeSummary(
+    {
+      preset: summaryPreset,
+      classId: summaryClassId || undefined,
+      subject: rangeSubject || undefined,
+      teacherId: rangeTeacherId || undefined,
+    },
+    subview === 'ranges',
+  )
 
   const classes = classesQ.data ?? []
   const teachers = teachersQ.data ?? []
@@ -114,6 +164,11 @@ export function AttendanceAdvanced() {
     setFilters((current) => ({ ...current, grade, classId: undefined, page: 1 }))
   }
 
+  const viewRecordsFor = (extra: Partial<PeriodAttendanceAdvancedFilters>) => {
+    setFilters({ ...DEFAULT_FILTERS, preset: summaryPreset, ...extra })
+    setSubview('records')
+  }
+
   return (
     <Card pad={false}>
       <div className="sm-att-adv-head">
@@ -124,6 +179,12 @@ export function AttendanceAdvanced() {
         <span className="t-sm muted">{totalCount} record{totalCount === 1 ? '' : 's'}</span>
       </div>
 
+      <div className="sm-att-adv-subnav">
+        <Segmented value={subview} onChange={(v) => setSubview(v as typeof subview)} options={SUBVIEW_OPTIONS} />
+      </div>
+
+      {subview === 'records' && (
+      <>
       <div className="sm-att-adv-filters">
         <label className="sm-att-adv-field">
           <span>Date preset</span>
@@ -312,6 +373,274 @@ export function AttendanceAdvanced() {
           </Btn>
         </div>
       </div>
+      </>
+      )}
+
+      {subview === 'class' && (
+        <div className="sm-att-adv-panel">
+          <div className="sm-att-adv-filters">
+            <label className="sm-att-adv-field">
+              <span>Section</span>
+              <Select
+                aria-label="Class for summary"
+                value={summaryClassId}
+                options={[{ value: '', label: 'Choose a section…' }, ...classes.map((item) => ({
+                  value: item.id ?? '', label: item.name || `${item.grade}-${item.section}`,
+                }))]}
+                onChange={(event) => setSummaryClassId(event.target.value)}
+              />
+            </label>
+            <label className="sm-att-adv-field">
+              <span>Date</span>
+              <Input aria-label="Summary date" type="date" value={summaryDate} onChange={(event) => setSummaryDate(event.target.value)} />
+            </label>
+          </div>
+          {!summaryClassId ? (
+            <Empty icon="calendar" title="Choose a section to see its day summary." />
+          ) : classDaySummaryQ.isLoading ? (
+            <div className="sm-att-adv-state t-sm muted">Loading class summary…</div>
+          ) : classDaySummaryQ.isError ? (
+            <div className="sm-att-adv-state">
+              <div>
+                <div className="fw6">Could not load class summary.</div>
+                <div className="t-sm muted">{classDaySummaryQ.error instanceof Error ? classDaySummaryQ.error.message : 'Please try again.'}</div>
+              </div>
+              <Btn variant="secondary" size="sm" onClick={() => classDaySummaryQ.refetch()}>Retry</Btn>
+            </div>
+          ) : classDaySummaryQ.data && (
+            <div className="sm-kpi-grid">
+              <Kpi icon="checkCircle" label="Attendance %" value={pct(classDaySummaryQ.data.attendancePercentage)} />
+              <Kpi icon="users" label="Total students" value={classDaySummaryQ.data.totalStudents} />
+              <Kpi icon="check" label="Present" value={classDaySummaryQ.data.present} />
+              <Kpi icon="x" label="Absent" value={classDaySummaryQ.data.absent} />
+              <Kpi icon="clock" label="Late" value={classDaySummaryQ.data.late} />
+              <Kpi icon="calendar" label="Leave" value={classDaySummaryQ.data.leave} />
+              <Kpi
+                icon="list"
+                label="Periods marked / pending"
+                value={`${classDaySummaryQ.data.markedPeriods} / ${classDaySummaryQ.data.pendingPeriods}`}
+                foot={`${classDaySummaryQ.data.totalPeriods} expected · ${classDaySummaryQ.data.notMarked} not marked`}
+              />
+            </div>
+          )}
+          {summaryClassId && (
+            <Btn variant="secondary" size="sm" onClick={() => viewRecordsFor({ classId: summaryClassId, from: summaryDate, to: summaryDate, preset: 'custom' })}>
+              View records
+            </Btn>
+          )}
+        </div>
+      )}
+
+      {subview === 'subject' && (
+        <div className="sm-att-adv-panel">
+          <div className="sm-att-adv-filters">
+            <label className="sm-att-adv-field">
+              <span>Section</span>
+              <Select
+                aria-label="Class for subject summary"
+                value={summaryClassId}
+                options={[{ value: '', label: 'Choose a section…' }, ...classes.map((item) => ({
+                  value: item.id ?? '', label: item.name || `${item.grade}-${item.section}`,
+                }))]}
+                onChange={(event) => setSummaryClassId(event.target.value)}
+              />
+            </label>
+            <label className="sm-att-adv-field">
+              <span>Range</span>
+              <Select
+                aria-label="Subject summary range"
+                value={summaryPreset}
+                options={RANGE_PRESET_OPTIONS}
+                onChange={(event) => setSummaryPreset(event.target.value)}
+              />
+            </label>
+          </div>
+          {!summaryClassId ? (
+            <Empty icon="book" title="Choose a section to see its subject breakdown." />
+          ) : subjectSummariesQ.isLoading ? (
+            <div className="sm-att-adv-state t-sm muted">Loading subject summary…</div>
+          ) : subjectSummariesQ.isError ? (
+            <div className="sm-att-adv-state">
+              <div>
+                <div className="fw6">Could not load subject summary.</div>
+                <div className="t-sm muted">{subjectSummariesQ.error instanceof Error ? subjectSummariesQ.error.message : 'Please try again.'}</div>
+              </div>
+              <Btn variant="secondary" size="sm" onClick={() => subjectSummariesQ.refetch()}>Retry</Btn>
+            </div>
+          ) : (
+            <div className="sm-att-adv-table-wrap">
+              <table className="sm-table sm-att-adv-table">
+                <thead>
+                  <tr>
+                    <th>Subject</th><th>Teacher</th><th>Periods</th><th>Marked</th><th>Pending</th>
+                    <th>Present</th><th>Absent</th><th>Late</th><th>Attendance %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {subjectSummariesQ.data?.length ? subjectSummariesQ.data.map((row) => (
+                    <tr
+                      key={row.subject}
+                      className="sm-att-adv-row-click"
+                      onClick={() => viewRecordsFor({ classId: summaryClassId, subject: row.subject, preset: summaryPreset })}
+                    >
+                      <td><span className="fw6">{row.subject}</span></td>
+                      <td>{row.teacherName || '—'}</td>
+                      <td>{row.periods}</td>
+                      <td>{row.marked}</td>
+                      <td>{row.pending}</td>
+                      <td>{row.present}</td>
+                      <td>{row.absent}</td>
+                      <td>{row.late}</td>
+                      <td>{pct(row.attendancePercentage)}</td>
+                    </tr>
+                  )) : (
+                    <tr><td colSpan={9}><Empty icon="book" title="No subject records for this range." /></td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {subview === 'teacher' && (
+        <div className="sm-att-adv-panel">
+          <div className="sm-att-adv-filters">
+            <label className="sm-att-adv-field">
+              <span>Range</span>
+              <Select
+                aria-label="Teacher summary range"
+                value={summaryPreset}
+                options={RANGE_PRESET_OPTIONS}
+                onChange={(event) => setSummaryPreset(event.target.value)}
+              />
+            </label>
+          </div>
+          {teacherSummariesQ.isLoading ? (
+            <div className="sm-att-adv-state t-sm muted">Loading teacher summary…</div>
+          ) : teacherSummariesQ.isError ? (
+            <div className="sm-att-adv-state">
+              <div>
+                <div className="fw6">Could not load teacher summary.</div>
+                <div className="t-sm muted">{teacherSummariesQ.error instanceof Error ? teacherSummariesQ.error.message : 'Please try again.'}</div>
+              </div>
+              <Btn variant="secondary" size="sm" onClick={() => teacherSummariesQ.refetch()}>Retry</Btn>
+            </div>
+          ) : (
+            <div className="sm-att-adv-table-wrap">
+              <table className="sm-table sm-att-adv-table">
+                <thead>
+                  <tr>
+                    <th>Teacher</th><th>Classes</th><th>Sections</th><th>Subjects</th>
+                    <th>Expected</th><th>Marked</th><th>Pending</th>
+                    <th>Teacher</th><th>Staff</th><th>Principal</th><th>Admin</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {teacherSummariesQ.data?.length ? teacherSummariesQ.data.map((row) => (
+                    <tr
+                      key={row.teacherId}
+                      className="sm-att-adv-row-click"
+                      onClick={() => viewRecordsFor({ assignedTeacherId: row.teacherId, preset: summaryPreset })}
+                    >
+                      <td><span className="fw6">{row.teacherName}</span></td>
+                      <td>{row.classes}</td>
+                      <td>{row.sections}</td>
+                      <td>{row.subjects}</td>
+                      <td>{row.expectedPeriods}</td>
+                      <td>{row.markedPeriods}</td>
+                      <td>{row.pendingPeriods}</td>
+                      <td>{row.teacherMarked}</td>
+                      <td>{row.staffMarked}</td>
+                      <td>{row.principalMarked}</td>
+                      <td>{row.adminMarked}</td>
+                    </tr>
+                  )) : (
+                    <tr><td colSpan={11}><Empty icon="users" title="No teacher records for this range." /></td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {subview === 'ranges' && (
+        <div className="sm-att-adv-panel">
+          <div className="sm-att-adv-filters">
+            <label className="sm-att-adv-field">
+              <span>Range</span>
+              <Select
+                aria-label="Range preset"
+                value={summaryPreset}
+                options={RANGE_PRESET_OPTIONS}
+                onChange={(event) => setSummaryPreset(event.target.value)}
+              />
+            </label>
+            <label className="sm-att-adv-field">
+              <span>Section</span>
+              <Select
+                aria-label="Range section filter"
+                value={summaryClassId}
+                options={[{ value: '', label: 'All sections' }, ...classes.map((item) => ({
+                  value: item.id ?? '', label: item.name || `${item.grade}-${item.section}`,
+                }))]}
+                onChange={(event) => setSummaryClassId(event.target.value)}
+              />
+            </label>
+            <label className="sm-att-adv-field">
+              <span>Subject</span>
+              <Select
+                aria-label="Range subject filter"
+                value={rangeSubject}
+                options={[{ value: '', label: 'All subjects' }, ...subjects.map((subject) => ({ value: subject, label: subject }))]}
+                onChange={(event) => setRangeSubject(event.target.value)}
+              />
+            </label>
+            <label className="sm-att-adv-field">
+              <span>Teacher</span>
+              <Select
+                aria-label="Range teacher filter"
+                value={rangeTeacherId}
+                options={[{ value: '', label: 'All teachers' }, ...teachers.map((teacher) => ({ value: teacher.id, label: teacher.name }))]}
+                onChange={(event) => setRangeTeacherId(event.target.value)}
+              />
+            </label>
+          </div>
+          {rangeSummaryQ.isLoading ? (
+            <div className="sm-att-adv-state t-sm muted">Loading range rollup…</div>
+          ) : rangeSummaryQ.isError ? (
+            <div className="sm-att-adv-state">
+              <div>
+                <div className="fw6">Could not load range rollup.</div>
+                <div className="t-sm muted">{rangeSummaryQ.error instanceof Error ? rangeSummaryQ.error.message : 'Please try again.'}</div>
+              </div>
+              <Btn variant="secondary" size="sm" onClick={() => rangeSummaryQ.refetch()}>Retry</Btn>
+            </div>
+          ) : rangeSummaryQ.data && (
+            <div className="sm-kpi-grid">
+              <Kpi icon="checkCircle" label="Attendance %" value={pct(rangeSummaryQ.data.attendancePercentage)} />
+              <Kpi icon="list" label="Marked periods" value={rangeSummaryQ.data.totalMarkedPeriods} />
+              <Kpi icon="check" label="Present" value={rangeSummaryQ.data.present} />
+              <Kpi icon="x" label="Absent" value={rangeSummaryQ.data.absent} />
+              <Kpi icon="clock" label="Late" value={rangeSummaryQ.data.late} />
+              <Kpi icon="calendar" label="Leave" value={rangeSummaryQ.data.leave} />
+            </div>
+          )}
+          <Btn
+            variant="secondary"
+            size="sm"
+            onClick={() => viewRecordsFor({
+              preset: summaryPreset,
+              classId: summaryClassId || undefined,
+              subject: rangeSubject || undefined,
+              assignedTeacherId: rangeTeacherId || undefined,
+            })}
+          >
+            View matching records
+          </Btn>
+        </div>
+      )}
     </Card>
   )
 }
