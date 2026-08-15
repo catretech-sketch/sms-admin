@@ -5,6 +5,7 @@ import {
   listPeriodAttendanceSubjectSummaries,
   listPeriodAttendanceTeacherSummaries,
   getPeriodAttendanceRangeSummary,
+  getPeriodAttendanceAudit,
 } from './periodAttendanceAdvanced'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -237,5 +238,74 @@ describe('getPeriodAttendanceRangeSummary', () => {
     expect(url).toContain('subject=Math')
     expect(url).toContain('teacherId=t1')
     expect(rollup).toMatchObject({ totalMarkedPeriods: 120, present: 100, absent: 10, late: 8, leave: 2, attendancePercentage: 90 })
+  })
+})
+
+describe('listPeriodAttendanceAdvanced geo/updatedBy fields', () => {
+  it('sends geoFenceStatus and maps geo/updatedBy columns', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      data: {
+        items: [{
+          ...wireRow,
+          geo_fence_status: 'outside',
+          geo_distance_meters: 42,
+          geo_captured_at: '2026-08-13T09:05:30Z',
+          updated_by: 'u2',
+          updated_by_name: 'Principal Rao',
+          updated_by_role: 'principal',
+          updated_at: '2026-08-13T09:06:00Z',
+        }],
+        total_count: 1,
+        page: 1,
+        page_size: 25,
+      },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const page = await listPeriodAttendanceAdvanced({ geoFenceStatus: 'outside' })
+
+    const url = String(fetchMock.mock.calls[0][0])
+    expect(url).toContain('geoFenceStatus=outside')
+    expect(page.items[0]).toMatchObject({
+      geoFenceStatus: 'outside',
+      geoDistanceMeters: 42,
+      geoCapturedAt: '2026-08-13T09:05:30Z',
+      updatedBy: 'u2',
+      updatedByName: 'Principal Rao',
+      updatedByRole: 'principal',
+      updatedAt: '2026-08-13T09:06:00Z',
+    })
+  })
+})
+
+describe('getPeriodAttendanceAudit', () => {
+  it('GETs the audit trail for a record, newest first', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      data: [
+        {
+          id: 'a2', record_id: 'par1', class_id: 'c1', student_id: 's1', date: '2026-08-13',
+          period: 2, subject: 'Math', from_status: 'present', to_status: 'absent',
+          actor_id: 'u2', actor_name: 'Principal Rao', actor_role: 'principal', at: '2026-08-13T09:06:00Z',
+        },
+        {
+          id: 'a1', record_id: 'par1', class_id: 'c1', student_id: 's1', date: '2026-08-13',
+          period: 2, subject: 'Math', from_status: null, to_status: 'present',
+          actor_id: 'u1', actor_name: 'Ravi Sharma', actor_role: 'teacher', at: '2026-08-13T09:05:00Z',
+        },
+      ],
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const rows = await getPeriodAttendanceAudit('par1')
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/attendance/period-records/par1/audit')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ fromStatus: 'present', toStatus: 'absent', actorName: 'Principal Rao' })
+    expect(rows[1]).toMatchObject({ fromStatus: null, toStatus: 'present', actorName: 'Ravi Sharma' })
+  })
+
+  it('returns an empty array when the response is not an array', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: null })))
+    expect(await getPeriodAttendanceAudit('par1')).toEqual([])
   })
 })

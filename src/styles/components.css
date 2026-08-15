@@ -491,6 +491,8 @@ html[dir=rtl] .sm-toasts{ right:auto; left:22px; }
 .sm-att-adv-panel .sm-att-adv-filters{ padding:0; border:0; background:transparent; }
 .sm-att-adv-row-click{ cursor:pointer; }
 .sm-att-adv-row-click:hover{ background:var(--surface-2); }
+.sm-att-adv-audit-row{ padding:10px 0; border-bottom:1px solid var(--border); }
+.sm-att-adv-audit-row:last-child{ border-bottom:0; }
 
 /* ---- Report card (branded sheet) ---- */
 .sm-report-card{

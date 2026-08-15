@@ -5,6 +5,7 @@ import {
   listPeriodAttendanceSubjectSummaries,
   listPeriodAttendanceTeacherSummaries,
   getPeriodAttendanceRangeSummary,
+  getPeriodAttendanceAudit,
   type PeriodAttendanceAdvancedFilters,
   type PeriodAttendanceAdvancedPage,
   type AdvClassDaySummary,
@@ -12,6 +13,7 @@ import {
   type AdvTeacherSummaryRow,
   type AdvRangeRollup,
   type PeriodAttendanceRangeFilters,
+  type PeriodAttendanceAuditRow,
 } from '../periodAttendanceAdvanced'
 import { queryKeys } from '../queryKeys'
 
@@ -79,6 +81,19 @@ export function usePeriodAttendanceRangeSummary(
     queryKey: queryKeys.attendance.rangeSummary(filters),
     queryFn: () => getPeriodAttendanceRangeSummary(filters),
     enabled,
+    staleTime: 15_000,
+  })
+}
+
+/** Edit history for a single period attendance record (Advanced tab audit drawer). */
+export function usePeriodAttendanceAudit(
+  recordId: string,
+  enabled = true,
+): UseQueryResult<PeriodAttendanceAuditRow[]> {
+  return useQuery({
+    queryKey: queryKeys.attendance.audit(recordId),
+    queryFn: () => getPeriodAttendanceAudit(recordId),
+    enabled: enabled && Boolean(recordId),
     staleTime: 15_000,
   })
 }

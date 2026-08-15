@@ -85,6 +85,19 @@ vi.mock('@/api/hooks/usePeriodAttendanceAdvanced', () => ({
     error: null,
     refetch: vi.fn(),
   }),
+  usePeriodAttendanceAudit: () => ({
+    data: [
+      {
+        id: 'a2', recordId: 'mark-1', classId: 'class-1', studentId: 'student-1', date: '2026-08-13',
+        period: 2, subject: 'Mathematics', fromStatus: 'present', toStatus: 'absent',
+        actorId: 'user-2', actorName: 'Principal Rao', actorRole: 'principal', at: '2026-08-13T11:00:00Z',
+      },
+    ],
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
 }))
 
 vi.mock('@/api/hooks/useClasses', () => ({
@@ -137,7 +150,7 @@ describe('AttendanceAdvanced', () => {
       pageSize: 25,
     }))
     expect(screen.getByText('Aarav Shah')).toBeInTheDocument()
-    expect(screen.getByText('Not required')).toBeInTheDocument()
+    expect(screen.getAllByText('Not required').length).toBeGreaterThan(0)
 
     fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'absent' } })
 
@@ -198,6 +211,20 @@ describe('AttendanceAdvanced', () => {
       markedByRole: 'staff',
       page: 1,
     })))
+  })
+
+  it('forwards a geo-fence filter and opens the audit history drawer', async () => {
+    render(<AttendanceAdvanced />)
+
+    fireEvent.change(screen.getByLabelText('Geo-fence'), { target: { value: 'outside' } })
+    await waitFor(() => expect(advancedFilters).toHaveBeenLastCalledWith(expect.objectContaining({
+      geoFenceStatus: 'outside',
+      page: 1,
+    })))
+
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    expect(screen.getByText('Attendance history')).toBeInTheDocument()
+    expect(screen.getByText('Principal Rao · Principal')).toBeInTheDocument()
   })
 })
 

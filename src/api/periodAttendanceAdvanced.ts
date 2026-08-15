@@ -18,6 +18,7 @@ export type PeriodAttendanceAdvancedFilters = {
   q?: string
   page?: number
   pageSize?: number
+  geoFenceStatus?: string
 }
 
 export type PeriodAttendanceAdvancedRow = {
@@ -44,6 +45,12 @@ export type PeriodAttendanceAdvancedRow = {
   markedByRole?: string | null
   markedAt?: string | null
   geoFenceStatus: string
+  geoDistanceMeters?: number | null
+  geoCapturedAt?: string | null
+  updatedBy?: string | null
+  updatedByName?: string | null
+  updatedByRole?: string | null
+  updatedAt?: string | null
 }
 
 export type PeriodAttendanceAdvancedPage = {
@@ -70,6 +77,7 @@ function filterQuery(filters: PeriodAttendanceAdvancedFilters): Record<string, s
     q: filters.q,
     page: filters.page,
     pageSize: filters.pageSize,
+    geoFenceStatus: filters.geoFenceStatus,
   }
 }
 
@@ -99,6 +107,12 @@ function toRow(raw: Record<string, unknown>): PeriodAttendanceAdvancedRow {
     markedByRole: row.markedByRole != null ? String(row.markedByRole) : null,
     markedAt: row.markedAt != null ? String(row.markedAt) : null,
     geoFenceStatus: String(row.geoFenceStatus ?? 'not_required'),
+    geoDistanceMeters: row.geoDistanceMeters != null ? Number(row.geoDistanceMeters) : null,
+    geoCapturedAt: row.geoCapturedAt != null ? String(row.geoCapturedAt) : null,
+    updatedBy: row.updatedBy != null ? String(row.updatedBy) : null,
+    updatedByName: row.updatedByName != null ? String(row.updatedByName) : null,
+    updatedByRole: row.updatedByRole != null ? String(row.updatedByRole) : null,
+    updatedAt: row.updatedAt != null ? String(row.updatedAt) : null,
   }
 }
 
@@ -295,4 +309,45 @@ export async function getPeriodAttendanceRangeSummary(
     },
   })
   return toRangeRollup(wire)
+}
+
+export type PeriodAttendanceAuditRow = {
+  id: string
+  recordId: string
+  classId: string
+  studentId: string
+  date: string
+  period: number
+  subject: string
+  fromStatus: string | null
+  toStatus: string
+  actorId: string | null
+  actorName: string | null
+  actorRole: string | null
+  at: string
+}
+
+function toAuditRow(raw: Record<string, unknown>): PeriodAttendanceAuditRow {
+  const row = snakeToCamel<Record<string, unknown>>(raw)
+  return {
+    id: String(row.id ?? ''),
+    recordId: String(row.recordId ?? ''),
+    classId: String(row.classId ?? ''),
+    studentId: String(row.studentId ?? ''),
+    date: String(row.date ?? ''),
+    period: Number(row.period) || 0,
+    subject: String(row.subject ?? ''),
+    fromStatus: row.fromStatus != null ? String(row.fromStatus) : null,
+    toStatus: String(row.toStatus ?? ''),
+    actorId: row.actorId != null ? String(row.actorId) : null,
+    actorName: row.actorName != null ? String(row.actorName) : null,
+    actorRole: row.actorRole != null ? String(row.actorRole) : null,
+    at: String(row.at ?? ''),
+  }
+}
+
+/** Edit history for a single period attendance record (newest first). */
+export async function getPeriodAttendanceAudit(recordId: string): Promise<PeriodAttendanceAuditRow[]> {
+  const wire = await request<Record<string, unknown>[]>(`/attendance/period-records/${recordId}/audit`)
+  return Array.isArray(wire) ? wire.map(toAuditRow) : []
 }

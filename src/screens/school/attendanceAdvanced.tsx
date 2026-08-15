@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Badge, Btn, Card, Empty, Input, Kpi, Search, Segmented, Select, type BadgeTone } from '@/components/ui'
+import { Badge, Btn, Card, Drawer, Empty, Input, Kpi, Search, Segmented, Select, type BadgeTone } from '@/components/ui'
 import { useClasses } from '@/api/hooks/useClasses'
 import { useTeachers } from '@/api/hooks/useTeachers'
 import {
@@ -8,6 +8,7 @@ import {
   usePeriodAttendanceSubjectSummaries,
   usePeriodAttendanceTeacherSummaries,
   usePeriodAttendanceRangeSummary,
+  usePeriodAttendanceAudit,
 } from '@/api/hooks/usePeriodAttendanceAdvanced'
 import type {
   PeriodAttendanceAdvancedFilters,
@@ -70,6 +71,14 @@ const ROLE_OPTIONS = [
   { value: 'staff', label: 'Staff' },
 ]
 
+const GEO_OPTIONS = [
+  { value: '', label: 'All geo statuses' },
+  { value: 'not_required', label: 'Not required' },
+  { value: 'valid', label: 'Valid' },
+  { value: 'outside', label: 'Outside fence' },
+  { value: 'unavailable', label: 'Unavailable' },
+]
+
 function compactFilters(filters: PeriodAttendanceAdvancedFilters): PeriodAttendanceAdvancedFilters {
   return Object.fromEntries(
     Object.entries(filters).filter(([, value]) => value !== '' && value != null),
@@ -100,6 +109,12 @@ function markedAt(value?: string | null): string {
   return date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
 }
 
+function geoDisplay(row: PeriodAttendanceAdvancedRow): string {
+  if (row.geoFenceStatus === 'not_required') return 'Not required'
+  const label = titleCase(row.geoFenceStatus)
+  return row.geoDistanceMeters != null ? `${label} · ${row.geoDistanceMeters}m` : label
+}
+
 export function AttendanceAdvanced() {
   const [filters, setFilters] = useState<PeriodAttendanceAdvancedFilters>(DEFAULT_FILTERS)
   const [subview, setSubview] = useState<'records' | 'class' | 'subject' | 'teacher' | 'ranges'>('records')
@@ -108,6 +123,7 @@ export function AttendanceAdvanced() {
   const [summaryPreset, setSummaryPreset] = useState('last_30_days')
   const [rangeSubject, setRangeSubject] = useState('')
   const [rangeTeacherId, setRangeTeacherId] = useState('')
+  const [auditRecordId, setAuditRecordId] = useState<string | null>(null)
   const classesQ = useClasses()
   const teachersQ = useTeachers()
   const queryFilters = compactFilters(filters)
@@ -126,6 +142,7 @@ export function AttendanceAdvanced() {
     },
     subview === 'ranges',
   )
+  const auditQ = usePeriodAttendanceAudit(auditRecordId ?? '', Boolean(auditRecordId))
 
   const classes = classesQ.data ?? []
   const teachers = teachersQ.data ?? []
@@ -170,6 +187,7 @@ export function AttendanceAdvanced() {
   }
 
   return (
+    <>
     <Card pad={false}>
       <div className="sm-att-adv-head">
         <div>
@@ -282,6 +300,15 @@ export function AttendanceAdvanced() {
             onChange={(event) => update('status', event.target.value)}
           />
         </label>
+        <label className="sm-att-adv-field">
+          <span>Geo-fence</span>
+          <Select
+            aria-label="Geo-fence"
+            value={filters.geoFenceStatus ?? ''}
+            options={GEO_OPTIONS}
+            onChange={(event) => update('geoFenceStatus', event.target.value)}
+          />
+        </label>
         <label className="sm-att-adv-field sm-att-adv-search">
           <span>Student</span>
           <Search
@@ -320,6 +347,7 @@ export function AttendanceAdvanced() {
                 <th>Marked By Role</th>
                 <th>Marked At</th>
                 <th>Geo-Fence</th>
+                <th>History</th>
               </tr>
             </thead>
             <tbody>
@@ -337,11 +365,14 @@ export function AttendanceAdvanced() {
                   <td>{row.markedByName || row.markedBy || '—'}</td>
                   <td>{titleCase(row.markedByRole)}</td>
                   <td>{markedAt(row.markedAt)}</td>
-                  <td>{row.geoFenceStatus === 'not_required' ? 'Not required' : titleCase(row.geoFenceStatus)}</td>
+                  <td>{geoDisplay(row)}</td>
+                  <td>
+                    <Btn variant="secondary" size="sm" onClick={() => setAuditRecordId(row.id)}>History</Btn>
+                  </td>
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={13}>
+                  <td colSpan={14}>
                     <Empty icon="calendar" title="No period attendance for these filters." />
                   </td>
                 </tr>
@@ -642,5 +673,47 @@ export function AttendanceAdvanced() {
         </div>
       )}
     </Card>
+
+    <Drawer
+      open={!!auditRecordId}
+      onClose={() => setAuditRecordId(null)}
+      icon="clock"
+      title="Attendance history"
+      sub={auditRecordId ? `Record ${auditRecordId}` : undefined}
+      width={420}
+    >
+      {auditQ.isLoading ? (
+        <div className="t-sm muted">Loading history…</div>
+      ) : auditQ.isError ? (
+        <div className="col gap8">
+          <div className="t-sm">Could not load history.</div>
+          <Btn variant="secondary" size="sm" onClick={() => auditQ.refetch()}>Retry</Btn>
+        </div>
+      ) : auditQ.data?.length ? (
+        <div className="col gap12">
+          {auditQ.data.map((entry) => (
+            <div key={entry.id} className="sm-att-adv-audit-row">
+              <div className="row ai-center gap8">
+                {entry.fromStatus ? (
+                  <>
+                    <Badge tone={statusTone(entry.fromStatus)}>{titleCase(entry.fromStatus)}</Badge>
+                    <span className="t-sm muted">→</span>
+                  </>
+                ) : null}
+                <Badge tone={statusTone(entry.toStatus)}>{titleCase(entry.toStatus)}</Badge>
+              </div>
+              <div className="t-sm">
+                {entry.actorName || entry.actorId || 'Unknown'}
+                {entry.actorRole ? ` · ${titleCase(entry.actorRole)}` : ''}
+              </div>
+              <div className="t-xs muted">{markedAt(entry.at)}</div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <Empty icon="clock" title="No edit history for this record." />
+      )}
+    </Drawer>
+    </>
   )
 }

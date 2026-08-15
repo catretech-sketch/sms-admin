@@ -67,6 +67,7 @@ export const queryKeys = {
       ['attendance', 'advancedTeacherSummaries', tenantScope(), filters] as const,
     rangeSummary: (filters: import('./periodAttendanceAdvanced').PeriodAttendanceRangeFilters = {}) =>
       ['attendance', 'advancedRangeSummary', tenantScope(), filters] as const,
+    audit: (recordId: string) => ['attendance', 'advancedAudit', tenantScope(), recordId] as const,
   },
   exams: {
     all: ['exams'] as const,
