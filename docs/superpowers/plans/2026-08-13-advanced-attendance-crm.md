@@ -58,7 +58,7 @@
 
 ## Phase 1 — Advanced list API + Advanced tab
 
-> **Status note (2026-08-15):** Tasks 4–5 (CRM: `sms-admin`) confirmed done in this repo — commits `95c359b`, `bd178d3`, `6984d18`. Tasks 1–3 (backend: `sms-backend`) are outside this repo and unverified from here; check the `sms-backend` checkout before treating Phase 1 as fully complete.
+> **Status note (2026-08-15):** Tasks 1–5 all confirmed done — CRM (`sms-admin`) via commits `95c359b`, `bd178d3`, `6984d18`; backend (`sms-backend`) via commits `a6fd1be`, `ae75297`, `6f8fb4a`, `a7f2757`, `cc8ff7c` (date presets, query repository, indexes, and `GET /v1/attendance/period-records` all present and tested). Phase 1 is fully complete.
 
 ### Task 1: Date preset helper (backend)
 
@@ -69,7 +69,7 @@
 **Interfaces:**
 - Produces: `PeriodAttendanceDatePresets.Resolve(string? preset, DateOnly? from, DateOnly? to, DateOnly today) → (DateOnly From, DateOnly To)`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```csharp
 public class PeriodAttendanceDatePresetsTests
@@ -103,19 +103,19 @@ public class PeriodAttendanceDatePresetsTests
 }
 ```
 
-- [ ] **Step 2: Run test — expect FAIL** (type missing)
+- [x] **Step 2: Run test — expect FAIL** (type missing)
 
 ```bash
 dotnet test tests/Sms.Tests.Unit/Sms.Tests.Unit.csproj --filter PeriodAttendanceDatePresetsTests
 ```
 
-- [ ] **Step 3: Implement presets**
+- [x] **Step 3: Implement presets**
 
 Support: `today`, `yesterday`, `this_week`, `last_week`, `this_month`, `last_month`, `last_30_days`, `last_60_days`, `last_90_days`. Week = Mon–Sun relative to `today`. If preset null/empty and from/to null → default `today`. If only one of from/to provided → treat missing bound as `today`. Clamp `from <= to`.
 
-- [ ] **Step 4: Run tests — expect PASS**
+- [x] **Step 4: Run tests — expect PASS**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/Sms.Modules.Academics/PeriodAttendanceDatePresets.cs tests/Sms.Tests.Unit/Academics/PeriodAttendanceDatePresetsTests.cs
@@ -185,11 +185,11 @@ public sealed record PeriodAttendanceAdvancedQuery(
     int PageSize);
 ```
 
-- [ ] **Step 1: Add migration indexes** on `(TenantId, Date)`, `(TenantId, ClassId, Date)`, `(TenantId, Subject)`, `(TenantId, MarkedBy)` if missing — keep table schema otherwise unchanged in M0129.
+- [x] **Step 1: Add migration indexes** on `(TenantId, Date)`, `(TenantId, ClassId, Date)`, `(TenantId, Subject)`, `(TenantId, MarkedBy)` if missing — keep table schema otherwise unchanged in M0129.
 
-- [ ] **Step 2: Write failing service/repo test** that builds a query with status=`absent` + subject=`Music` and asserts the repository method exists and returns page shape (integration preferred: seed 2 period rows, filter returns 1).
+- [x] **Step 2: Write failing service/repo test** that builds a query with status=`absent` + subject=`Music` and asserts the repository method exists and returns page shape (integration preferred: seed 2 period rows, filter returns 1).
 
-- [ ] **Step 3: Implement `SearchAsync(PeriodAttendanceAdvancedQuery q, CancellationToken ct)`**
+- [x] **Step 3: Implement `SearchAsync(PeriodAttendanceAdvancedQuery q, CancellationToken ct)`**
 
 Core SQL sketch (adapt to existing day-key / teacher join patterns in `TimetableRepository`):
 
@@ -230,9 +230,9 @@ OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
 
 Clamp `PageSize` to 1–100 (default 25). Page is 1-based.
 
-- [ ] **Step 4: Run tests — PASS**
+- [x] **Step 4: Run tests — PASS**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git commit -m "feat(attendance): add advanced period attendance query repository"
@@ -274,19 +274,19 @@ public Task<IActionResult> ListPeriodRecords(
 
 Controller route: `[Route("v1/attendance")]` on a **new** controller (do not overload geo `AttendanceController` at `v1/me/attendance`). Keep `AttendanceAlertController` routes intact.
 
-- [ ] **Step 1: Failing integration test** — authenticated principal lists rows for tenant; teacher cannot see other teacher’s class rows if AuthZ scopes teachers (if teacher CRM role not used yet, at least leadership 200 + empty filters).
+- [x] **Step 1: Failing integration test** — authenticated principal lists rows for tenant; teacher cannot see other teacher’s class rows if AuthZ scopes teachers (if teacher CRM role not used yet, at least leadership 200 + empty filters).
 
-- [ ] **Step 2: Implement service method** `ListPeriodAttendanceAdvancedAsync(ClaimsPrincipal caller, …)`:
+- [x] **Step 2: Implement service method** `ListPeriodAttendanceAdvancedAsync(ClaimsPrincipal caller, …)`:
   - Resolve date range via presets + school “today”.
   - Require attendance view permission (same gate as other CRM attendance reads).
   - For teacher role: restrict `AssignedTeacherId` or class set to caller’s teacher id (mirror existing period write rules).
   - Never take MarkedBy from a “as user” spoof param for identity — filter `markedBy` is a **search filter**, not identity.
 
-- [ ] **Step 3: Wire DI** for `PeriodAttendanceQueryRepository` if not auto-registered like sibling repos.
+- [x] **Step 3: Wire DI** for `PeriodAttendanceQueryRepository` if not auto-registered like sibling repos.
 
-- [ ] **Step 4: Run integration test — PASS**
+- [x] **Step 4: Run integration test — PASS**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** (plus follow-up fixes `6f8fb4a`, `a7f2757`, `cc8ff7c` for pagination totals, AuthZ scope, and marker role normalization)
 
 ```bash
 git commit -m "feat(attendance): expose GET /v1/attendance/period-records"
@@ -444,11 +444,11 @@ git commit -m "feat(attendance): add Advanced tab list UI without changing mark 
 
 ### Task 6: Phase 1 acceptance gate
 
-- [ ] **Step 1: Manual checklist** against spec §9 Phase 1 (filters combine, Assigned ≠ Marked By, mark page unchanged).
-- [ ] **Step 2: Run** backend unit+integration filters + CRM advanced tests.
-- [ ] **Step 3: Commit** any checklist fixes only if needed.
+- [x] **Step 1: Manual checklist** against spec §9 Phase 1 (filters combine, Assigned ≠ Marked By, mark page unchanged).
+- [x] **Step 2: Run** backend unit+integration filters + CRM advanced tests.
+- [x] **Step 3: Commit** any checklist fixes only if needed.
 
-**Phase 1 done when:** Advanced tab works in CRM against live API; Students mark UI unchanged.
+**Phase 1 done when:** Advanced tab works in CRM against live API; Students mark UI unchanged. ✅ Confirmed 2026-08-15.
 
 ---
 
@@ -485,9 +485,9 @@ public sealed record AdvRangeRollup(
     decimal? AttendancePercentage);
 ```
 
-- [ ] **Step 1: Failing tests** for % using `PeriodAttendanceMath.FromStatusBuckets` on aggregate counts; pending periods = timetable expected − marked for bounded class+date.
-- [ ] **Step 2: Implement** `SummarizeClassDayAsync`, `SummarizeSubjectsAsync`, `SummarizeTeachersAsync`, `SummarizeRangeAsync` (filters: classId, section/grade, studentId, subject, teacherId, from, to).
-- [ ] **Step 3: PASS + commit**
+- [x] **Step 1: Failing tests** for % using `PeriodAttendanceMath.FromStatusBuckets` on aggregate counts; pending periods = timetable expected − marked for bounded class+date.
+- [x] **Step 2: Implement** `SummarizeClassDayAsync`, `SummarizeSubjectsAsync`, `SummarizeTeachersAsync`, `SummarizeRangeAsync` (filters: classId, section/grade, studentId, subject, teacherId, from, to).
+- [x] **Step 3: PASS + commit** (plus fixes `9063fe4`, `0de93ad` for bounding aggregates to timetable sessions and zero-buckets)
 
 ```bash
 git commit -m "feat(attendance): add advanced attendance aggregate queries"
@@ -507,12 +507,14 @@ git commit -m "feat(attendance): add advanced attendance aggregate queries"
 - `GET /v1/attendance/period-records/summary/teachers?from=&to=`
 - `GET /v1/attendance/period-records/summary/range?preset=last_30_days&…`
 
-- [ ] Implement + AuthZ same as list.
-- [ ] Commit: `feat(attendance): expose advanced attendance summary endpoints`
+- [x] Implement + AuthZ same as list.
+- [x] Commit: `feat(attendance): expose advanced attendance summary endpoints` (`0ff2c85` — confirms all four routes present in `PeriodAttendanceQueryController.cs`)
 
 ---
 
 ### Task 9: Advanced tab subviews (CRM)
+
+> **Status note (2026-08-15):** NOT started. `attendanceAdvanced.tsx` still only has the Phase 1 records list/filters (incl. a `markedByRole` filter option, not a subview); no summary API calls, no nested Segmented for Class/Subject/Teacher/Week/Month/Ranges. Backend summary endpoints (Task 8) exist and are ready to consume.
 
 **Files:**
 - Modify: `attendanceAdvanced.tsx` (nested Segmented: Records | Class | Subject | Teacher | Week | Month | Ranges)
@@ -536,6 +538,8 @@ git commit -m "feat(attendance): add advanced attendance aggregate queries"
 ---
 
 ## Phase 3 — Geo columns + audit history
+
+> **Status note (2026-08-15):** NOT started. `M0130` was already used for an unrelated migration (`M0130_ChatMessages_ReadReceipts`), so `PeriodAttendance_Geo_Audit` needs a new migration number. No `PeriodAttendanceAudit` table and no geo columns exist in `sms-backend` yet.
 
 ### Task 11: Migration geo + audit table
 
