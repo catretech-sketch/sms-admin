@@ -409,11 +409,14 @@ describe('Fee structure', () => {
 
     fireEvent.click(within(container).getByRole('button', { name: 'X' }))
     await waitFor(() => {
-      expect(within(container).getAllByRole('spinbutton').length).toBeGreaterThan(0)
+      expect(within(container).getAllByLabelText('X-A Academic amount').length).toBeGreaterThan(0)
     })
 
-    const firstAmount = within(container).getAllByRole('spinbutton')[0] as HTMLInputElement
+    /* Index [0] is the "Same fee for all shown classes" bulk-apply row — use the
+       real per-class cell (also rendered twice: mobile card + desktop table). */
+    const firstAmount = within(container).getAllByLabelText('X-A Academic amount')[0] as HTMLInputElement
     fireEvent.change(firstAmount, { target: { value: '12000' } })
+    fireEvent.blur(firstAmount)
 
     fireEvent.click(within(container).getByRole('button', { name: 'Save & generate' }))
 

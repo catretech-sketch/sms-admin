@@ -154,7 +154,7 @@ function PaymentModal({ invoice, cur, schoolName, schoolCity, studentAdm, logoUr
 
   const [amount, setAmount] = useState(String(invoice.due > 0 ? invoice.due : ''))
   const [mode, setMode] = useState(PAY_MODES[0])
-  const [headId, setHeadId] = useState(FEE_TYPE_ALL)
+  const [headId, setHeadId] = useState(() => (invoice.lines.length === 1 ? invoice.lines[0].headId : FEE_TYPE_ALL))
   const [ref, setRef] = useState('')
   const [chequeNumber, setChequeNumber] = useState('')
   const [chequeBank, setChequeBank] = useState('')
@@ -1103,7 +1103,7 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
                       background: 'var(--surface-2)',
                     }}>
                       <span className="t-xs muted3 fw6" style={{ textTransform: 'uppercase', letterSpacing: '0.04em' }}>View</span>
-                      <div className="row gap6 wrap" role="group" aria-label="Filter by class">
+                      <div className="row gap6 wrap" role="group" aria-label="Filter by grade">
                         {!meta.classGrade && (
                           <Btn
                             type="button"

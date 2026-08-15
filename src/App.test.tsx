@@ -12,7 +12,9 @@ function mockAuth(roles: string[] = ['admin'], tenantId: string | null = 't1', i
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     if (url.includes('/auth/me')) return jsonResponse({ data: { id: 'u1', tenant_id: tenantId, roles, is_platform: isPlatform } })
-    return jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } })
+    if (url.includes('/auth/')) return jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } })
+    /* Any other business endpoint (portfolio schools, plans, fee summary, …) — empty list is enough for smoke routing. */
+    return jsonResponse({ data: [] })
   }))
 }
 

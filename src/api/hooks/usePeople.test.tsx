@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useTeachers } from './useTeachers'
 import { useStaff } from './useStaff'
 
+vi.mock('@/lib/hooks', () => ({ useApp: () => ({ plan: 'platinum' }) }))
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }

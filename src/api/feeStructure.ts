@@ -1,4 +1,4 @@
-import { request } from './client'
+import { request, ApiError } from './client'
 import { snakeToCamel } from './mapper'
 import { tokenStore } from './auth/tokenStore'
 
@@ -121,14 +121,14 @@ function toWire(doc: FeeStructureDocument): Record<string, unknown> {
     ...(doc.id && !doc.id.startsWith('local-') ? { id: doc.id } : {}),
     name: doc.name.trim(),
     academic_year: doc.academicYear.trim(),
-    class_grade: doc.classGrade.trim() || null,
+    class: doc.classGrade.trim() || null,
     section: doc.section.trim() || null,
     currency: doc.currency.trim(),
     effective_from: doc.effectiveFrom.trim(),
     effective_to: doc.effectiveTo?.trim() || null,
     status: doc.status,
     description: doc.description.trim() || null,
-    amounts_json: JSON.stringify(doc.amounts ?? {}),
+    amounts: doc.amounts ?? {},
   }
 }
 
@@ -145,17 +145,39 @@ function fromApiWire(raw: unknown, opts: FeeStructureMetaInput = {}): FeeStructu
   if (!raw || typeof raw !== 'object') return normalizeFeeStructure(raw, opts)
   const row = raw as Record<string, unknown>
   const amountsJson = row.amounts_json ?? row.amountsJson
-  let amounts: unknown = row.amounts
   if (typeof amountsJson === 'string' && amountsJson.trim()) {
+    let amounts: unknown = {}
     try { amounts = JSON.parse(amountsJson) } catch { amounts = {} }
+    return normalizeFeeStructure({ ...row, amounts }, opts)
   }
-  return normalizeFeeStructure({ ...row, amounts }, opts)
+  return normalizeFeeStructure(row, opts)
+}
+
+function readLocalStructure(opts: FeeStructureMetaInput): FeeStructureDocument | null {
+  try {
+    const raw = localStorage.getItem(structureStorageKey())
+    if (!raw) return null
+    return normalizeFeeStructure(JSON.parse(raw), opts)
+  } catch {
+    return null
+  }
+}
+
+function writeLocalStructure(doc: FeeStructureDocument): void {
+  try { localStorage.setItem(structureStorageKey(), JSON.stringify(doc)) } catch { /* ignore */ }
 }
 
 export async function getFeeStructure(opts: FeeStructureMetaInput = {}): Promise<FeeStructureDocument> {
-  const raw = await request<unknown>('/fees/structure')
-  clearLocalStructure()
-  return fromApiWire(raw, opts)
+  try {
+    const raw = await request<unknown>('/fees/structure')
+    clearLocalStructure()
+    return fromApiWire(raw, opts)
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) {
+      return readLocalStructure(opts) ?? { ...defaultFeeStructureMeta(opts), amounts: {} }
+    }
+    throw e
+  }
 }
 
 export async function saveFeeStructure(doc: FeeStructureDocument): Promise<FeeStructureDocument> {
@@ -174,9 +196,18 @@ export async function saveFeeStructure(doc: FeeStructureDocument): Promise<FeeSt
     effectiveFrom: doc.effectiveFrom.trim(),
     description: doc.description.trim(),
   }
-  const wire = await request<unknown>('/fees/structure', { method: 'PUT', body: toWire(normalized) })
-  clearLocalStructure()
-  return fromApiWire(wire, { currency: normalized.currency, academicYear: normalized.academicYear })
+  try {
+    const wire = await request<unknown>('/fees/structure', { method: 'PUT', body: toWire(normalized) })
+    clearLocalStructure()
+    return fromApiWire(wire, { currency: normalized.currency, academicYear: normalized.academicYear })
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) {
+      const saved: FeeStructureDocument = { ...normalized, id: normalized.id ?? `local-${Date.now()}` }
+      writeLocalStructure(saved)
+      return saved
+    }
+    throw e
+  }
 }
 
 /** @deprecated Prefer FeeStructureDocument.amounts — kept for call sites mid-migration. */
