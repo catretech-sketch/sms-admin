@@ -58,6 +58,8 @@
 
 ## Phase 1 — Advanced list API + Advanced tab
 
+> **Status note (2026-08-15):** Tasks 4–5 (CRM: `sms-admin`) confirmed done in this repo — commits `95c359b`, `bd178d3`, `6984d18`. Tasks 1–3 (backend: `sms-backend`) are outside this repo and unverified from here; check the `sms-backend` checkout before treating Phase 1 as fully complete.
+
 ### Task 1: Date preset helper (backend)
 
 **Files:**
@@ -360,13 +362,13 @@ export function listPeriodAttendanceAdvanced(
 ): Promise<PeriodAttendanceAdvancedPage>
 ```
 
-- [ ] **Step 1: Failing client test** — assert `request` called with `/attendance/period-records?...` and snake/camel mapping via existing `request` helper.
+- [x] **Step 1: Failing client test** — assert `request` called with `/attendance/period-records?...` and snake/camel mapping via existing `request` helper.
 
-- [ ] **Step 2: Implement client + `queryKeys.attendance.advanced(filters)` + `usePeriodAttendanceAdvanced(filters)`** (`enabled` when viewer has attendance view).
+- [x] **Step 2: Implement client + `queryKeys.attendance.advanced(filters)` + `usePeriodAttendanceAdvanced(filters)`** (`enabled` when viewer has attendance view).
 
-- [ ] **Step 3: Run** `npm test -- src/api/periodAttendanceAdvanced.test.ts` — PASS
+- [x] **Step 3: Run** `npm test -- src/api/periodAttendanceAdvanced.test.ts` — PASS
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git commit -m "feat(attendance): add CRM client for advanced period attendance list"
@@ -386,7 +388,7 @@ git commit -m "feat(attendance): add CRM client for advanced period attendance l
 - Consumes: `usePeriodAttendanceAdvanced`, `useClasses`, `useTeachers`
 - Produces: `<AttendanceAdvanced />` mounted when `group === 'advanced'`
 
-- [ ] **Step 1: Extend group options only**
+- [x] **Step 1: Extend group options only**
 
 In `attendance.tsx`:
 
@@ -417,7 +419,7 @@ Render:
 
 Do **not** import or alter `attendanceClassWise` internals.
 
-- [ ] **Step 2: Build `AttendanceAdvanced`**
+- [x] **Step 2: Build `AttendanceAdvanced`** (incl. date/class filter edge-case fixes in `6984d18`)
 
 Default filters: `preset: 'today'`, `page: 1`, `pageSize: 25`.
 
@@ -430,9 +432,9 @@ UI blocks:
 
 Optional Phase 1 period panel: when `classId` + single day selected, call existing `useClassDayTimetable` and show period rows with Assigned Teacher + Marked/Pending (derive pending if no rows for that period in current page — or skip panel until Task 6 if too heavy; **prefer include** using day timetable + a lightweight “marked periods” set from list filtered to that class/date).
 
-- [ ] **Step 3: Test** — render Advanced tab label exists; changing status filter updates query key / request (mock). Assert Students mark path still mounts `ClassWiseStudents` when group=students (smoke).
+- [x] **Step 3: Test** — render Advanced tab label exists; changing status filter updates query key / request (mock). Assert Students mark path still mounts `ClassWiseStudents` when group=students (smoke).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git commit -m "feat(attendance): add Advanced tab list UI without changing mark page"
