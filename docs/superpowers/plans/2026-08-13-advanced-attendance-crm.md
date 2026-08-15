@@ -541,7 +541,7 @@ git commit -m "feat(attendance): add advanced attendance aggregate queries"
 
 ## Phase 3 — Geo columns + audit history
 
-> **Status note (2026-08-15):** NOT started. `M0130` was already used for an unrelated migration (`M0130_ChatMessages_ReadReceipts`), so `PeriodAttendance_Geo_Audit` needs a new migration number. No `PeriodAttendanceAudit` table and no geo columns exist in `sms-backend` yet.
+> **Status note (2026-08-15):** DONE. Implemented as `M0139_PeriodAttendance_Geo_Audit` (M0130 was taken; M0139 is the next free number). All of Task 11–12 landed in `sms-backend` commit `bb0c371` and `sms-admin` commit `f93b3bf`.
 
 ### Task 11: Migration geo + audit table
 
@@ -578,8 +578,8 @@ Create.Table("PeriodAttendanceAudit")
 // + RLS policy like PeriodAttendanceRecords
 ```
 
-- [ ] Also alter `PeriodAttendance_BulkUpsert` to set `UpdatedBy` / `UpdatedByRole` and insert audit rows on INSERT/UPDATE (from→to). Do **not** require lat/lng from CRM mark UI.
-- [ ] Commit: `feat(attendance): add geo columns and period attendance audit table`
+- [x] Also alter `PeriodAttendance_BulkUpsert` to set `UpdatedBy` / `UpdatedByRole` and insert audit rows on INSERT/UPDATE (from→to). Do **not** require lat/lng from CRM mark UI. (Audit rows only appended when status actually changes — idempotent re-saves don't spam the trail; two `WHEN MATCHED` MERGE branches aren't valid T-SQL for two UPDATE actions, so this is a single unconditional `WHEN MATCHED` with the no-op filter applied in the audit `INSERT...SELECT`.)
+- [x] Commit: `feat(attendance): add geo columns and period attendance audit table` (`bb0c371`)
 
 ---
 
@@ -592,21 +592,19 @@ Create.Table("PeriodAttendanceAudit")
 - CRM: Advanced table columns + filter; row opens audit drawer/timeline
 - Tests for audit append on upsert (integration)
 
-- [ ] Mark page UI still unchanged (no geo capture controls).
-- [ ] Commit: `feat(attendance): show geo and audit history in Advanced tab`
+- [x] Mark page UI still unchanged (no geo capture controls) — confirmed via `git diff --stat`, `attendanceClassWise.tsx` not touched.
+- [x] Commit: `feat(attendance): show geo and audit history in Advanced tab` (`f93b3bf`)
 
 ---
 
 ### Task 13: Final acceptance (full §30 union)
 
-- [ ] Walk product acceptance checklist for Phases 1–3.
-- [ ] Confirm `attendanceClassWise.tsx` diff is empty (or only unintentional — revert if touched).
-- [ ] Confirm no browser SoT for Advanced data path.
-- [ ] Final commit if doc status updates only:
+- [x] Walk product acceptance checklist for Phases 1–3. All three phases implemented, tested, and committed (see status notes above).
+- [x] Confirm `attendanceClassWise.tsx` diff is empty for this epic's own commits (`git log 95c359b..HEAD -- attendanceClassWise.tsx` shows only `3bb9bc1`, an unrelated prior "persist remaining API-bound school screens" commit — none of this epic's Advanced Attendance commits touch the mark page).
+- [x] Confirm no browser SoT for Advanced data path — `grep localStorage\|sessionStorage` across `periodAttendanceAdvanced.ts`, `attendanceAdvanced.tsx`, and the hooks file returns nothing; React Query caches API responses only.
+- [x] Final commit (doc status update only): this edit.
 
-```bash
-git commit -m "docs(attendance): mark advanced attendance phases complete"
-```
+**Full Advanced Attendance CRM epic (Phases 1–3): DONE.**
 
 ---
 
