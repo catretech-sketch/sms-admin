@@ -1,10 +1,27 @@
 import { useQuery, useMutation, useQueryClient, type UseQueryResult, type UseMutationResult } from '@tanstack/react-query'
-import { listExams, createExam, updateExam } from '../exams'
+import { listExams, createExam, updateExam, listExamLetterGrades } from '../exams'
 import { queryKeys } from '../queryKeys'
+import { pickLatestExam, resultBandCountsFromHistogram } from '@/lib/dashboardLive'
 import type { Exam } from '@/types'
 
 export function useExams(): UseQueryResult<Exam[]> {
   return useQuery({ queryKey: queryKeys.exams.all, queryFn: () => listExams() })
+}
+
+/** Latest exam letter-grade bands for the school dashboard. Empty when no marks are saved. */
+export function useDashboardExamBands(enabled = true): UseQueryResult<{ examName: string; bands: ReturnType<typeof resultBandCountsFromHistogram> }> {
+  return useQuery({
+    queryKey: queryKeys.exams.dashboardBands('latest'),
+    queryFn: async () => {
+      const exams = await listExams()
+      const latest = pickLatestExam(exams)
+      if (!latest) return { examName: '', bands: [] }
+      const rows = await listExamLetterGrades(latest.id)
+      return { examName: latest.name, bands: resultBandCountsFromHistogram(rows) }
+    },
+    enabled,
+    staleTime: 30_000,
+  })
 }
 
 export function useCreateExam(): UseMutationResult<Exam, Error, Exam> {

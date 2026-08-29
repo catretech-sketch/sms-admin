@@ -1,6 +1,7 @@
 /* Advanced period attendance list — CRM read API (fail closed, no browser SoT). */
 import { request } from './client'
 import { snakeToCamel } from './mapper'
+import { attendanceCalendarDate, type AttendanceRecord, type AttendanceStatus } from './attendance'
 
 export type PeriodAttendanceAdvancedFilters = {
   preset?: string
@@ -134,6 +135,135 @@ export async function listPeriodAttendanceAdvanced(
     totalCount: Number(page.totalCount ?? wire.total_count ?? 0),
     page: Number(page.page ?? wire.page ?? filters.page ?? 1),
     pageSize: Number(page.pageSize ?? wire.page_size ?? filters.pageSize ?? 25),
+  }
+}
+
+/** Page through SQL period-records for export (no browser SoT). */
+export async function listAllPeriodAttendanceRecords(
+  filters: PeriodAttendanceAdvancedFilters = {},
+): Promise<PeriodAttendanceAdvancedRow[]> {
+  const pageSize = Math.min(100, filters.pageSize ?? 100)
+  const items: PeriodAttendanceAdvancedRow[] = []
+  for (let page = 1; page <= 200; page++) {
+    const res = await listPeriodAttendanceAdvanced({ ...filters, page, pageSize })
+    items.push(...res.items)
+    if (res.items.length === 0 || items.length >= res.totalCount) break
+  }
+  return items
+}
+
+export function asPeriodAttendanceStatus(v: unknown): AttendanceStatus | null {
+  const s = String(v ?? '').trim().toLowerCase().replace(/-/g, '_')
+  if (s === 'present' || s === 'late' || s === 'absent' || s === 'half_day') return s
+  return null
+}
+
+function isOnCampusStatus(status: AttendanceStatus): boolean {
+  return status === 'present' || status === 'late' || status === 'half_day'
+}
+
+/** One AttendanceRecord per period mark (SQL period-records → trend / export). */
+export function periodRowsToAttendanceRecords(rows: PeriodAttendanceAdvancedRow[]): AttendanceRecord[] {
+  const out: AttendanceRecord[] = []
+  for (const r of rows) {
+    const status = asPeriodAttendanceStatus(r.status)
+    if (!status || !r.studentId) continue
+    const date = attendanceCalendarDate(r.date)
+    out.push({
+      id: r.id || `${r.classId}-${r.studentId}-${date}-P${r.period}`,
+      classId: r.classId,
+      studentId: r.studentId,
+      date,
+      status,
+      markedBy: r.markedBy ?? null,
+    })
+  }
+  return out
+}
+
+/** Collapse periods to one status per student+date for absence streaks: present if any period was attended. */
+export function collapsePeriodRowsToDaily(rows: PeriodAttendanceAdvancedRow[]): AttendanceRecord[] {
+  const byKey = new Map<string, AttendanceRecord>()
+  for (const rec of periodRowsToAttendanceRecords(rows)) {
+    const key = `${rec.studentId}|${rec.date}`
+    const prev = byKey.get(key)
+    if (!prev) {
+      byKey.set(key, { ...rec, id: `${rec.studentId}-${rec.date}` })
+      continue
+    }
+    if (isOnCampusStatus(rec.status) && !isOnCampusStatus(prev.status)) {
+      byKey.set(key, { ...prev, status: rec.status })
+    }
+  }
+  return [...byKey.values()]
+}
+
+/** Period-mark counts per class for one calendar day (collapsed-card fallback after SQL GET). */
+export function periodCountsByClass(
+  rows: PeriodAttendanceAdvancedRow[],
+  date: string,
+): Map<string, { present: number; absent: number; total: number }> {
+  const day = attendanceCalendarDate(date)
+  const m = new Map<string, { present: number; absent: number; total: number }>()
+  for (const r of rows) {
+    if (attendanceCalendarDate(r.date) !== day || !r.classId) continue
+    const status = asPeriodAttendanceStatus(r.status)
+    if (!status) continue
+    const cur = m.get(r.classId) ?? { present: 0, absent: 0, total: 0 }
+    cur.total += 1
+    if (status === 'absent') cur.absent += 1
+    else cur.present += 1
+    m.set(r.classId, cur)
+  }
+  return m
+}
+
+/** School-wide day hero for Students · class-wise (period marks, not daily AttendanceRecords). */
+export function classWiseDayHero(input: {
+  range?: AdvRangeRollup | null
+  localByClass?: Map<string, { present: number; absent: number; total: number }>
+}): { present: number; marked: number; absent: number; pct: number | null } {
+  const rangeMarked = input.range?.totalMarkedPeriods ?? 0
+  if (rangeMarked > 0 && input.range) {
+    const present = (input.range.present ?? 0) + (input.range.late ?? 0)
+    const pct = input.range.attendancePercentage != null
+      ? Math.round(Number(input.range.attendancePercentage))
+      : Math.round((present / rangeMarked) * 100)
+    return {
+      present,
+      marked: rangeMarked,
+      absent: (input.range.absent ?? 0) + (input.range.leave ?? 0),
+      pct,
+    }
+  }
+  let present = 0
+  let marked = 0
+  let absent = 0
+  for (const c of input.localByClass?.values() ?? []) {
+    present += c.present
+    absent += c.absent
+    marked += c.total
+  }
+  if (marked > 0) {
+    return { present, marked, absent, pct: Math.round((present / marked) * 100) }
+  }
+  return { present: 0, marked: 0, absent: 0, pct: null }
+}
+
+/** Copy for the class-wise day hero — never treat an in-flight request as unmarked. */
+export function classWiseHeroDisplay(input: {
+  loading: boolean
+  hero: { present: number; marked: number; absent: number; pct: number | null }
+}): { pctLabel: string; presentLabel: string; absentLabel: string; markedLabel: string } {
+  if (input.loading) {
+    return { pctLabel: 'Loading…', presentLabel: '—', absentLabel: '—', markedLabel: '—' }
+  }
+  const { hero } = input
+  return {
+    pctLabel: hero.pct == null ? 'Not marked' : `${hero.pct}%`,
+    presentLabel: String(hero.present),
+    absentLabel: String(hero.absent),
+    markedLabel: String(hero.marked),
   }
 }
 

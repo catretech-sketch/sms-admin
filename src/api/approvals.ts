@@ -68,10 +68,14 @@ function approvalExtras(a: Record<string, unknown>) {
   const decidedNote = typeof a.decidedNote === 'string' && a.decidedNote.trim()
     ? a.decidedNote.trim()
     : null
+  const decidedBy = typeof a.decidedByName === 'string' && a.decidedByName.trim()
+    ? a.decidedByName.trim()
+    : null
   const attachmentUrls = parseAttachmentUrls(a.attachmentUrls)
   return {
     status: normalizeStatus(a.status),
     decidedNote,
+    decidedBy,
     appliedOn,
     age: String(a.age ?? relAge(appliedOn) ?? ''),
     ...(attachmentUrls && attachmentUrls.length > 0 ? { attachmentUrls } : {}),
@@ -133,6 +137,18 @@ export function mapWireToApproval(raw: Record<string, unknown>): Approval {
 export function approvalsForRole(list: Approval[], role: Role): Approval[] {
   if (role === 'owner') return list
   return list.filter((a) => (a.forRoles ?? []).includes(role))
+}
+
+/** Pending tab may hide ids just acted on; Approved/Rejected/All keep SQL history. */
+export function inboxApprovals(
+  list: Approval[],
+  role: Role,
+  tab: ApprovalFilter,
+  hideOnPending: ReadonlySet<string> = new Set(),
+): Approval[] {
+  const scoped = approvalsForRole(list, role)
+  if (tab !== 'pending') return scoped
+  return scoped.filter((a) => !hideOnPending.has(a.id))
 }
 
 export async function listApprovals(status: ApprovalFilter = 'pending'): Promise<Approval[]> {

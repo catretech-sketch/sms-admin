@@ -1,7 +1,8 @@
 /* ============================================================
    SchoolMate — Attendance
    Students: class-wise (day/month) — marks from CRM + teacher app.
-   Teachers: check-ins from teacher app + present/absent edit.
+   Teachers: app check-in/out when they have a phone; admin can mark Present / Half day
+   for staff without Android. Half day is stored as a CRM mark, not a punch.
    Staff: photos + present/absent. Geo-fence: Platinum campus setup + live punches.
    ============================================================ */
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
@@ -15,21 +16,25 @@ import { RestrictedScreen } from '@/components/shell/gates'
 import { useStudents } from '@/api/hooks/useStudents'
 import { useTeachers } from '@/api/hooks/useTeachers'
 import { useStaff } from '@/api/hooks/useStaff'
-import { usePrincipalAttendance } from '@/api/hooks/usePrincipalAttendance'
+import { useStaffCheckIns } from '@/api/hooks/usePrincipalAttendance'
+import { usePeriodAttendanceRangeSummary } from '@/api/hooks/usePeriodAttendanceAdvanced'
+import { classWiseDayHero } from '@/api/periodAttendanceAdvanced'
+import { studentLiveAttendance } from '@/lib/studentLiveAttendance'
 import { resolvePeoplePhoto } from '@/api/peopleExtras'
 import {
-  loadPeopleAttendance, explicitPeopleStatus,
+  explicitPeopleStatus,
   countPeoplePresent, PEOPLE_ATTENDANCE_CHANGED,
   fetchRemotePeopleAttendance, savePeopleAttendanceRemote,
-  listCachedPeopleAttendance,
+          listPeopleAttendanceRange, collectPeopleMarksToSave, isPeopleHalfDay,
 } from '@/api/peopleAttendance'
 import { ClassWiseStudents } from './attendanceClassWise'
 import { listClassAttendanceRange, type AttendanceStatus } from '@/api/attendance'
+import { listAllPeriodAttendanceRecords } from '@/api/periodAttendanceAdvanced'
 import { useClasses } from '@/api/hooks/useClasses'
 import { buildStudentRegisterRows, registerToCsv, type RegisterRow } from '@/lib/attendanceExport'
 import { downloadTextFile } from '@/lib/feeExport'
 import {
-  resolveGeoAttendancePeople, geoPeopleToCheckInMap, principalStaffToCheckInMap,
+  resolveGeoAttendancePeople,
 } from '@/lib/geoAttendanceDemo'
 import type { Teacher, Staff, Role } from '@/types'
 import { GeoFencePanel } from './geoFencePanel'
@@ -62,11 +67,11 @@ const GROUP_OPTS_TEACHER = [
   { value: 'advanced', label: 'Advanced' },
 ]
 
-const STATUS_TONE: Record<AttStatus, BadgeTone> = { present: 'success', late: 'warning', absent: 'danger' }
-const STATUS_LABEL: Record<AttStatus, string> = { present: 'Present', late: 'Late', absent: 'Absent' }
-const STATUS_OPTS = [
+const STATUS_TONE: Record<AttStatus, BadgeTone> = { present: 'success', late: 'warning', absent: 'danger', half_day: 'warning' }
+const STATUS_LABEL: Record<AttStatus, string> = { present: 'Present', late: 'Late', absent: 'Absent', half_day: 'Half day' }
+const PEOPLE_STATUS_OPTS = [
   { value: 'present', label: 'Present' },
-  { value: 'late', label: 'Late' },
+  { value: 'half_day', label: 'Half day' },
   { value: 'absent', label: 'Absent' },
 ]
 
@@ -105,29 +110,26 @@ function useGeoAttendance(date: string) {
   const geoFence = tierIncludes(app.plan, 'attendance.geofence')
   const teachersQ = useTeachers()
   const staffQ = useStaff()
-  const principalQ = usePrincipalAttendance(date, geoFence)
+  const punches = useStaffCheckIns(date, true)
 
   return useMemo(() => {
     const people = resolveGeoAttendancePeople(
       teachersQ.data ?? [],
       staffQ.data ?? [],
-      principalQ.data?.staff ?? [],
-      principalQ.isSuccess,
+      punches.staff,
+      punches.principalKnown,
       geoFence,
     )
-    const staffRows = principalQ.data?.staff ?? []
     return {
       geoFence,
       people,
-      checkIn: geoFence && principalQ.isSuccess
-        ? principalStaffToCheckInMap(staffRows)
-        : geoPeopleToCheckInMap(people),
-      principalKnown: geoFence && principalQ.isSuccess,
-      loading: geoFence && (teachersQ.isLoading || staffQ.isLoading || principalQ.isLoading),
+      checkIn: punches.checkIn,
+      principalKnown: punches.principalKnown,
+      loading: teachersQ.isLoading || staffQ.isLoading || punches.loading,
     }
   }, [
     geoFence, teachersQ.data, staffQ.data, staffQ.isLoading, teachersQ.isLoading,
-    principalQ.data, principalQ.isSuccess, principalQ.isLoading, date,
+    punches.staff, punches.checkIn, punches.principalKnown, punches.loading,
   ])
 }
 
@@ -139,20 +141,38 @@ function SummaryCard({ group, tone, active, onClick }: {
 }) {
   const today = todayIso()
   const geo = useGeoAttendance(today)
-  const studentsQ = useStudents()
   const teachersQ = useTeachers()
   const staffQ = useStaff()
-  const principalQ = usePrincipalAttendance(today, group === 'students' || geo.geoFence)
+  const periodDayQ = usePeriodAttendanceRangeSummary(
+    { preset: 'custom', from: today, to: today },
+    group === 'students',
+  )
+  const studentHero = classWiseDayHero({ range: periodDayQ.data })
+  const studentLive = studentLiveAttendance({
+    loaded: periodDayQ.isSuccess || periodDayQ.isError,
+    presentTotal: studentHero.present,
+    studentTotal: studentHero.marked,
+    overallPct: studentHero.pct,
+  })
 
   const [marks, setMarks] = useState<Record<string, AttStatus>>({})
+  const [marksReady, setMarksReady] = useState(group === 'students')
   useEffect(() => {
     if (group === 'students') return
     let cancelled = false
     setMarks({})
+    setMarksReady(false)
     void fetchRemotePeopleAttendance(group, today)
       .then((remote) => { if (!cancelled) setMarks(remote) })
       .catch(() => { if (!cancelled) setMarks({}) })
-    const bump = () => setMarks(loadPeopleAttendance(group, today))
+      .finally(() => { if (!cancelled) setMarksReady(true) })
+    const bump = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ group?: string }>).detail
+      if (detail?.group && detail.group !== group) return
+      void fetchRemotePeopleAttendance(group, today)
+        .then((remote) => { if (!cancelled) setMarks(remote) })
+        .catch(() => { /* keep last SQL snapshot */ })
+    }
     window.addEventListener(PEOPLE_ATTENDANCE_CHANGED, bump)
     window.addEventListener('focus', bump)
     return () => {
@@ -163,40 +183,31 @@ function SummaryCard({ group, tone, active, onClick }: {
   }, [group, today])
 
   const people =
-    group === 'students' ? (studentsQ.data ?? [])
-    : group === 'teachers' ? (teachersQ.data ?? [])
+    group === 'teachers' ? (teachersQ.data ?? [])
     : (staffQ.data ?? [])
-  /* Students: principal API studentTotal = marked periods (official period %). */
-  const total = group === 'students'
-    ? (principalQ.data?.studentTotal ?? 0)
-    : people.length
+  /* Students: same period-day rollup as Students · class-wise (not daily AttendanceRecords). */
+  const total = group === 'students' ? studentLive.marked : people.length
 
   const present = useMemo(() => {
-    if (group === 'students') return principalQ.data?.presentTotal ?? 0
+    if (group === 'students') return studentLive.present
     const roster = (group === 'teachers' ? teachersQ.data : staffQ.data) ?? []
     return countPeoplePresent(
       roster.map((p) => ({ id: p.id, name: p.name })),
       marks,
-      geo.geoFence ? { checkIn: geo.checkIn, principalKnown: geo.principalKnown } : {},
+      { checkIn: geo.checkIn, principalKnown: geo.principalKnown },
     )
-  }, [group, teachersQ.data, staffQ.data, principalQ.data, marks, geo.checkIn, geo.geoFence, geo.principalKnown])
+  }, [group, teachersQ.data, staffQ.data, studentLive.present, marks, geo.checkIn, geo.geoFence, geo.principalKnown])
 
-  const studentMarked = useMemo(() => {
-    if (group !== 'students') return 0
-    return principalQ.data?.studentTotal ?? 0
-  }, [group, principalQ.data])
+  const studentLoading = group === 'students' && !(periodDayQ.isSuccess || periodDayQ.isError)
+  const peopleLoading = group !== 'students' && (teachersQ.isLoading || staffQ.isLoading || geo.loading || !marksReady)
 
   const rate = group === 'students'
-    ? (total > 0
-      ? Math.round(Number(principalQ.data?.overallPct) || ((present / total) * 100))
-      : null)
+    ? studentLive.pct
     : (total ? Math.round((present / total) * 100) : 0)
 
-  const footnote = group === 'students' && studentMarked > 0
-    ? `${present} present/late · ${Math.max(0, studentMarked - present)} absent/leave · period marks`
-    : group === 'students'
-      ? 'No period marks today'
-      : `${present} of ${total} present`
+  const footnote = group === 'students'
+    ? studentLive.footnote
+    : peopleLoading ? 'Loading…' : `${present} of ${total} present`
 
   return (
     <Card hover onClick={onClick} style={active ? { borderColor: tone, boxShadow: `0 0 0 1px ${tone}` } : undefined}>
@@ -207,7 +218,7 @@ function SummaryCard({ group, tone, active, onClick }: {
           </span>
           <div>
             <div className="sm-kpi-val" style={{ fontSize: 24 }}>
-              {rate == null ? '—' : `${rate}%`}
+              {studentLoading || peopleLoading || rate == null ? '—' : `${rate}%`}
             </div>
             <div className="sm-kpi-label">{GROUP_NAME[group]} present</div>
           </div>
@@ -217,7 +228,7 @@ function SummaryCard({ group, tone, active, onClick }: {
       <div className="t-sm muted" style={{ marginTop: 10 }}>Today · live</div>
       <div className="row ai-center gap8" style={{ marginTop: 10 }}>
         <div className="sm-meter" style={{ flex: 1, width: 'auto' }}>
-          <span style={{ width: `${rate ?? 0}%`, background: tone }} />
+          <span style={{ width: `${studentLoading || peopleLoading ? 0 : (rate ?? 0)}%`, background: tone }} />
         </div>
         <span className="t-xs muted3" style={{ whiteSpace: 'nowrap' }}>{footnote}</span>
       </div>
@@ -242,7 +253,6 @@ interface PersonRow {
 }
 
 function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editable: boolean }) {
-  const geoFence = tierIncludes(useApp().plan, 'attendance.geofence')
   const toast = useToast()
   const teachersQ = useTeachers()
   const staffQ = useStaff()
@@ -271,7 +281,7 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
     return explicitPeopleStatus(
       { id, name },
       saved,
-      geo.geoFence ? { checkIn: appCheckIn, principalKnown: geo.principalKnown } : {},
+      { checkIn: appCheckIn, principalKnown: geo.principalKnown },
     )
   }
 
@@ -323,19 +333,23 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
   )
 
   const counts = useMemo(() => {
-    const c = { present: 0, late: 0, absent: 0, unmarked: 0 }
+    const c = { present: 0, late: 0, absent: 0, half_day: 0, unmarked: 0 }
     searched.forEach((p) => { c[p.status ?? 'unmarked']++ })
     return c
   }, [searched])
 
   const presentTotal = counts.present + counts.late
+  const halfDayTotal = counts.half_day
   const onRoll = all.length
-  const absentOrUnmarked = Math.max(0, onRoll - presentTotal)
-  const attendancePct = onRoll ? Math.round((presentTotal / onRoll) * 100) : 0
+  const absentOrUnmarked = Math.max(0, onRoll - presentTotal - halfDayTotal)
+  const attendancePct = onRoll
+    ? Math.round(((presentTotal + halfDayTotal * 0.5) / onRoll) * 100)
+    : 0
 
   const filterOpts = [
     { value: 'all', label: `All (${searched.length})` },
     { value: 'present', label: `Present (${counts.present})` },
+    { value: 'half_day', label: `Half day (${counts.half_day})` },
     { value: 'late', label: `Late (${counts.late})` },
     { value: 'absent', label: `Absent (${counts.absent})` },
   ]
@@ -346,20 +360,22 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
     setDraft((d) => ({ ...d, ...Object.fromEntries(all.map((p) => [p.id, st])) }))
 
   const submit = async () => {
-    const marks: Record<string, AttStatus> = { ...saved }
-    for (const p of all) {
-      const explicit = draft[p.id] ?? explicitPeopleStatus(
-        { id: p.id, name: p.name },
-        saved,
-        geo.geoFence ? { checkIn: appCheckIn, principalKnown: geo.principalKnown } : {},
-      )
-      if (explicit) marks[p.id] = explicit
+    const marks = collectPeopleMarksToSave(all, saved, draft)
+    if (!Object.keys(marks).length) {
+      toast.danger('Nothing to save', 'Mark Present, Half day, or Absent for at least one person.')
+      return
     }
     try {
-      await savePeopleAttendanceRemote(group, date, marks)
-      setSaved(marks)
+      const fresh = await savePeopleAttendanceRemote(group, date, marks)
+      setSaved(fresh)
       setDraft({})
-      toast.success('Attendance saved', `${GROUP_NAME[group]} · ${date} · ${presentTotal}/${onRoll} present`)
+      const half = Object.values(marks).filter((s) => isPeopleHalfDay(s)).length
+      toast.success(
+        'Attendance saved',
+        half
+          ? `${GROUP_NAME[group]} · ${date} · ${half} half day`
+          : `${GROUP_NAME[group]} · ${date} · ${presentTotal}/${onRoll} present`,
+      )
     } catch (err) {
       toast.danger('Could not save attendance', err instanceof Error ? err.message : 'Please try again.')
     }
@@ -379,12 +395,16 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
       ),
     },
     { key: 'sub', label: SUB_LABEL[group], sortValue: (r) => r.sub, render: (r) => <span className="t-sm muted">{r.sub}</span> },
-    ...(geoFence ? [
+    ...(true ? [
       {
         key: 'source', label: 'Source',
-        render: (r: PersonRow) => r.appCheckIn
-          ? <Badge tone="info" icon="phone">Teacher app</Badge>
-          : <Badge tone="neutral">Manual</Badge>,
+        render: (r: PersonRow) => r.status === 'half_day'
+          ? <Badge tone="warning">Admin · Half day</Badge>
+          : r.appCheckIn && !saved[r.id] && !draft[r.id]
+            ? <Badge tone="info" icon="phone">App check-in</Badge>
+            : r.status
+              ? <Badge tone="neutral">Admin</Badge>
+              : <Badge tone="neutral">Not marked</Badge>,
       } satisfies Column<PersonRow>,
       {
         key: 'checkInAt',
@@ -406,7 +426,11 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
     {
       key: 'status', label: 'Today',
       render: (r) => editable
-        ? <Segmented value={r.status ?? ''} onChange={(v) => setStatus(r.id, v as AttStatus)} options={STATUS_OPTS} />
+        ? <Segmented
+            value={r.status ?? ''}
+            onChange={(v) => setStatus(r.id, v as AttStatus)}
+            options={r.status === 'late' ? [...PEOPLE_STATUS_OPTS, { value: 'late', label: 'Late' }] : PEOPLE_STATUS_OPTS}
+          />
         : r.status
           ? <Badge tone={STATUS_TONE[r.status]} dot>{STATUS_LABEL[r.status]}</Badge>
           : <Badge tone="neutral">Not marked</Badge>,
@@ -414,18 +438,14 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
   ]
 
   const loading = group === 'teachers'
-    ? teachersQ.isLoading || (geoFence && geo.loading)
-    : group === 'staff'
-      ? staffQ.isLoading || (geoFence && geo.loading)
-      : staffQ.isLoading
+    ? teachersQ.isLoading || geo.loading
+    : staffQ.isLoading || geo.loading
 
   return (
     <Card pad={false}>
       <CardHead
         title={`${GROUP_NAME[group]} roster`}
-        sub={geoFence && (group === 'teachers' || group === 'staff')
-          ? `${date} · teacher app check-in / check-out show automatically · ${presentTotal}/${all.length} present`
-          : `${date} · ${presentTotal} of ${all.length} present`}
+        sub={`${date} · app check-in if they have a phone · admin can mark Present / Half day · ${presentTotal}/${all.length} present`}
         icon={GROUP_ICON[group]}
         action={
           <div className="row ai-center gap8 wrap">
@@ -450,6 +470,10 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
                 <div className="t-xs muted3">Present</div>
               </div>
               <div className="sm-att-hero-stat">
+                <div className="t-lg fw7">{halfDayTotal}</div>
+                <div className="t-xs muted3">Half day</div>
+              </div>
+              <div className="sm-att-hero-stat">
                 <div className="t-lg fw7">{absentOrUnmarked}</div>
                 <div className="t-xs muted3">Absent / unmarked</div>
               </div>
@@ -460,7 +484,7 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
             </div>
             <div className="row ai-center gap8 wrap">
               {group === 'teachers' || group === 'staff'
-                ? <Badge tone="info" icon="phone">Teacher app punches</Badge>
+                ? <Badge tone="info" icon="phone">App punches + admin marks</Badge>
                 : <Badge tone="neutral">Staff roll-call</Badge>}
               <span className="t-xs muted3">{date}</span>
             </div>
@@ -481,7 +505,7 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
       <div className="row ai-center jc-between" style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
         <span className="t-sm muted">
           {group === 'teachers' || group === 'staff'
-            ? 'Teacher app check-in and check-out appear here. Owner / Admin / Principal can override present / absent for anyone.'
+            ? 'Phones check in/out in the teacher app. Owner / Admin / Principal can mark Present or Half day here for anyone without a phone.'
             : editable
               ? 'Owner / Admin / Principal can mark any staff present or absent.'
               : 'View only.'}
@@ -535,28 +559,52 @@ function AttendanceScreen() {
 
   const exportRegister = async () => {
     let rows: RegisterRow[] = []
-    if (group === 'teachers' || group === 'staff') {
-      const roster = (group === 'teachers' ? teachersQ.data : staffQ.data) ?? []
-      const byId = new Map(roster.map((p) => [p.id, p.name]))
-      rows = listCachedPeopleAttendance(group)
-        .map((r) => ({ name: byId.get(r.studentId) ?? r.studentId, adm: r.studentId, cls: group, date: r.date, status: r.status }))
-        .sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name))
-    } else {
-      const to = new Date()
-      const from = new Date(to)
-      from.setDate(from.getDate() - 120)
-      const fromIso = `${from.getFullYear()}-${String(from.getMonth() + 1).padStart(2, '0')}-${String(from.getDate()).padStart(2, '0')}`
-      const toIso = `${to.getFullYear()}-${String(to.getMonth() + 1).padStart(2, '0')}-${String(to.getDate()).padStart(2, '0')}`
-      const classIds = (classesQ.data ?? []).map((c) => c.id).filter(Boolean) as string[]
-      try {
-        const batches = await Promise.all(
-          classIds.map((id) => listClassAttendanceRange(id, fromIso, toIso)),
-        )
-        rows = buildStudentRegisterRows(batches.flat(), studentsQ.data ?? [])
-      } catch {
-        toast.danger('Export unavailable', 'Could not load attendance from the server.')
-        return
+    const to = new Date()
+    const from = new Date(to)
+    from.setDate(from.getDate() - 120)
+    const fromIso = `${from.getFullYear()}-${String(from.getMonth() + 1).padStart(2, '0')}-${String(from.getDate()).padStart(2, '0')}`
+    const toIso = `${to.getFullYear()}-${String(to.getMonth() + 1).padStart(2, '0')}-${String(to.getDate()).padStart(2, '0')}`
+    try {
+      if (group === 'teachers' || group === 'staff') {
+        const roster = (group === 'teachers' ? teachersQ.data : staffQ.data) ?? []
+        const byId = new Map(roster.map((p) => [p.id, p.name]))
+        const records = await listPeopleAttendanceRange(group, fromIso, toIso)
+        rows = records
+          .map((r) => ({
+            name: byId.get(r.studentId) ?? r.studentId,
+            adm: r.studentId,
+            cls: group,
+            date: r.date,
+            status: r.status,
+          }))
+          .sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name))
+      } else {
+        const periodRows = await listAllPeriodAttendanceRecords({
+          from: fromIso,
+          to: toIso,
+          preset: 'custom',
+        })
+        if (periodRows.length) {
+          rows = periodRows
+            .map((r) => ({
+              name: r.studentName,
+              adm: r.admissionNo,
+              cls: r.classLabel || `${r.grade}-${r.section}`,
+              date: r.date,
+              status: `P${r.period} ${r.subject} ${r.status}`,
+            }))
+            .sort((a, b) => a.date.localeCompare(b.date) || a.cls.localeCompare(b.cls) || a.name.localeCompare(b.name))
+        } else {
+          const classIds = (classesQ.data ?? []).map((c) => c.id).filter(Boolean) as string[]
+          const batches = await Promise.all(
+            classIds.map((id) => listClassAttendanceRange(id, fromIso, toIso)),
+          )
+          rows = buildStudentRegisterRows(batches.flat(), studentsQ.data ?? [])
+        }
       }
+    } catch {
+      toast.danger('Export unavailable', 'Could not load attendance from the server.')
+      return
     }
     if (!rows.length) {
       toast.danger('Nothing to export', 'No attendance has been marked yet for this group.')

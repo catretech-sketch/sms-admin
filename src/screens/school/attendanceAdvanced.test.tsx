@@ -121,6 +121,12 @@ vi.mock('@/api/hooks/useStudents', () => ({ useStudents: () => ({ data: [] }) })
 vi.mock('@/api/hooks/useStaff', () => ({ useStaff: () => ({ data: [] }) }))
 vi.mock('@/api/hooks/usePrincipalAttendance', () => ({
   usePrincipalAttendance: () => ({ data: undefined, isLoading: false, isSuccess: false }),
+  useStaffCheckIns: () => ({
+    staff: [],
+    checkIn: new Map(),
+    principalKnown: false,
+    loading: false,
+  }),
 }))
 vi.mock('@/lib/hooks', () => ({
   useApp: () => ({ role: 'admin', plan: 'platinum' }),
@@ -150,6 +156,8 @@ describe('AttendanceAdvanced', () => {
       pageSize: 25,
     }))
     expect(screen.getByText('Aarav Shah')).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Marked By' })).toBeInTheDocument()
+    expect(screen.getByText('Admin User')).toBeInTheDocument()
     expect(screen.getAllByText('Not required').length).toBeGreaterThan(0)
 
     fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'absent' } })

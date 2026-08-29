@@ -28,8 +28,8 @@ export interface CreateTimetableSlotInput {
 }
 
 export async function listTimetable(): Promise<TimetableSlot[]> {
-  const wire = await request<Record<string, unknown>[]>('/timetable')
-  return wire.map((s) => snakeToCamel<TimetableSlot>(s))
+  const wire = await request<Record<string, unknown>[] | null>('/timetable')
+  return Array.isArray(wire) ? wire.map((s) => snakeToCamel<TimetableSlot>(s)) : []
 }
 
 export async function createTimetableSlot(input: CreateTimetableSlotInput): Promise<TimetableSlot> {

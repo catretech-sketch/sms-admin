@@ -117,6 +117,7 @@ export function useSavePeriodAttendance(): UseMutationResult<
         queryKey: queryKeys.attendance.dayTimetable(vars.classId, vars.date),
       })
       await qc.invalidateQueries({ queryKey: ['attendance'] })
+      await qc.invalidateQueries({ queryKey: queryKeys.attendance.principal(vars.date) })
     },
   })
 }

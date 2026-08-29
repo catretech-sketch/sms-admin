@@ -2,9 +2,8 @@
    in-memory Map is a session read cache populated only after successful fetch/save. */
 import { request } from './client'
 import { camelToSnake } from './mapper'
-import { ApiError } from './ApiError'
 import { tokenStore } from './auth/tokenStore'
-import type { AttendanceRecord, AttendanceStatus } from './attendance'
+import { toAttendanceDate, type AttendanceRecord, type AttendanceStatus } from './attendance'
 
 export type PeopleAttGroup = 'teachers' | 'staff'
 
@@ -16,8 +15,8 @@ function personTypeOf(group: PeopleAttGroup): 'teacher' | 'staff' {
 /** `null` for anything that isn't a real mark — a malformed/missing status must
  *  never be silently treated as "present". */
 function asStatus(v: unknown): AttendanceStatus | null {
-  const s = String(v ?? '').trim().toLowerCase()
-  if (s === 'late' || s === 'absent' || s === 'present') return s
+  const s = String(v ?? '').trim().toLowerCase().replace(/-/g, '_')
+  if (s === 'late' || s === 'absent' || s === 'present' || s === 'half_day') return s
   return null
 }
 
@@ -55,21 +54,24 @@ export async function fetchRemotePeopleAttendance(
 }
 
 /**
- * Persist a day's marks to `/staff-attendance`, then update the in-memory cache.
+ * Persist a day's marks to `/staff-attendance`, then reload from GET (SQL).
  * Throws on API failure — callers must not toast success unless this resolves.
+ * Emits {@link PEOPLE_ATTENDANCE_CHANGED} once after the confirmed GET (never on GET-only).
  */
 export async function savePeopleAttendanceRemote(
   group: PeopleAttGroup,
   date: string,
   marks: Record<string, AttendanceStatus>,
-): Promise<void> {
+): Promise<Record<string, AttendanceStatus>> {
   const records = Object.entries(marks).map(([personId, status]) => ({ personId, status }))
   if (!records.length) throw new Error('No people to save')
   await request<unknown>('/staff-attendance', {
     method: 'POST',
     body: camelToSnake({ personType: personTypeOf(group), date, records }),
   })
-  cachePeopleAttendance(group, date, marks)
+  const fresh = await fetchRemotePeopleAttendance(group, date)
+  emitPeopleAttendanceChanged(group, date)
+  return fresh
 }
 
 /** @deprecated Use {@link savePeopleAttendanceRemote}. POST-only; throws on failure. */
@@ -106,16 +108,18 @@ export const listAllLocalPeopleAttendance = listCachedPeopleAttendance
 
 export const PEOPLE_ATTENDANCE_CHANGED = 'sms:people-attendance-changed'
 
-/** Update the in-memory read cache only (not an authoritative save). Prefer {@link savePeopleAttendanceRemote}. */
+function emitPeopleAttendanceChanged(group: PeopleAttGroup, date: string): void {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent(PEOPLE_ATTENDANCE_CHANGED, { detail: { group, date } }))
+}
+
+/** Update the in-memory read cache only (not an authoritative save). Does not emit. */
 export function cachePeopleAttendance(
   group: PeopleAttGroup,
   date: string,
   marks: Record<string, AttendanceStatus>,
 ): void {
   memory.set(cacheKey(group, date), { ...marks })
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent(PEOPLE_ATTENDANCE_CHANGED, { detail: { group, date } }))
-  }
 }
 
 /** @deprecated Removed — local-only writes are not allowed. Use {@link savePeopleAttendanceRemote}. */
@@ -128,7 +132,29 @@ export function savePeopleAttendance(
 }
 
 export function isPeoplePresent(status: AttendanceStatus | undefined): boolean {
-  return status === 'present' || status === 'late'
+  return status === 'present' || status === 'late' || status === 'half_day'
+}
+
+export function isPeopleHalfDay(status: AttendanceStatus | undefined): boolean {
+  return status === 'half_day'
+}
+
+/**
+ * Persist only admin CRM marks (prior saved + current draft).
+ * App check-in/out stays on punches — never copied into staff-attendance.
+ */
+export function collectPeopleMarksToSave(
+  roster: { id: string; name: string }[],
+  saved: Record<string, AttendanceStatus>,
+  draft: Record<string, AttendanceStatus>,
+  _opts: EffectiveStatusOpts = {},
+): Record<string, AttendanceStatus> {
+  const out: Record<string, AttendanceStatus> = {}
+  for (const person of roster) {
+    const status = draft[person.id] ?? saved[person.id]
+    if (status) out[person.id] = status
+  }
+  return out
 }
 
 /** Count present/late marks for the given person ids (manual CRM roll-call). */
@@ -214,4 +240,65 @@ export function countPeoplePresent(
     (n, p) => n + (isPeoplePresent(explicitPeopleStatus(p, marks, opts) ?? undefined) ? 1 : 0),
     0,
   )
+}
+
+function mapStaffAttendanceRows(
+  group: PeopleAttGroup,
+  rows: Record<string, unknown>[] | null,
+  fallbackPersonId = '',
+): AttendanceRecord[] {
+  const out: AttendanceRecord[] = []
+  for (const row of rows ?? []) {
+    const id = row.person_id != null ? String(row.person_id) : fallbackPersonId
+    const status = asStatus(row.status)
+    const date = row.date != null ? toAttendanceDate(String(row.date)) : ''
+    if (!id || !status || !date) continue
+    out.push({
+      id: row.id != null ? String(row.id) : `${group}-${id}-${date}`,
+      classId: '',
+      studentId: id,
+      date,
+      status,
+      markedBy: row.marked_by != null ? String(row.marked_by) : null,
+    })
+  }
+  return out
+}
+
+/** GET one person's staff-attendance history from SQL (no browser SoT). */
+export async function listPersonAttendanceHistory(
+  group: PeopleAttGroup,
+  personId: string,
+  from: string,
+  to: string,
+): Promise<AttendanceRecord[]> {
+  const rows = await request<Record<string, unknown>[] | null>(`/staff-attendance/${personId}`, {
+    query: { person_type: personTypeOf(group), from, to },
+  })
+  return mapStaffAttendanceRows(group, rows, personId)
+}
+
+/** GET every teacher or staff mark in a date range from SQL (one request, no browser SoT). */
+export async function listPeopleAttendanceRange(
+  group: PeopleAttGroup,
+  from: string,
+  to: string,
+): Promise<AttendanceRecord[]> {
+  const rows = await request<Record<string, unknown>[] | null>('/staff-attendance', {
+    query: { person_type: personTypeOf(group), from: toAttendanceDate(from), to: toAttendanceDate(to) },
+  })
+  return mapStaffAttendanceRows(group, rows)
+}
+
+/** Load teacher/staff marks for a date range from SQL, optionally limited to a roster. */
+export async function listPeopleAttendanceRegister(
+  group: PeopleAttGroup,
+  from: string,
+  to: string,
+  personIds: string[],
+): Promise<AttendanceRecord[]> {
+  const all = await listPeopleAttendanceRange(group, from, to)
+  if (!personIds.length) return all
+  const want = new Set(personIds.filter(Boolean))
+  return all.filter((r) => want.has(r.studentId))
 }

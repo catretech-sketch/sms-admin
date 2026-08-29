@@ -7,7 +7,7 @@ import { queryKeys } from '../queryKeys'
 import { mergeSubjectNames } from '@/lib/defaultSubjects'
 
 export function useSubjects(): UseQueryResult<SchoolSubject[]> {
-  return useQuery({ queryKey: queryKeys.subjects.all, queryFn: () => listSubjects() })
+  return useQuery({ queryKey: queryKeys.subjects.all, queryFn: () => listSubjects(), staleTime: 60_000 })
 }
 
 /** Subject options: defaults + live API + any currently selected names. */

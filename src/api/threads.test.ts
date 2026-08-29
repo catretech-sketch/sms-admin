@@ -1,10 +1,30 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { listThreads, createThread, listThreadMessages, sendMessage } from './threads'
+import { listThreads, createThread, listThreadMessages, sendMessage, messageTime } from './threads'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
 beforeEach(() => { localStorage.clear(); vi.restoreAllMocks() })
+
+describe('messageTime', () => {
+  it('formats a same-day timestamp as 12-hour clock time with AM/PM', () => {
+    const now = new Date()
+    now.setHours(14, 35, 0, 0)
+    expect(messageTime(now.toISOString())).toMatch(/^2:35\s?PM$/i)
+  })
+
+  it('prefixes the date for a timestamp not from today', () => {
+    const old = new Date()
+    old.setDate(old.getDate() - 3)
+    old.setHours(9, 5, 0, 0)
+    expect(messageTime(old.toISOString())).toMatch(/^\w{3} \d{1,2}, 9:05\s?AM$/i)
+  })
+
+  it('returns empty string for missing/invalid input', () => {
+    expect(messageTime(null)).toBe('')
+    expect(messageTime('not-a-date')).toBe('')
+  })
+})
 
 describe('listThreads', () => {
   it('maps backend ChatThreadResponse to the UI thread shape', async () => {
@@ -44,6 +64,22 @@ describe('listThreadMessages', () => {
     const rows = await listThreadMessages('T1')
     expect(rows[0]).toMatchObject({ id: 'M1', threadId: 'T1', text: 'hello', mine: true })
   })
+
+  it('maps image_url, is_delivered, and is_read, and derives an image attachment', async () => {
+    const wire = {
+      data: [{
+        id: 'M2', thread_id: 'T1', text: '', sent_at: null, is_mine: true,
+        image_url: 'data:image/jpeg;base64,abc', is_delivered: true, is_read: true,
+      }],
+      next_cursor: null,
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(wire)))
+    const rows = await listThreadMessages('T1')
+    expect(rows[0]).toMatchObject({
+      imageUrl: 'data:image/jpeg;base64,abc', delivered: true, read: true,
+    })
+    expect(rows[0].attachments?.[0]).toMatchObject({ url: 'data:image/jpeg;base64,abc' })
+  })
 })
 
 describe('sendMessage', () => {
@@ -59,5 +95,21 @@ describe('sendMessage', () => {
 
   it('rejects an empty message', async () => {
     await expect(sendMessage('T1', '   ')).rejects.toThrow(/message is required/i)
+  })
+
+  it('POSTs image_url when an image is attached, with or without a caption', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      data: { id: 'M3', thread_id: 'T1', text: '', image_url: 'data:image/jpeg;base64,abc', is_mine: true },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const m = await sendMessage('T1', '', 'data:image/jpeg;base64,abc')
+    expect(m).toMatchObject({ id: 'M3', imageUrl: 'data:image/jpeg;base64,abc', mine: true })
+    const [, opts] = fetchMock.mock.calls[0]
+    expect(JSON.parse(opts.body as string)).toEqual({ text: '', image_url: 'data:image/jpeg;base64,abc' })
+  })
+
+  it('accepts an image-only message with no text', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: { id: 'M4', thread_id: 'T1', text: '', is_mine: true } })))
+    await expect(sendMessage('T1', '   ', 'data:image/jpeg;base64,abc')).resolves.toMatchObject({ id: 'M4' })
   })
 })

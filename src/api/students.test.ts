@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { listStudents, getStudent, createStudent, updateStudent, toStudent, studentGuardianName, studentParentLabel, parentMailFromStudent, fromStudent, fromStudentUpdate } from './students'
+import { listStudents, listStudentsPage, getStudent, createStudent, updateStudent, toStudent, studentGuardianName, studentParentLabel, parentMailFromStudent, fromStudent, fromStudentUpdate } from './students'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -54,6 +54,14 @@ describe('listStudents', () => {
     expect(url2).not.toContain('grade=')
     expect(url2).not.toContain('status=')
     expect(url2).not.toContain('fee=')
+
+    fetchMock.mockClear()
+    fetchMock.mockResolvedValue(jsonResponse({ data: [], next_cursor: 'abc' }))
+    const page = await listStudentsPage({ q: 'asha', limit: 25, cursor: 'c1' })
+    const url3 = fetchMock.mock.calls[0][0] as string
+    expect(url3).toContain('limit=25')
+    expect(url3).toContain('cursor=c1')
+    expect(page.nextCursor).toBe('abc')
   })
 })
 

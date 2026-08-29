@@ -27,6 +27,8 @@ import { useAnnouncements, useCreateAnnouncement } from '@/api/hooks/useAnnounce
 import { useStudents } from '@/api/hooks/useStudents'
 import { useTeachers } from '@/api/hooks/useTeachers'
 import { useStaff } from '@/api/hooks/useStaff'
+import { useSchoolUsers } from '@/api/hooks/useUsers'
+import { fromApiRole, leadershipRoleLabel } from '@/api/users'
 import { collectAudienceContacts } from '@/lib/collectAudienceEmails'
 import { gradeRank } from '@/lib/defaultClasses'
 import { shouldPublishGps } from '@/lib/gpsThrottle'
@@ -44,7 +46,12 @@ import {
 } from '@/api/hooks/useOperations'
 import type { FleetBus, TransportRoute, RouteStop, SportsMedal } from '@/api/operations'
 import type { Bus, Complaint } from '@/types'
-import type { ChatMessage, ChatAttachment } from '@/api/threads'
+import type { ChatAttachment } from '@/api/threads'
+import { compressImageFile } from '@/lib/compressImage'
+
+/** A picked-but-not-yet-sent attachment — keeps the raw File so an image can be
+ *  compressed and actually sent (unlike ChatAttachment, which only has a blob preview url). */
+interface PendingAttachment extends ChatAttachment { file: File }
 import type { Announcement } from '@/api/announcements'
 
 /* ---------- shared meta ---------- */
@@ -69,9 +76,12 @@ function fileToBase64(file: File): Promise<{ base64: string; contentType: string
   })
 }
 
-/* Messenger contact categories — group the people picker by who they are. */
-type ContactKind = 'parent' | 'teacher' | 'staff'
+/* Messenger contact categories — group the people picker by who they are.
+   'leader' = other CRM login accounts (owner/admin/principal/vice_principal) — anyone with
+   school-wide access should be reachable, not just teachers/staff/parents. */
+type ContactKind = 'parent' | 'teacher' | 'staff' | 'leader'
 const CONTACT_GROUPS: { kind: ContactKind; label: string; icon: string }[] = [
+  { kind: 'leader', label: 'Admin & Leadership', icon: 'briefcase' },
   { kind: 'parent', label: 'Parents', icon: 'users' },
   { kind: 'teacher', label: 'Teachers', icon: 'cap' },
   { kind: 'staff', label: 'Staff', icon: 'shield' },
@@ -137,13 +147,25 @@ function hueFor(seed: string): number {
   return h
 }
 
+/** WhatsApp-style receipt: one grey tick = sent, two grey ticks = delivered, two blue ticks = read. */
+function MessageTicks({ read, delivered }: { read: boolean; delivered: boolean; mine: boolean }) {
+  const label = read ? 'Read' : delivered ? 'Delivered' : 'Sent'
+  const color = read ? '#7dd3fc' : 'rgba(255,255,255,0.75)'
+  const doubled = delivered || read
+  return (
+    <span title={label} style={{ position: 'relative', width: doubled ? 16 : 11, height: 11, display: 'inline-block' }}>
+      <Icon name="check" size={13} style={{ position: 'absolute', left: 0, top: -1, color }} />
+      {doubled && <Icon name="check" size={13} style={{ position: 'absolute', left: 5, top: -1, color }} />}
+    </span>
+  )
+}
+
 function MessengerTab() {
   const toast = useToast()
   const [activeId, setActiveId] = useState<string | null>(null)
   const [text, setText] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
-  const [pending, setPending] = useState<ChatAttachment[]>([])
-  const [localMsgs, setLocalMsgs] = useState<Record<string, ChatMessage[]>>({})
+  const [pending, setPending] = useState<PendingAttachment[]>([])
   const [newOpen, setNewOpen] = useState(false)
   const [newMode, setNewMode] = useState<'people' | 'class'>('people')
   const [groupClass, setGroupClass] = useState<string | null>(null)
@@ -157,6 +179,8 @@ function MessengerTab() {
   const { data: teachersData } = useTeachers()
   const { data: staffData } = useStaff()
   const { data: studentsData } = useStudents()
+  const { data: schoolUsersData } = useSchoolUsers()
+  const app = useApp()
   const allThreads = threadsData ?? []
 
   const filteredClasses = useMemo(() => {
@@ -181,34 +205,75 @@ function MessengerTab() {
 
   const thread = allThreads.find((t) => t.id === activeId) ?? null
   const { data: messagesData, isLoading: msgsLoading } = useThreadMessages(activeId)
-  /* Server messages + this session's locally-attached messages (files/images). */
-  const msgs = useMemo(
-    () => [...(messagesData ?? []), ...(activeId ? localMsgs[activeId] ?? [] : [])],
-    [messagesData, localMsgs, activeId],
-  )
+  const msgs = messagesData ?? []
 
   /* Drop half-composed attachments when switching conversations. */
   useEffect(() => { setPending([]) }, [activeId])
 
   const addFiles = (files: FileList | null) => {
     if (!files?.length) return
-    const next: ChatAttachment[] = Array.from(files).map((f, i) => ({
+    const next: PendingAttachment[] = Array.from(files).map((f, i) => ({
       id: `att-${Date.now()}-${i}`,
       name: f.name,
       url: URL.createObjectURL(f),
       type: f.type || 'application/octet-stream',
       size: f.size,
+      file: f,
     }))
     setPending((p) => [...p, ...next])
   }
   const removePending = (id: string) => setPending((p) => p.filter((a) => a.id !== id))
 
-  /* everyone you can message: live teachers, staff and parents */
-  const contacts = useMemo(() => [
-    ...(teachersData ?? []).map((t) => ({ id: 't:' + t.id, name: t.name, hue: t.avatarHue ?? 0, kind: 'teacher' as ContactKind, role: ['Teacher', t.dept].filter(Boolean).join(' · ') })),
-    ...(staffData ?? []).map((s) => ({ id: 's:' + s.id, name: s.name, hue: s.avatarHue ?? 0, kind: 'staff' as ContactKind, role: [s.role, s.dept].filter(Boolean).join(' · ') })),
-    ...(studentsData ?? []).slice(0, 120).map((s) => ({ id: 'p:' + s.id, name: `${s.name} (parent)`, hue: s.avatarHue ?? 0, kind: 'parent' as ContactKind, role: ['Parent', s.cls].filter(Boolean).join(' · ') })),
-  ], [teachersData, staffData, studentsData])
+  /* everyone you can message: live teachers, staff, parents, and other CRM leadership
+     (owner/admin/principal/vice_principal) accounts.
+     `rawId` is the real Teacher/Staff/Student/Users row id (as opposed to `id`, which is only
+     a prefixed React key) — it's what lets the backend resolve the actual recipient account
+     instead of matching free-text names, so the message lands in their real inbox.
+     Someone who's onboarded as both e.g. a Teacher and Staff/HOD, then later invited into the
+     CRM as principal/admin, is still ONE person — dedupe by email so they show once, using
+     their most authoritative (latest-invited) role: leadership > staff > teacher. */
+  const leadershipContacts = useMemo(() => {
+    const selfEmail = (app.user?.email ?? '').trim().toLowerCase()
+    return (schoolUsersData ?? [])
+      .filter((u) => u.email?.trim().toLowerCase() !== selfEmail)
+      .map((u, i) => {
+        const role = fromApiRole(u.roles[0] ?? '')
+        return { role, dto: u, i }
+      })
+      .filter((r) => r.role === 'owner' || r.role === 'admin' || r.role === 'principal')
+      .map(({ dto: u, i, role }) => {
+        const email = (u.email ?? '').trim().toLowerCase()
+        const name = email.includes('@') ? email.split('@')[0] : (email || 'CRM user')
+        return {
+          id: 'u:' + u.id, rawId: u.id, name, hue: (i * 37) % 360,
+          kind: 'leader' as ContactKind, role: leadershipRoleLabel(role), email,
+        }
+      })
+  }, [schoolUsersData, app.user?.email])
+
+  const contacts = useMemo(() => {
+    const seenEmails = new Set(leadershipContacts.filter((c) => c.email).map((c) => c.email))
+
+    const staffContacts = (staffData ?? []).map((s) => ({
+      id: 's:' + s.id, rawId: s.id, name: s.name, hue: s.avatarHue ?? 0,
+      kind: 'staff' as ContactKind, role: [s.role, s.dept].filter(Boolean).join(' · '),
+      email: (s.email ?? '').trim().toLowerCase(),
+    })).filter((s) => !s.email || !seenEmails.has(s.email))
+    staffContacts.forEach((s) => { if (s.email) seenEmails.add(s.email) })
+
+    const teacherContacts = (teachersData ?? []).map((t) => ({
+      id: 't:' + t.id, rawId: t.id, name: t.name, hue: t.avatarHue ?? 0,
+      kind: 'teacher' as ContactKind, role: ['Teacher', t.dept].filter(Boolean).join(' · '),
+      email: t.email.trim().toLowerCase(),
+    })).filter((t) => !t.email || !seenEmails.has(t.email))
+
+    return [
+      ...leadershipContacts,
+      ...staffContacts,
+      ...teacherContacts,
+      ...(studentsData ?? []).slice(0, 120).map((s) => ({ id: 'p:' + s.id, rawId: s.id, name: `${s.name} (parent)`, hue: s.avatarHue ?? 0, kind: 'parent' as ContactKind, role: ['Parent', s.cls].filter(Boolean).join(' · ') })),
+    ]
+  }, [leadershipContacts, teachersData, staffData, studentsData])
   const filteredContacts = useMemo(() => {
     const term = contactQ.trim().toLowerCase()
     return term ? contacts.filter((c) => c.name.toLowerCase().includes(term) || c.role.toLowerCase().includes(term)) : contacts
@@ -216,9 +281,14 @@ function MessengerTab() {
 
   const openNewChat = () => { setNewMode('people'); setGroupClass(null); setContactQ(''); setCatFilter('all'); setNewOpen(true) }
 
-  const startChat = (c: { name: string; role: string }) => {
+  const startChat = (c: { name: string; role: string; kind?: ContactKind; rawId?: string }) => {
     createThread.mutate(
-      { name: c.name, role: c.role },
+      {
+        name: c.name,
+        role: c.role,
+        contactKind: c.kind === 'parent' ? 'student' : c.kind === 'leader' ? 'user' : c.kind,
+        contactId: c.rawId ?? null,
+      },
       {
         onSuccess: (t) => {
           setActiveId(t.id); setNewOpen(false); setContactQ('')
@@ -249,25 +319,35 @@ function MessengerTab() {
     )
   }
 
-  const send = () => {
+  const send = async () => {
     if (!thread) return
     const t = text.trim()
     const target = thread
-    /* With attachments we render locally (mock backend stores text only). */
+
     if (pending.length) {
-      const msg: ChatMessage = {
-        id: `local-${Date.now()}`,
-        threadId: target.id,
-        text: t,
-        at: 'now',
-        mine: true,
-        attachments: pending,
+      const images = pending.filter((a) => a.type.startsWith('image/'))
+      const others = pending.filter((a) => !a.type.startsWith('image/'))
+      if (others.length) {
+        toast.danger(
+          'Only images can be sent',
+          `${others.map((a) => a.name).join(', ')} — file attachments aren't supported in chat yet.`,
+        )
       }
-      setLocalMsgs((m) => ({ ...m, [target.id]: [...(m[target.id] ?? []), msg] }))
       setPending([])
       setText('')
+      let caption = t
+      for (const a of images) {
+        try {
+          const dataUrl = await compressImageFile(a.file, { maxEdge: 960, quality: 0.78 })
+          await sendMessageMut.mutateAsync({ threadId: target.id, text: caption, imageUrl: dataUrl })
+          caption = '' // the typed message is a caption for the first image only
+        } catch (err) {
+          toast.danger('Image not sent', err instanceof Error ? err.message : `Could not send ${a.name}.`)
+        }
+      }
       return
     }
+
     if (!t) return
     setText('')
     sendMessageMut.mutate(
@@ -368,7 +448,10 @@ function MessengerTab() {
                           </a>
                         )
                       ))}
-                      <div className="t-xs" style={{ opacity: 0.7, marginTop: 3, textAlign: 'right' }}>{m.at}</div>
+                      <div className="row ai-center gap4" style={{ opacity: 0.85, marginTop: 3, justifyContent: 'flex-end' }}>
+                        <span className="t-xs">{m.at}</span>
+                        {m.mine && <MessageTicks read={m.read} delivered={m.delivered} mine={m.mine} />}
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -495,7 +578,7 @@ function MessengerTab() {
             {classStudents.map((s) => (
               <button
                 key={s.id}
-                onClick={() => startChat({ name: `${s.name} (parent)`, role: `Parent · ${groupClass}` })}
+                onClick={() => startChat({ name: `${s.name} (parent)`, role: `Parent · ${groupClass}`, kind: 'parent', rawId: s.id })}
                 disabled={createThread.isPending}
                 className="row ai-center gap10"
                 style={{ width: '100%', textAlign: 'left', border: '1px solid var(--border)', borderRadius: 10, padding: '8px 11px', background: 'var(--surface)', cursor: 'pointer' }}

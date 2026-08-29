@@ -434,6 +434,8 @@ export interface Approval {
   forRoles: Role[]
   status: ApprovalStatus
   decidedNote?: string | null
+  /** Display name of the principal/admin who approved or rejected. */
+  decidedBy?: string | null
   appliedOn?: string | null
   attachmentUrls?: string[]
 }
@@ -489,6 +491,14 @@ export interface RankInfo { rank: number; classSize: number }
 export interface MonthValue { label: string; value: number }
 
 /* ---- Query option shapes ---- */
-export interface ListStudentsOpts { q?: string; grade?: string; status?: string; fee?: string }
+export interface ListStudentsOpts {
+  q?: string
+  grade?: string
+  status?: string
+  fee?: string
+  /** SQL page size. Omit for the full roster (mobile / screens that need every row). Max 100. */
+  limit?: number
+  cursor?: string
+}
 export interface ListTeachersOpts { q?: string; dept?: string; status?: string }
 export interface ListStaffOpts { q?: string; cat?: string; enabled?: boolean }

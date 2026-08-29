@@ -15,6 +15,17 @@ const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'S
 
 export type TrendMode = 'day' | 'week' | 'month' | 'quarter'
 
+/** Calendar days of history needed for each chart mode (do not page the full archive). */
+export function trendLookbackDays(mode: TrendMode): number {
+  switch (mode) {
+    case 'day': return 14
+    case 'week': return 8 * 7
+    case 'month': return 6 * 31
+    case 'quarter': return 4 * 92
+    default: return 56
+  }
+}
+
 /** Present / late / absent split for the trend window (for the composition pie). */
 export interface Composition {
   present: number

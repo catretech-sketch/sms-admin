@@ -28,10 +28,12 @@ export function useCreateThread(): UseMutationResult<ChatThread, Error, CreateTh
   })
 }
 
-export function useSendMessage(): UseMutationResult<ChatMessage, Error, { threadId: string; text: string }> {
+export function useSendMessage(): UseMutationResult<
+  ChatMessage, Error, { threadId: string; text: string; imageUrl?: string | null }
+> {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ threadId, text }: { threadId: string; text: string }) => sendMessage(threadId, text),
+    mutationFn: ({ threadId, text, imageUrl }) => sendMessage(threadId, text, imageUrl),
     onSuccess: (_msg, { threadId }) => {
       qc.invalidateQueries({ queryKey: queryKeys.threads.messages(threadId) })
       qc.invalidateQueries({ queryKey: queryKeys.threads.all })

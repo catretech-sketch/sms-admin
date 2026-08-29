@@ -16,6 +16,8 @@ import {
   type PeriodAttendanceAuditRow,
 } from '../periodAttendanceAdvanced'
 import { queryKeys } from '../queryKeys'
+import { dashboardWeekWindows, loadRangeTrend, RANGE_TREND_CONCURRENCY } from '@/lib/dashboardLive'
+import type { TrendPoint } from '@/lib/attendanceTrend'
 
 /** Server-filtered period attendance list for the Advanced CRM tab. */
 export function usePeriodAttendanceAdvanced(
@@ -82,6 +84,7 @@ export function usePeriodAttendanceRangeSummary(
     queryFn: () => getPeriodAttendanceRangeSummary(filters),
     enabled,
     staleTime: 15_000,
+    refetchOnWindowFocus: true,
   })
 }
 
@@ -95,5 +98,29 @@ export function usePeriodAttendanceAudit(
     queryFn: () => getPeriodAttendanceAudit(recordId),
     enabled: enabled && Boolean(recordId),
     staleTime: 15_000,
+  })
+}
+
+function todayIso(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/** Last 8 weeks of school-wide period-mark % (no invented history). */
+export function useDashboardAttendanceTrend(enabled = true): UseQueryResult<TrendPoint[]> {
+  const day = todayIso()
+  return useQuery({
+    queryKey: queryKeys.attendance.dashboardTrend(day),
+    queryFn: async () => {
+      const windows = dashboardWeekWindows(8)
+      return loadRangeTrend(
+        windows,
+        (w) => getPeriodAttendanceRangeSummary({ preset: 'custom', from: w.from, to: w.to }),
+        RANGE_TREND_CONCURRENCY,
+      )
+    },
+    enabled,
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
   })
 }

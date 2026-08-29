@@ -46,6 +46,17 @@ export function fromApiRole(role: string): Role {
   return 'teacher'
 }
 
+/** Friendly label for a CRM leadership role. NOTE: `toApiRole` maps both 'principal' and
+ *  'vice_principal' to the same 'school.principal' backend role — there's no separate policy
+ *  for vice principal, so once invited, which of the two someone actually is can't be told
+ *  apart from the API. Label as plain "Principal" rather than guessing/hedging with both. */
+export function leadershipRoleLabel(role: ReturnType<typeof fromApiRole>): string {
+  if (role === 'owner') return 'Owner'
+  if (role === 'admin') return 'Admin'
+  if (role === 'principal') return 'Principal'
+  return 'Admin'
+}
+
 export interface SchoolUserDto {
   id: string
   email: string | null

@@ -1,11 +1,18 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   listPeriodAttendanceAdvanced,
+  listAllPeriodAttendanceRecords,
   getPeriodAttendanceClassDaySummary,
   listPeriodAttendanceSubjectSummaries,
   listPeriodAttendanceTeacherSummaries,
   getPeriodAttendanceRangeSummary,
   getPeriodAttendanceAudit,
+  periodRowsToAttendanceRecords,
+  collapsePeriodRowsToDaily,
+  periodCountsByClass,
+  classWiseDayHero,
+  classWiseHeroDisplay,
+  type PeriodAttendanceAdvancedRow,
 } from './periodAttendanceAdvanced'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -91,6 +98,21 @@ describe('listPeriodAttendanceAdvanced', () => {
     expect(url).toContain('page=1')
     expect(url).toContain('pageSize=25')
     expect((fetchMock.mock.calls[0][1] as RequestInit).method ?? 'GET').toBe('GET')
+  })
+
+  it('pages through GET /attendance/period-records for a full SQL export', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        data: { items: [wireRow], total_count: 2, page: 1, page_size: 1 },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        data: { items: [{ ...wireRow, id: 'par2' }], total_count: 2, page: 2, page_size: 1 },
+      }))
+    vi.stubGlobal('fetch', fetchMock)
+    const rows = await listAllPeriodAttendanceRecords({ from: '2026-08-01', to: '2026-08-13', preset: 'custom', pageSize: 1 })
+    expect(rows).toHaveLength(2)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/attendance/period-records')
   })
 
   it('maps snake_case page envelope to camelCase types', async () => {
@@ -307,5 +329,96 @@ describe('getPeriodAttendanceAudit', () => {
   it('returns an empty array when the response is not an array', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: null })))
     expect(await getPeriodAttendanceAudit('par1')).toEqual([])
+  })
+})
+
+describe('period row SQL helpers', () => {
+  const base: PeriodAttendanceAdvancedRow = {
+    id: 'p1', classId: 'c1', grade: 'IV', section: 'B', classLabel: 'IV-B',
+    studentId: 's1', studentName: 'Asha', admissionNo: '1', date: '2026-08-26',
+    period: 1, subject: 'Math', status: 'absent', geoFenceStatus: 'not_required',
+  }
+
+  it('maps period rows to attendance records', () => {
+    const rows = periodRowsToAttendanceRecords([
+      { ...base, status: 'present' },
+      { ...base, id: 'p2', status: 'unknown' },
+    ])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ studentId: 's1', classId: 'c1', status: 'present' })
+  })
+
+  it('collapses a mixed day to present for absence streaks', () => {
+    const daily = collapsePeriodRowsToDaily([
+      { ...base, period: 1, status: 'absent' },
+      { ...base, id: 'p2', period: 2, status: 'present' },
+    ])
+    expect(daily).toHaveLength(1)
+    expect(daily[0].status).toBe('present')
+  })
+
+  it('counts period marks per class for a day', () => {
+    const m = periodCountsByClass([
+      { ...base, status: 'present' },
+      { ...base, id: 'p2', studentId: 's2', status: 'absent' },
+      { ...base, id: 'p3', date: '2026-08-25', status: 'present' },
+    ], '2026-08-26')
+    expect(m.get('c1')).toEqual({ present: 1, absent: 1, total: 2 })
+  })
+
+  it('counts a UTC datetime on the browser calendar day', () => {
+    const instant = '2026-08-25T18:30:00.000Z'
+    const d = new Date(instant)
+    const local = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    const m = periodCountsByClass([{ ...base, date: instant, status: 'present' }], local)
+    expect(m.get('c1')).toEqual({ present: 1, absent: 0, total: 1 })
+  })
+})
+
+describe('classWiseDayHero', () => {
+  it('uses period range rollup instead of empty principal daily totals', () => {
+    const hero = classWiseDayHero({
+      range: {
+        totalMarkedPeriods: 40,
+        present: 32,
+        absent: 6,
+        late: 2,
+        leave: 0,
+        attendancePercentage: 85,
+      },
+    })
+    expect(hero).toEqual({ present: 34, marked: 40, absent: 6, pct: 85 })
+  })
+
+  it('falls back to per-class period counts when the range rollup is empty', () => {
+    const localByClass = new Map([
+      ['c1', { present: 10, absent: 2, total: 12 }],
+      ['c2', { present: 8, absent: 0, total: 8 }],
+    ])
+    const hero = classWiseDayHero({
+      range: { totalMarkedPeriods: 0, present: 0, absent: 0, late: 0, leave: 0, attendancePercentage: null },
+      localByClass,
+    })
+    expect(hero).toEqual({ present: 18, marked: 20, absent: 2, pct: 90 })
+  })
+
+  it('is unmarked when no period marks exist', () => {
+    expect(classWiseDayHero({})).toEqual({ present: 0, marked: 0, absent: 0, pct: null })
+  })
+})
+
+describe('classWiseHeroDisplay', () => {
+  it('does not treat an in-flight load as unmarked', () => {
+    expect(classWiseHeroDisplay({ loading: true, hero: { present: 0, marked: 0, absent: 0, pct: null } })).toEqual({
+      pctLabel: 'Loading…',
+      presentLabel: '—',
+      absentLabel: '—',
+      markedLabel: '—',
+    })
+  })
+
+  it('shows Not marked only after the range request has finished empty', () => {
+    expect(classWiseHeroDisplay({ loading: false, hero: { present: 0, marked: 0, absent: 0, pct: null } }).pctLabel)
+      .toBe('Not marked')
   })
 })

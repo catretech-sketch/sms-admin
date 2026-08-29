@@ -117,13 +117,23 @@ describe('saveAttendance', () => {
     expect(listCachedAttendanceRange('c1', '2026-07-01', '2026-07-31')).toHaveLength(0)
   })
 
-  it('mirrors marks in session memory only after a successful API save', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: null })))
+  it('POSTs then reloads the day from the API (no localStorage)', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: null }))
+      .mockResolvedValueOnce(jsonResponse({
+        data: [{ class_id: 'c1', student_id: 's1', date: '2026-07-16', status: 'late' }],
+      }))
+    vi.stubGlobal('fetch', fetchMock)
     await saveAttendance('c1', {
       date: '2026-07-16',
       records: [{ studentId: 's1', status: 'late' }],
     })
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('POST')
+    expect(String(fetchMock.mock.calls[1][0])).toContain('/classes/c1/attendance')
+    expect(String(fetchMock.mock.calls[1][0])).toContain('date=2026-07-16')
     expect(listCachedAttendanceRange('c1', '2026-07-16', '2026-07-16')).toHaveLength(1)
+    expect(localStorage.getItem('sms_attendance:default')).toBeNull()
+    expect(sessionStorage.length).toBe(0)
   })
 })
 
@@ -169,8 +179,12 @@ describe('period attendance API', () => {
     })
   })
 
-  it('POSTs /classes/{id}/attendance/periods for upsert', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: null }))
+  it('POSTs /classes/{id}/attendance/periods then reloads marks from GET', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: null }))
+      .mockResolvedValueOnce(jsonResponse({
+        data: [{ student_id: 's1', class_id: 'c1', date: '2026-08-13', period: 1, subject: 'Music', status: 'present' }],
+      }))
     vi.stubGlobal('fetch', fetchMock)
     await savePeriodAttendance('c1', {
       date: '2026-08-13',
@@ -187,5 +201,7 @@ describe('period attendance API', () => {
     expect(body.period).toBe(1)
     expect(body.subject).toBe('Music')
     expect(body.records[0]).toEqual({ student_id: 's1', status: 'present' })
+    expect(String(fetchMock.mock.calls[1][0])).toContain('/classes/c1/attendance/periods')
+    expect((fetchMock.mock.calls[1][1] as RequestInit).method ?? 'GET').toBe('GET')
   })
 })

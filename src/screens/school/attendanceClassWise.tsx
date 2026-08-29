@@ -14,10 +14,20 @@ import { useTeachers } from '@/api/hooks/useTeachers'
 import { useStaff } from '@/api/hooks/useStaff'
 import { useClassDayTimetable, usePeriodAttendance, useSavePeriodAttendance } from '@/api/hooks/useAttendance'
 import { usePrincipalAttendance } from '@/api/hooks/usePrincipalAttendance'
+import { usePeriodAttendanceRangeSummary } from '@/api/hooks/usePeriodAttendanceAdvanced'
 import { studentPhotoUrl } from '@/api/studentExtras'
 import { compareClassesAscending, gradeRank } from '@/lib/defaultClasses'
-import { listCachedAttendance, listClassAttendanceRange, mapPool, toAttendanceDate, ATTENDANCE_CHANGED, type AttendanceStatus, type AttendanceRecord } from '@/api/attendance'
-import { listCachedPeopleAttendance } from '@/api/peopleAttendance'
+import { listClassAttendanceRange, mapPool, ATTENDANCE_CHANGED, ATTENDANCE_SAVED_EVENT, type AttendanceStatus, type AttendanceRecord } from '@/api/attendance'
+import { listPeopleAttendanceRange, PEOPLE_ATTENDANCE_CHANGED } from '@/api/peopleAttendance'
+import {
+  listAllPeriodAttendanceRecords,
+  periodRowsToAttendanceRecords,
+  collapsePeriodRowsToDaily,
+  periodCountsByClass,
+  classWiseDayHero,
+  classWiseHeroDisplay,
+  getPeriodAttendanceRangeSummary,
+} from '@/api/periodAttendanceAdvanced'
 import {
   flagAbsenceStreaks, loadAlertConfig, saveAlertConfig, normalizeAlertConfig,
   DEFAULT_ALERT_CONFIG, dueForAutoSend, getLastAutoSent, markAutoSent,
@@ -26,9 +36,12 @@ import {
 import { notifyAbsence, pickGuardianContacts, pickPeopleContacts, type AbsenceAudience } from '@/lib/attendanceNotify'
 import { fetchAlertConfig, persistAlertConfig } from '@/api/attendanceAlertConfig'
 import {
-  dailyTrend, weeklyTrend, monthlyTrend, quarterlyTrend, trendComposition,
+  dailyTrend, weeklyTrend, monthlyTrend, quarterlyTrend, trendComposition, trendLookbackDays,
   type TrendMode, type TrendPoint, type Composition,
 } from '@/lib/attendanceTrend'
+import {
+  compositionFromRollups, mapPoolResults, RANGE_TREND_CONCURRENCY, trendFromWeekRollups, trendWindowsForMode,
+} from '@/lib/dashboardLive'
 import type { Student } from '@/types'
 import { subjStyle } from '@/lib/subjectStyle'
 
@@ -37,11 +50,8 @@ type AttStatus = AttendanceStatus
 /** Present/absent tallied from locally-saved marks for one class on a given day. */
 export interface LocalCount { present: number; absent: number; total: number }
 
-/** Fired after a class's attendance is saved so overview counts refresh at once. */
-const ATTENDANCE_SAVED_EVENT = 'sms-attendance-saved'
-
-const STATUS_TONE: Record<AttStatus, BadgeTone> = { present: 'success', late: 'warning', absent: 'danger' }
-const STATUS_LABEL: Record<AttStatus, string> = { present: 'Present', late: 'Late', absent: 'Absent' }
+const STATUS_TONE: Record<AttStatus, BadgeTone> = { present: 'success', late: 'warning', absent: 'danger', half_day: 'warning' }
+const STATUS_LABEL: Record<AttStatus, string> = { present: 'Present', late: 'Late', absent: 'Absent', half_day: 'Half day' }
 const STATUS_OPTS = [
   { value: 'present', label: 'Present' },
   { value: 'late', label: 'Late' },
@@ -51,6 +61,30 @@ const STATUS_OPTS = [
 function todayIso(): string {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function isoDaysBack(days: number, end = todayIso()): { from: string; to: string } {
+  const fromDate = new Date(`${end}T12:00:00`)
+  fromDate.setDate(fromDate.getDate() - days)
+  const from = `${fromDate.getFullYear()}-${String(fromDate.getMonth() + 1).padStart(2, '0')}-${String(fromDate.getDate()).padStart(2, '0')}`
+  return { from, to: end }
+}
+
+async function loadStudentAttendanceFromSql(
+  from: string,
+  to: string,
+  classIds: string[],
+  daily = false,
+): Promise<AttendanceRecord[]> {
+  const periodRows = await listAllPeriodAttendanceRecords({ from, to, preset: 'custom' })
+  if (periodRows.length) {
+    return daily ? collapsePeriodRowsToDaily(periodRows) : periodRowsToAttendanceRecords(periodRows)
+  }
+  const out: AttendanceRecord[] = []
+  await mapPool(classIds, 3, async (id) => {
+    out.push(...await listClassAttendanceRange(id, from, to))
+  })
+  return out
 }
 
 function classLabel(c: SchoolClass): string {
@@ -436,7 +470,9 @@ function ClassPanel({
                     </div>
                     <div className="t-xs muted3" style={{ marginTop: 2 }}>
                       {[
-                        selected.startTime && selected.endTime ? `${selected.startTime}–${selected.endTime}` : null,
+                        selected.startTime || selected.endTime
+                          ? `${selected.startTime || '—'}–${selected.endTime || '—'}`
+                          : null,
                         selected.teacherName || null,
                         date,
                       ].filter(Boolean).join(' · ')}
@@ -707,19 +743,69 @@ function trendFor(records: AttendanceRecord[], mode: TrendMode, count: number): 
   return quarterlyTrend(records, count)
 }
 
-function loadAudienceRecords(audience: Audience): AttendanceRecord[] {
-  const parts: AttendanceRecord[] = []
-  if (audience === 'students' || audience === 'everyone') parts.push(...listCachedAttendance())
-  if (audience === 'teachers' || audience === 'everyone') parts.push(...listCachedPeopleAttendance('teachers'))
-  if (audience === 'staff' || audience === 'everyone') parts.push(...listCachedPeopleAttendance('staff'))
-  return parts
+const EMPTY_COMP: Composition = { present: 0, late: 0, absent: 0, total: 0, pct: 0 }
+
+function studentRangeScope(grade: string, section: string): { classId?: string; grade?: string } {
+  if (section !== 'all') return { classId: section }
+  if (grade !== 'all') return { grade }
+  return {}
 }
 
-function allowedClassIds(classes: SchoolClass[], grade: string, section: string): Set<string> | null {
-  if (grade === 'all') return null
-  const secs = classes.filter((c) => (c.grade || classLabel(c)).trim() === grade)
-  if (section === 'all') return new Set(secs.map((c) => c.id!))
-  return new Set([section])
+function addComp(a: Composition, b: Composition): Composition {
+  const present = a.present + b.present
+  const late = a.late + b.late
+  const absent = a.absent + b.absent
+  const total = present + late + absent
+  return { present, late, absent, total, pct: total ? Math.round(((present + late) / total) * 100) : 0 }
+}
+
+function mergeSeries(a: TrendPoint[], b: TrendPoint[]): TrendPoint[] {
+  const n = Math.max(a.length, b.length)
+  return Array.from({ length: n }, (_, i) => {
+    const pa = a[i]
+    const pb = b[i]
+    const parts = [pa, pb].filter((p): p is TrendPoint => Boolean(p) && !p.empty)
+    const label = pa?.label ?? pb?.label ?? ''
+    if (!parts.length) return { label, value: 0, empty: true }
+    const value = Math.round(parts.reduce((s, p) => s + p.value, 0) / parts.length)
+    return { label, value }
+  })
+}
+
+async function loadStudentRangeTrend(grade: string, section: string, mode: TrendMode): Promise<{ series: TrendPoint[]; comp: Composition }> {
+  const windows = trendWindowsForMode(mode)
+  const scope = studentRangeScope(grade, section)
+  const rollups = await mapPoolResults(windows, RANGE_TREND_CONCURRENCY, (w) =>
+    getPeriodAttendanceRangeSummary({ preset: 'custom', from: w.from, to: w.to, ...scope }))
+  return { series: trendFromWeekRollups(windows, rollups), comp: compositionFromRollups(rollups) }
+}
+
+async function loadPeopleTrend(group: 'teachers' | 'staff', from: string, to: string, mode: TrendMode, count: number): Promise<{ series: TrendPoint[]; comp: Composition }> {
+  const rows = await listPeopleAttendanceRange(group, from, to)
+  return { series: trendFor(rows, mode, count), comp: trendComposition(rows, mode, count) }
+}
+
+async function loadAudienceTrend(
+  audience: Audience,
+  grade: string,
+  section: string,
+  mode: TrendMode,
+  count: number,
+  from: string,
+  to: string,
+): Promise<{ series: TrendPoint[]; comp: Composition }> {
+  if (audience === 'students') return loadStudentRangeTrend(grade, section, mode)
+  if (audience === 'teachers') return loadPeopleTrend('teachers', from, to, mode, count)
+  if (audience === 'staff') return loadPeopleTrend('staff', from, to, mode, count)
+  const [students, teachers, staff] = await Promise.all([
+    loadStudentRangeTrend(grade, section, mode),
+    loadPeopleTrend('teachers', from, to, mode, count),
+    loadPeopleTrend('staff', from, to, mode, count),
+  ])
+  return {
+    series: mergeSeries(mergeSeries(students.series, teachers.series), staff.series),
+    comp: addComp(addComp(students.comp, teachers.comp), staff.comp),
+  }
 }
 
 /** One scope's composition pie + legend. */
@@ -816,7 +902,12 @@ function AttendanceTrendCard({ classes }: { classes: SchoolClass[] }) {
   const [mode, setMode] = useState<TrendMode>('week')
   const [chartType, setChartType] = useState<'bars' | 'line'>('bars')
   const [compare, setCompare] = useState(false)
-  const [tick, setTick] = useState(0)
+  const [reloadKey, setReloadKey] = useState(0)
+  const [seriesA, setSeriesA] = useState<TrendPoint[]>([])
+  const [seriesB, setSeriesB] = useState<TrendPoint[]>([])
+  const [compA, setCompA] = useState<Composition>(EMPTY_COMP)
+  const [compB, setCompB] = useState<Composition>(EMPTY_COMP)
+  const [trendLoading, setTrendLoading] = useState(true)
   // Scope A
   const [audA, setAudA] = useState<Audience>('students')
   const [gradeA, setGradeA] = useState('all')
@@ -827,65 +918,51 @@ function AttendanceTrendCard({ classes }: { classes: SchoolClass[] }) {
   const [sectionB, setSectionB] = useState('all')
 
   useEffect(() => {
-    const bump = () => setTick((n) => n + 1)
+    const bump = () => setReloadKey((n) => n + 1)
     window.addEventListener(ATTENDANCE_SAVED_EVENT, bump)
     window.addEventListener(ATTENDANCE_CHANGED, bump)
-    window.addEventListener('focus', bump)
+    window.addEventListener(PEOPLE_ATTENDANCE_CHANGED, bump)
     return () => {
       window.removeEventListener(ATTENDANCE_SAVED_EVENT, bump)
       window.removeEventListener(ATTENDANCE_CHANGED, bump)
-      window.removeEventListener('focus', bump)
+      window.removeEventListener(PEOPLE_ATTENDANCE_CHANGED, bump)
     }
   }, [])
 
-  // Hydrate student marks from API for trend charts after first paint, with
-  // capped concurrency — never fan out all classes at once (that freezes CRM).
   useEffect(() => {
     let cancelled = false
-    const to = todayIso()
-    const fromDate = new Date(`${to}T12:00:00`)
-    fromDate.setDate(fromDate.getDate() - 120)
-    const from = `${fromDate.getFullYear()}-${String(fromDate.getMonth() + 1).padStart(2, '0')}-${String(fromDate.getDate()).padStart(2, '0')}`
-    const ids = classes.map((c) => c.id).filter(Boolean) as string[]
+    const { from, to } = isoDaysBack(trendLookbackDays(mode))
+    const count = TREND_COUNT[mode]
+    setTrendLoading(true)
     const timer = window.setTimeout(() => {
-      void mapPool(ids, 3, async (id) => {
-        if (cancelled) return
-        await listClassAttendanceRange(id, from, to).catch(() => [] as AttendanceRecord[])
-      }).then(() => { if (!cancelled) setTick((n) => n + 1) })
-    }, 400)
+      void (async () => {
+        try {
+          const a = await loadAudienceTrend(audA, gradeA, sectionA, mode, count, from, to)
+          const b = compare
+            ? await loadAudienceTrend(audB, gradeB, sectionB, mode, count, from, to)
+            : { series: [] as TrendPoint[], comp: EMPTY_COMP }
+          if (cancelled) return
+          setSeriesA(a.series)
+          setCompA(a.comp)
+          setSeriesB(b.series)
+          setCompB(b.comp)
+        } catch {
+          if (cancelled) return
+          setSeriesA([])
+          setSeriesB([])
+          setCompA(EMPTY_COMP)
+          setCompB(EMPTY_COMP)
+        } finally {
+          if (!cancelled) setTrendLoading(false)
+        }
+      })()
+    }, 150)
     return () => { cancelled = true; window.clearTimeout(timer) }
-  }, [classes])
+  }, [reloadKey, mode, audA, gradeA, sectionA, compare, audB, gradeB, sectionB])
 
   // Class scope only applies to students.
   useEffect(() => { if (audA !== 'students') { setGradeA('all'); setSectionA('all') } }, [audA])
   useEffect(() => { if (audB !== 'students') { setGradeB('all'); setSectionB('all') } }, [audB])
-
-  const count = TREND_COUNT[mode]
-
-  const recordsA = useMemo(() => {
-    const base = loadAudienceRecords(audA)
-    if (audA === 'students' && gradeA !== 'all') {
-      const allowed = allowedClassIds(classes, gradeA, sectionA)
-      if (allowed) return base.filter((r) => allowed.has(r.classId))
-    }
-    return base
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audA, gradeA, sectionA, classes, tick])
-  const recordsB = useMemo(() => {
-    if (!compare) return []
-    const base = loadAudienceRecords(audB)
-    if (audB === 'students' && gradeB !== 'all') {
-      const allowed = allowedClassIds(classes, gradeB, sectionB)
-      if (allowed) return base.filter((r) => allowed.has(r.classId))
-    }
-    return base
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compare, audB, gradeB, sectionB, classes, tick])
-
-  const seriesA = useMemo(() => trendFor(recordsA, mode, count), [recordsA, mode, count])
-  const seriesB = useMemo(() => trendFor(recordsB, mode, count), [recordsB, mode, count])
-  const compA = useMemo(() => trendComposition(recordsA, mode, count), [recordsA, mode, count])
-  const compB = useMemo(() => trendComposition(recordsB, mode, count), [recordsB, mode, count])
 
   const markedA = seriesA.filter((p) => !p.empty)
   const avgA = markedA.length ? Math.round(markedA.reduce((a, p) => a + p.value, 0) / markedA.length) : 0
@@ -956,7 +1033,11 @@ function AttendanceTrendCard({ classes }: { classes: SchoolClass[] }) {
         )}
       </div>
 
-      {hasData ? (
+      {trendLoading ? (
+        <div style={{ padding: 16 }}>
+          <Empty icon="trend" title="Loading trend…" body="Fetching period marks for this window." />
+        </div>
+      ) : hasData ? (
         compare ? (
           <div style={{ padding: 16 }}>
             <div className="row gap16 wrap" style={{ marginBottom: 12 }}>
@@ -1023,7 +1104,10 @@ function AbsenceAlertsPanel({
   const [cfg, setCfg] = useState<AttendanceAlertConfig | null>(null)
   const [cfgStatus, setCfgStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [cfgError, setCfgError] = useState('')
-  const [tick, setTick] = useState(0)
+  const [studentRecs, setStudentRecs] = useState<AttendanceRecord[]>([])
+  const [teacherRecs, setTeacherRecs] = useState<AttendanceRecord[]>([])
+  const [staffRecs, setStaffRecs] = useState<AttendanceRecord[]>([])
+  const [reloadKey, setReloadKey] = useState(0)
   const [busy, setBusy] = useState<null | 'app' | 'email'>(null)
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState(() => ({
@@ -1066,32 +1150,42 @@ function AbsenceAlertsPanel({
     loadConfigFromApi()
   }, [])
 
-  // Load absence history only when the alerts UI is opened (not on every Attendance click).
+  // Load absence history from SQL when the alerts UI is opened (or after a save).
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    const to = todayIso()
-    const fromDate = new Date(`${to}T12:00:00`)
-    fromDate.setDate(fromDate.getDate() - 90)
-    const from = `${fromDate.getFullYear()}-${String(fromDate.getMonth() + 1).padStart(2, '0')}-${String(fromDate.getDate()).padStart(2, '0')}`
+    const { from, to } = isoDaysBack(90)
     const ids = classes.map((c) => c.id).filter(Boolean) as string[]
-    void mapPool(ids, 3, async (id) => {
-      if (cancelled) return
-      await listClassAttendanceRange(id, from, to).catch(() => [] as AttendanceRecord[])
-    }).then(() => { if (!cancelled) setTick((n) => n + 1) })
+    void (async () => {
+      try {
+        const [studentsMarks, teacherMarks, staffMarks] = await Promise.all([
+          loadStudentAttendanceFromSql(from, to, ids, true),
+          listPeopleAttendanceRange('teachers', from, to),
+          listPeopleAttendanceRange('staff', from, to),
+        ])
+        if (cancelled) return
+        setStudentRecs(studentsMarks)
+        setTeacherRecs(teacherMarks)
+        setStaffRecs(staffMarks)
+      } catch {
+        if (cancelled) return
+        setStudentRecs([])
+        setTeacherRecs([])
+        setStaffRecs([])
+      }
+    })()
     return () => { cancelled = true }
-  }, [classes, open])
+  }, [classes, open, reloadKey])
 
-  // Re-read session marks after a class is saved or the window refocuses.
   useEffect(() => {
-    const bump = () => setTick((n) => n + 1)
+    const bump = () => setReloadKey((n) => n + 1)
     window.addEventListener(ATTENDANCE_SAVED_EVENT, bump)
     window.addEventListener(ATTENDANCE_CHANGED, bump)
-    window.addEventListener('focus', bump)
+    window.addEventListener(PEOPLE_ATTENDANCE_CHANGED, bump)
     return () => {
       window.removeEventListener(ATTENDANCE_SAVED_EVENT, bump)
       window.removeEventListener(ATTENDANCE_CHANGED, bump)
-      window.removeEventListener('focus', bump)
+      window.removeEventListener(PEOPLE_ATTENDANCE_CHANGED, bump)
     }
   }, [])
 
@@ -1108,7 +1202,7 @@ function AbsenceAlertsPanel({
   const alerts = useMemo<FlaggedPerson[]>(() => {
     if (!cfg) return []
     const out: FlaggedPerson[] = []
-    for (const a of flagAbsenceStreaks(listCachedAttendance(), cfg.noticeDays)) {
+    for (const a of flagAbsenceStreaks(studentRecs, cfg.noticeDays)) {
       const s = studentById.get(a.id)
       if (!s) continue
       out.push({
@@ -1116,7 +1210,7 @@ function AbsenceAlertsPanel({
         subtitle: `${s.cls || '—'} · last absent ${dayNum(a.lastDate)}`, streak: a.streak, lastDate: a.lastDate,
       })
     }
-    for (const a of flagAbsenceStreaks(listCachedPeopleAttendance('teachers'), cfg.noticeDays)) {
+    for (const a of flagAbsenceStreaks(teacherRecs, cfg.noticeDays)) {
       const t = teacherById.get(a.id)
       if (!t) continue
       out.push({
@@ -1124,7 +1218,7 @@ function AbsenceAlertsPanel({
         subtitle: `${t.dept || t.desig || 'Teacher'} · last absent ${dayNum(a.lastDate)}`, streak: a.streak, lastDate: a.lastDate,
       })
     }
-    for (const a of flagAbsenceStreaks(listCachedPeopleAttendance('staff'), cfg.noticeDays)) {
+    for (const a of flagAbsenceStreaks(staffRecs, cfg.noticeDays)) {
       const st = staffById.get(a.id)
       if (!st) continue
       out.push({
@@ -1133,9 +1227,7 @@ function AbsenceAlertsPanel({
       })
     }
     return out.sort((x, y) => y.streak - x.streak || x.name.localeCompare(y.name))
-    // tick forces a recompute after saves/focus
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cfg, tick, studentById, teacherById, staffById])
+  }, [cfg, studentRecs, teacherRecs, staffRecs, studentById, teacherById, staffById])
 
   const emailable = useMemo(
     () => (cfg ? alerts.filter((a) => a.streak >= cfg.emailDays) : []),
@@ -1465,6 +1557,7 @@ export function ClassWiseStudents({ editable, leadership }: { editable: boolean;
   const [openGradeId, setOpenGradeId] = useState<string | null>(null)
   const [openClassId, setOpenClassId] = useState<string | null>(null)
   const [localTick, setLocalTick] = useState(0)
+  const [localByClass, setLocalByClass] = useState<Map<string, LocalCount>>(new Map())
 
   useEffect(() => {
     if (mode === 'month' && !date.startsWith(month)) {
@@ -1474,6 +1567,10 @@ export function ClassWiseStudents({ editable, leadership }: { editable: boolean;
   }, [mode, month, date])
 
   const principalQ = usePrincipalAttendance(date, leadership)
+  const periodDayQ = usePeriodAttendanceRangeSummary(
+    { preset: 'custom', from: date, to: date },
+    leadership,
+  )
   const liveClasses = useMemo(
     () => classes.filter((c) => c.id).slice().sort(compareClassesAscending),
     [classes],
@@ -1492,34 +1589,26 @@ export function ClassWiseStudents({ editable, leadership }: { editable: boolean;
     return m
   }, [principalQ.data])
 
-  // Refresh session-cache counts after a save or window refocus.
+  // Refresh class counts after a student period save.
   useEffect(() => {
     const bump = () => setLocalTick((n) => n + 1)
     window.addEventListener(ATTENDANCE_SAVED_EVENT, bump)
     window.addEventListener(ATTENDANCE_CHANGED, bump)
-    window.addEventListener('focus', bump)
     return () => {
       window.removeEventListener(ATTENDANCE_SAVED_EVENT, bump)
       window.removeEventListener(ATTENDANCE_CHANGED, bump)
-      window.removeEventListener('focus', bump)
     }
   }, [])
 
-  /* Present/absent tallied from API-backed session marks for the selected day.
-     Principal summary powers closed cards — do not fan out 1 request per class on open. */
-  const localByClass = useMemo(() => {
-    const m = new Map<string, LocalCount>()
-    for (const r of listCachedAttendance()) {
-      if (toAttendanceDate(r.date) !== date) continue
-      const cur = m.get(r.classId) ?? { present: 0, absent: 0, total: 0 }
-      cur.total += 1
-      if (r.status === 'absent') cur.absent += 1
-      else cur.present += 1
-      m.set(r.classId, cur)
-    }
-    return m
-    // localTick forces recompute after a save/focus/hydrate
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  /* Present/absent tallied from SQL period-records for the selected day. */
+  useEffect(() => {
+    let cancelled = false
+    void listAllPeriodAttendanceRecords({ from: date, to: date, preset: 'custom' })
+      .then((rows) => {
+        if (!cancelled) setLocalByClass(periodCountsByClass(rows, date))
+      })
+      .catch(() => { if (!cancelled) setLocalByClass(new Map()) })
+    return () => { cancelled = true }
   }, [date, localTick])
 
   const filtered = useMemo(() => {
@@ -1550,14 +1639,15 @@ export function ClassWiseStudents({ editable, leadership }: { editable: boolean;
   /* While searching, auto-expand matching grades so results are visible. */
   const searching = q.trim().length > 0
 
-  const overallPct = principalQ.data?.overallPct ?? 0
-  const presentTotal = principalQ.data?.presentTotal ?? 0
-  /* studentTotal from principal API is now marked period count (period formula SoT). */
-  const markedPeriods = principalQ.data?.studentTotal ?? 0
-  const attendancePct = markedPeriods > 0
-    ? Math.round(Number(overallPct) || ((presentTotal / markedPeriods) * 100))
-    : null
-  const absentOrUnmarked = Math.max(0, markedPeriods - presentTotal)
+  const dayHero = classWiseDayHero({
+    range: periodDayQ.data,
+    localByClass,
+  })
+  const heroLoading = leadership && periodDayQ.isPending && localByClass.size === 0
+  const hero = classWiseHeroDisplay({ loading: heroLoading, hero: dayHero })
+  const presentTotal = dayHero.present
+  const attendancePct = dayHero.pct
+  const absentOrUnmarked = dayHero.absent
   const monthDays = mode === 'month' ? daysInMonth(month) : []
 
   return (
@@ -1611,7 +1701,7 @@ export function ClassWiseStudents({ editable, leadership }: { editable: boolean;
               center={
                 <div style={{ textAlign: 'center', lineHeight: 1.1 }}>
                   <div className="fw7" style={{ fontSize: 18 }}>
-                    {attendancePct == null ? '—' : `${attendancePct}%`}
+                    {heroLoading ? '—' : (attendancePct == null ? '—' : `${attendancePct}%`)}
                   </div>
                   <div className="t-xs muted3">periods</div>
                 </div>
@@ -1620,20 +1710,20 @@ export function ClassWiseStudents({ editable, leadership }: { editable: boolean;
             <div className="sm-att-hero-kpis" style={{ flex: 1 }}>
               <div>
                 <div className="sm-att-hero-val">
-                  {attendancePct == null ? 'Not marked' : `${attendancePct}%`}
+                  {hero.pctLabel}
                 </div>
-                <div className="t-sm muted">Today’s attendance</div>
+                <div className="t-sm muted">{heroLoading ? 'Loading today’s attendance' : 'Today’s attendance'}</div>
               </div>
               <div className="sm-att-hero-stat">
-                <div className="t-lg fw7">{presentTotal}</div>
+                <div className="t-lg fw7">{hero.presentLabel}</div>
                 <div className="t-xs muted3">Present / late</div>
               </div>
               <div className="sm-att-hero-stat">
-                <div className="t-lg fw7">{absentOrUnmarked}</div>
+                <div className="t-lg fw7">{hero.absentLabel}</div>
                 <div className="t-xs muted3">Absent / leave</div>
               </div>
               <div className="sm-att-hero-stat">
-                <div className="t-lg fw7">{markedPeriods}</div>
+                <div className="t-lg fw7">{hero.markedLabel}</div>
                 <div className="t-xs muted3">Marked periods</div>
               </div>
             </div>

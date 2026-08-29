@@ -30,6 +30,13 @@ export interface ChatMessage {
   text: string
   at: string
   mine: boolean
+  /** Data URL or http(s) URL — same storage convention as Tenant/User/Student photos
+   *  (no blob storage): the image is embedded directly, capped at ~300KB by the backend. */
+  imageUrl?: string | null
+  /** Delivered into the recipient's own inbox thread (see DeliverToPeerInboxAsync). */
+  delivered: boolean
+  /** Recipient has opened the thread since this was sent. */
+  read: boolean
   attachments?: ChatAttachment[]
 }
 
@@ -38,6 +45,12 @@ export interface CreateThreadInput {
   role?: string | null
   group?: boolean
   childId?: string | null
+  /** "teacher" | "staff" | "student" (student ⇒ that student's parent) | "user" (a CRM login
+   *  account — owner/admin/principal/vice_principal — addressed directly by its own Users id)
+   *  — lets the server resolve the real recipient account instead of matching free-text name. */
+  contactKind?: 'teacher' | 'staff' | 'student' | 'user' | null
+  /** The Teacher/Staff/Student row id matching `contactKind`. */
+  contactId?: string | null
 }
 
 interface ListEnvelope { data: Record<string, unknown>[]; next_cursor: string | null }
@@ -58,6 +71,18 @@ export function relTime(iso: unknown): string {
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 }
 
+/** In-conversation message timestamp — 12-hour clock with AM/PM (e.g. "2:35 PM"), prefixed
+ *  with the date when the message isn't from today. */
+export function messageTime(iso: unknown): string {
+  if (typeof iso !== 'string' || !iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true })
+  const now = new Date()
+  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+  return sameDay ? time : `${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}, ${time}`
+}
+
 export function toThread(wire: Record<string, unknown>): ChatThread {
   const t = snakeToCamel<Record<string, unknown>>(wire)
   const lastAt = (typeof t.lastAt === 'string' ? t.lastAt : null)
@@ -76,12 +101,17 @@ export function toThread(wire: Record<string, unknown>): ChatThread {
 
 export function toMessage(wire: Record<string, unknown>): ChatMessage {
   const m = snakeToCamel<Record<string, unknown>>(wire)
+  const imageUrl = typeof m.imageUrl === 'string' && m.imageUrl ? m.imageUrl : null
   return {
     id: String(m.id ?? ''),
     threadId: String(m.threadId ?? ''),
     text: String(m.text ?? ''),
-    at: relTime(m.sentAt),
+    at: messageTime(m.sentAt),
     mine: Boolean(m.isMine),
+    imageUrl,
+    delivered: Boolean(m.isDelivered),
+    read: Boolean(m.isRead),
+    attachments: imageUrl ? [{ id: `${String(m.id ?? '')}-img`, name: 'image', url: imageUrl, type: 'image/jpeg', size: 0 }] : undefined,
   }
 }
 
@@ -98,6 +128,8 @@ export async function createThread(input: CreateThreadInput): Promise<ChatThread
     role: input.role?.trim() || null,
     group: Boolean(input.group),
     childId: input.childId ?? null,
+    contactKind: input.contactKind ?? null,
+    contactId: input.contactId ?? null,
   })
   const wire = await request<Record<string, unknown>>('/threads', { method: 'POST', body: payload })
   return toThread(wire)
@@ -108,12 +140,15 @@ export async function listThreadMessages(threadId: string): Promise<ChatMessage[
   return env.data.map(toMessage)
 }
 
-export async function sendMessage(threadId: string, text: string): Promise<ChatMessage> {
+export async function sendMessage(threadId: string, text: string, imageUrl?: string | null): Promise<ChatMessage> {
   const t = text.trim()
-  if (!t) throw new Error('Message is required')
+  const img = imageUrl?.trim() || null
+  if (!t && !img) throw new Error('Message is required')
+  const body: Record<string, unknown> = { text: t }
+  if (img) body.image_url = img
   const wire = await request<Record<string, unknown>>(`/threads/${threadId}/messages`, {
     method: 'POST',
-    body: { text: t },
+    body,
   })
   return toMessage(wire)
 }

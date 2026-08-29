@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import type { AttendanceRecord, AttendanceStatus } from '@/api/attendance'
-import { dailyTrend, monthlyTrend, quarterlyTrend, startOfWeek, trendComposition, weeklyTrend } from './attendanceTrend'
+import { dailyTrend, monthlyTrend, quarterlyTrend, startOfWeek, trendComposition, trendLookbackDays, weeklyTrend } from './attendanceTrend'
 
 function rec(studentId: string, date: string, status: AttendanceStatus): AttendanceRecord {
   return { id: `${studentId}-${date}`, classId: 'c1', studentId, date, status }
 }
+
+describe('trendLookbackDays', () => {
+  it('keeps weekly history to eight weeks, not a 120-day archive', () => {
+    expect(trendLookbackDays('week')).toBe(56)
+    expect(trendLookbackDays('day')).toBe(14)
+  })
+})
 
 describe('startOfWeek', () => {
   it('returns the Monday of the week', () => {

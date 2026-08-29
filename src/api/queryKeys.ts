@@ -10,6 +10,7 @@ export const queryKeys = {
   students: {
     all: ['students'] as const,
     list: (opts: ListStudentsOpts = {}) => ['students', 'list', tenantScope(), opts] as const,
+    page: (opts: ListStudentsOpts = {}) => ['students', 'page', tenantScope(), opts] as const,
     detail: (id: string) => ['students', 'detail', tenantScope(), id] as const,
   },
   teachers: {
@@ -67,6 +68,7 @@ export const queryKeys = {
       ['attendance', 'advancedTeacherSummaries', tenantScope(), filters] as const,
     rangeSummary: (filters: import('./periodAttendanceAdvanced').PeriodAttendanceRangeFilters = {}) =>
       ['attendance', 'advancedRangeSummary', tenantScope(), filters] as const,
+    dashboardTrend: (day: string) => ['attendance', 'dashboardTrend', tenantScope(), day] as const,
     audit: (recordId: string) => ['attendance', 'advancedAudit', tenantScope(), recordId] as const,
   },
   exams: {
@@ -74,6 +76,11 @@ export const queryKeys = {
     papers: (examId: string) => ['exams', 'papers', examId] as const,
     grades: (paperId: string) => ['exams', 'grades', paperId] as const,
     studentGrades: (studentId: string) => ['exams', 'studentGrades', tenantScope(), studentId] as const,
+    dashboardBands: (examId: string) => ['exams', 'dashboardBands', tenantScope(), examId] as const,
+    letterGrades: (examId: string) => ['exams', 'letterGrades', tenantScope(), examId] as const,
+  },
+  crm: {
+    peopleSnapshot: () => ['crm', 'dashboardPeople', tenantScope()] as const,
   },
   complaints: {
     all: ['complaints'] as const,

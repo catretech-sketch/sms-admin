@@ -3,7 +3,7 @@
    Tabs: Classes & sections · Timetable builder · Periods ·
    Subjects · Homework. Timetable is interactive; homework is live API.
    ============================================================ */
-import { Fragment, createContext, useContext, useEffect, useMemo, useState, type ComponentType, type Dispatch, type SetStateAction, type ReactNode } from 'react'
+import { Fragment, createContext, useContext, useEffect, useMemo, useRef, useState, type ComponentType, type Dispatch, type SetStateAction, type ReactNode } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import { can } from '@/lib/gating'
 import {
@@ -19,7 +19,7 @@ import { addSchoolHouse, listSchoolHouses, removeSchoolHouse, renameSchoolHouse 
 import { getClassSubjects, saveClassSubjects, teachingPeriodCount, subjectsMatchPeriodsHint } from '@/api/classSubjects'
 import { useClassSubjectsMap, useListClassSubjects } from '@/api/hooks/useClassSubjects'
 import { DEFAULT_GRADES, DEFAULT_SECTIONS } from '@/lib/defaultClasses'
-import { cellKey, clashingClass, clashingClasses, pickTeacher, conflictsFor, teacherLoads, clashingTeachers, teacherSchedule, subjectSchedule, planTimetableSync, bellTimesFromPeriodRows, gridsFromRemoteSlots, hasFilledGrid, generateAutoTimetableGrid, DEFAULT_CLASS_BELL_TIMES, type Cell, type Grid } from '@/lib/timetable'
+import { cellKey, clashingClass, clashingClasses, pickTeacher, conflictsFor, teacherLoads, clashingTeachers, teacherSchedule, subjectSchedule, planTimetableSync, bellTimesFromPeriodRows, gridsFromRemoteSlots, hasFilledGrid, generateAutoTimetableGrid, classTimetableMode, subjectsInGrids, DEFAULT_CLASS_BELL_TIMES, type Cell, type Grid } from '@/lib/timetable'
 import { exportTimetablePdf, hasPrintableTimetable, type TimetablePrintView } from '@/lib/timetablePrint'
 import { listTimetable, replaceTimetableSlots } from '@/api/timetable'
 import { ensureSubjectsNamed, ensureDefaultSubjects } from '@/api/subjects'
@@ -797,6 +797,9 @@ function TimetableTab({ editable }: { editable: boolean }) {
   const [mode, setMode] = useState<Record<string, 'choice' | 'build'>>(() => initialSnap.mode ?? {})
   const [classTeachers, setClassTeachers] = useState<Record<string, string>>({})
   const [bellTimes, setBellTimes] = useState(DEFAULT_CLASS_BELL_TIMES)
+  const [liveReady, setLiveReady] = useState(() => hasFilledGrid(initialSnap.grids ?? {}))
+  const teachersRef = useRef(teachers)
+  teachersRef.current = teachers
 
   useEffect(() => {
     let cancelled = false
@@ -890,12 +893,16 @@ function TimetableTab({ editable }: { editable: boolean }) {
   const [clashPrompt, setClashPrompt] = useState<{ d: number; p: number; subject: string; tid: string; others: string[]; onConfirm: () => void } | null>(null)
 
   const g = grids[cls] ?? {}
+  const m = classTimetableMode(mode[cls], g)
   const conflicts = useMemo(() => conflictsFor(grids, cls), [grids, cls])
   const loads = useMemo(() => teacherLoads(grids), [grids])
   const clashers = useMemo(() => clashingTeachers(grids), [grids])
-  const m = mode[cls] ?? 'choice'
   const filled = Object.values(g).filter((c): c is Cell => !!c).length
   const ctId = classTeachers[cls] ?? ''
+  const pivotSubjects = useMemo(() => {
+    const placed = subjectsInGrids(grids)
+    return [...new Set([...catalogSubjects, ...placed])]
+  }, [catalogSubjects, grids])
 
   const snap: TimetableSnap = useMemo(() => ({ grids, mode }), [grids, mode])
   const status = publishStatusOf(pubMeta, snap)
@@ -1027,14 +1034,19 @@ function TimetableTab({ editable }: { editable: boolean }) {
         setPubMeta(env)
         const snap = activeSnapshot(env, editable, { grids: {}, mode: {} } as TimetableSnap)
         if (hasFilledGrid(snap.grids ?? {})) {
-          setGrids(snap.grids ?? {})
-          setMode(snap.mode ?? {})
+          const gridsSnap = snap.grids ?? {}
+          setGrids(gridsSnap)
+          const modeMap = { ...(snap.mode ?? {}) }
+          for (const [name, grid] of Object.entries(gridsSnap)) {
+            if (Object.values(grid).some(Boolean)) modeMap[name] = 'build'
+          }
+          setMode(modeMap)
           return
         }
         const remote = await listTimetable()
         if (cancelled || !remote.length) return
         const hydrated = gridsFromRemoteSlots(remote, DAYS, (name) => {
-          const t = teachers.find((x) => x.name === name)
+          const t = teachersRef.current.find((x) => x.name === name)
           return t?.id ?? null
         })
         if (!hasFilledGrid(hydrated)) return
@@ -1049,12 +1061,14 @@ function TimetableTab({ editable }: { editable: boolean }) {
         })
       } catch {
         /* leave empty grids — admin can still build */
+      } finally {
+        if (!cancelled) setLiveReady(true)
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [editable, teachers])
+  }, [editable])
 
   useEffect(() => {
     if (!editable) { register('timetable', null); return }
@@ -1125,10 +1139,15 @@ function TimetableTab({ editable }: { editable: boolean }) {
       rot[cell.subject] = (rot[cell.subject] ?? 0) + 1
       cell.teacherId = tid
     }
-    setGrids((prev) => ({ ...prev, [cls]: next }))
-    setMode((prev) => ({ ...prev, [cls]: 'build' }))
+    const nextGrids = { ...grids, [cls]: next }
+    const nextMode = { ...mode, [cls]: 'build' as const }
+    setGrids(nextGrids)
+    setMode(nextMode)
     setPlaceCounts({})
     setCfgOpen(false)
+    void saveDraftSnapshot('timetable', { grids: nextGrids, mode: nextMode })
+      .then(setPubMeta)
+      .catch(() => { /* keep generated grid even if draft persist fails */ })
     const clashCount = conflictsFor({ ...grids, [cls]: next }, cls).size
     const filledCount = Object.values(next).filter(Boolean).length
     toast.success('Timetable generated', `${filledCount} periods placed for ${cls} · ${clashCount === 0 ? '0 clashes' : `${clashCount} clash${clashCount > 1 ? 'es' : ''} to review`}.`)
@@ -1199,9 +1218,21 @@ function TimetableTab({ editable }: { editable: boolean }) {
         </div>
       </Card>
 
-      {view === 'teacher' && <TeacherView grids={grids} setGrids={setGrids} editable={editable} onTeacherChange={setViewTeacherId} />}
-      {view === 'subject' && <SubjectView grids={grids} setGrids={setGrids} editable={editable} subjectNames={catalogSubjects} onSubjectChange={setViewSubjectName} />}
-      {view === 'overview' && <ClassOverview grids={grids} classList={classList} />}
+      {view === 'teacher' && (
+        liveReady
+          ? <TeacherView grids={grids} setGrids={setGrids} editable={editable} onTeacherChange={setViewTeacherId} />
+          : <Empty icon="calendar" title="Loading timetable…" body="Fetching saved class routines." />
+      )}
+      {view === 'subject' && (
+        liveReady
+          ? <SubjectView grids={grids} setGrids={setGrids} editable={editable} subjectNames={pivotSubjects} onSubjectChange={setViewSubjectName} />
+          : <Empty icon="calendar" title="Loading timetable…" body="Fetching saved class routines." />
+      )}
+      {view === 'overview' && (
+        liveReady
+          ? <ClassOverview grids={grids} classList={classList} />
+          : <Empty icon="calendar" title="Loading timetable…" body="Fetching saved class routines." />
+      )}
 
       {view === 'class' && classList.length === 0 && (
         <Empty icon="grid" title="No classes yet" body="Add classes under Academics → Classes first. Dummy grade lists are no longer used." />

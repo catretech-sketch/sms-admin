@@ -7,6 +7,7 @@ export function useTeachers(opts: ListTeachersOpts = {}): UseQueryResult<Teacher
   return useQuery({
     queryKey: queryKeys.teachers.list(opts),
     queryFn: () => listTeachers(opts),
+    staleTime: 30_000,
   })
 }
 

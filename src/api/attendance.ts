@@ -2,7 +2,7 @@ import { request } from './client'
 import { snakeToCamel, camelToSnake } from './mapper'
 import { tokenStore } from './auth/tokenStore'
 
-export type AttendanceStatus = 'present' | 'late' | 'absent'
+export type AttendanceStatus = 'present' | 'late' | 'absent' | 'half_day'
 
 export interface AttendanceMark {
   studentId: string
@@ -66,6 +66,20 @@ export function toAttendanceDate(date: string): string {
   return m ? m[1] : String(date).slice(0, 10)
 }
 
+/** Calendar day of a mark in the browser timezone (ISO `…Z` midnight can shift the prefix). */
+export function attendanceCalendarDate(raw: string): string {
+  const s = String(raw).trim()
+  if (!s) return s
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s) && !/[zZ]|[+-]\d{2}:\d{2}$/.test(s)) return s.slice(0, 10)
+  const d = new Date(s)
+  if (Number.isNaN(d.getTime())) return toAttendanceDate(s)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 /* ---------- session memory cache (after successful API only — never browser SoT) ---------- */
 
 const memory = new Map<string, AttendanceRecord[]>()
@@ -88,6 +102,9 @@ function cacheDay(classId: string, day: string, rows: AttendanceRecord[]): void 
 }
 
 export const ATTENDANCE_CHANGED = 'sms:attendance-changed'
+
+/** Fired after a class period save so overview / trend / live KPIs refresh together. */
+export const ATTENDANCE_SAVED_EVENT = 'sms-attendance-saved'
 
 /** Session cache for one class+day (empty if never fetched/saved this session). */
 export function listCachedAttendanceDay(classId: string, date: string): AttendanceRecord[] {
@@ -315,6 +332,7 @@ export async function savePeriodAttendance(
       records,
     }),
   })
+  await listPeriodAttendance(classId, { date: day, period: args.period, subject: args.subject })
 }
 
 export async function saveAttendance(
@@ -330,15 +348,7 @@ export async function saveAttendance(
     method: 'POST',
     body: camelToSnake({ date: day, records }),
   })
-  const fresh: AttendanceRecord[] = records.map((r) => ({
-    id: `${classId}-${day}-${r.studentId}`,
-    classId,
-    studentId: r.studentId,
-    date: day,
-    status: r.status,
-    markedBy: null,
-  }))
-  cacheDay(classId, day, fresh)
+  await listAttendance(classId, day)
 }
 
 /** Run async work over items with a fixed concurrency (avoids saturating the API). */

@@ -5,7 +5,7 @@ import { queryKeys } from '../queryKeys'
 import { mergeClassNames } from '@/lib/defaultClasses'
 
 export function useClasses(): UseQueryResult<SchoolClass[]> {
-  return useQuery({ queryKey: queryKeys.classes.all, queryFn: () => listClasses() })
+  return useQuery({ queryKey: queryKeys.classes.all, queryFn: () => listClasses(), staleTime: 60_000 })
 }
 
 /** Live class names from API only (empty until classes are added or seeded). */

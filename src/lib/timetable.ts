@@ -7,6 +7,7 @@
 export type Cell = { subject: string; teacherId: string }
 export type Grid = Record<string, Cell | null>
 export type Grids = Record<string, Grid>
+export type PeriodBellMap = Record<number, { start: string; end: string }>
 
 /** Stable key for a 0-based day + 0-based period slot. */
 export const cellKey = (day: number, period: number): string => `${day}-${period}`
@@ -202,6 +203,27 @@ export function gridsFromRemoteSlots(
 
 export function hasFilledGrid(grids: Grids): boolean {
   return Object.values(grids).some((g) => Object.values(g).some(Boolean))
+}
+
+/** Show the builder when periods exist, even if mode was never flipped to `build`. */
+export function classTimetableMode(
+  mode: 'choice' | 'build' | undefined,
+  grid: Grid | undefined,
+): 'choice' | 'build' {
+  if (grid && Object.values(grid).some(Boolean)) return 'build'
+  return mode === 'build' ? 'build' : 'choice'
+}
+
+/** Distinct subjects placed on any class grid (for Teacher/Subject views). */
+export function subjectsInGrids(grids: Grids): string[] {
+  const set = new Set<string>()
+  for (const grid of Object.values(grids)) {
+    for (const cell of Object.values(grid)) {
+      const s = cell?.subject?.trim()
+      if (s) set.add(s)
+    }
+  }
+  return [...set].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
 }
 
 /**

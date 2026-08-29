@@ -39,7 +39,6 @@ export const DEFAULT_ALERT_CONFIG: AttendanceAlertConfig = {
   autoChannel: 'app',
 }
 
-const LAST_AUTO_KEY = 'sms_attendance_alert_last_auto'
 const LEGACY_CONFIG_KEY = 'sms_attendance_alert_config'
 const MIN_DAYS = 1
 const MAX_DAYS = 60
@@ -104,6 +103,7 @@ export function saveAlertConfig(cfg: Partial<AttendanceAlertConfig>): Attendance
 /** Test helper — drop in-memory alert config. */
 export function clearAlertConfigMemory(): void {
   memoryConfig = null
+  lastAutoSent = ''
   clearLegacyConfigStorage()
 }
 
@@ -112,18 +112,16 @@ function localDay(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+let lastAutoSent = ''
+
 /** Last date (YYYY-MM-DD) the scheduled auto-send fired, or '' if never. */
 export function getLastAutoSent(): string {
-  try {
-    return (typeof localStorage !== 'undefined' && localStorage.getItem(LAST_AUTO_KEY)) || ''
-  } catch { return '' }
+  return lastAutoSent
 }
 
 /** Record that the scheduled auto-send fired on `now`'s local day. */
 export function markAutoSent(now: Date = new Date()): void {
-  try {
-    if (typeof localStorage !== 'undefined') localStorage.setItem(LAST_AUTO_KEY, localDay(now))
-  } catch { /* ignore */ }
+  lastAutoSent = localDay(now)
 }
 
 /**

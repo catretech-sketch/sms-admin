@@ -27,6 +27,7 @@ import {
 import { fetchTeacherExtras } from '@/api/teacherExtras'
 import { fetchStaffExtras } from '@/api/staffExtras'
 import { openMailCompose } from '@/lib/composeMail'
+import { useLeadershipRoleByEmail } from '@/api/hooks/useUsers'
 
 /* ---------- shared helpers ---------- */
 const attColor = (v: number): string => (v >= 90 ? 'var(--success)' : v >= 80 ? 'var(--brand-600)' : v >= 75 ? 'var(--warning)' : 'var(--danger)')
@@ -260,6 +261,7 @@ function TeachersScreen() {
   const editable = can(app.role, 'sis', 'E')
   const teachersQ = useTeachers()
   const teachers = teachersQ.data ?? []
+  const leadershipByEmail = useLeadershipRoleByEmail()
 
   const message = (t: Teacher) => {
     const email = (t.email || '').trim()
@@ -302,18 +304,22 @@ function TeachersScreen() {
   const columns: Column<Teacher>[] = [
     {
       key: 'name', label: 'Teacher', sortValue: (t) => t.name,
-      render: (t) => (
-        <div className="row ai-center gap10">
-          <Avatar name={t.name} hue={t.avatarHue} size={34} src={resolvePeoplePhoto('teacher', t.id, t.photoUrl)} />
-          <div>
-            <div className="row ai-center gap6">
-              <span className="fw6">{t.name}</span>
-              {t.top && <span style={{ color: 'var(--gold)' }}><Icon name="sparkle" size={13} /></span>}
+      render: (t) => {
+        const leaderRole = leadershipByEmail.get(t.email.trim().toLowerCase())
+        return (
+          <div className="row ai-center gap10">
+            <Avatar name={t.name} hue={t.avatarHue} size={34} src={resolvePeoplePhoto('teacher', t.id, t.photoUrl)} />
+            <div>
+              <div className="row ai-center gap6">
+                <span className="fw6">{t.name}</span>
+                {t.top && <span style={{ color: 'var(--gold)' }}><Icon name="sparkle" size={13} /></span>}
+                {leaderRole && <Badge tone="brand" soft>{leaderRole}</Badge>}
+              </div>
+              <div className="t-xs muted">{t.code || t.id}</div>
             </div>
-            <div className="t-xs muted">{t.code || t.id}</div>
           </div>
-        </div>
-      ),
+        )
+      },
     },
     {
       key: 'dept', label: 'Department', sortValue: (t) => t.dept,
@@ -455,6 +461,7 @@ function StaffScreen() {
   const editable = can(app.role, 'sis', 'E')
   const staffQ = useStaff()
   const roster = staffQ.data ?? []
+  const leadershipByEmail = useLeadershipRoleByEmail()
 
   const message = (s: Staff) => {
     const email = (s.email || '').trim()
@@ -500,15 +507,21 @@ function StaffScreen() {
   const columns: Column<Staff>[] = [
     {
       key: 'name', label: 'Staff', sortValue: (s) => s.name,
-      render: (s) => (
-        <div className="row ai-center gap10">
-          <Avatar name={s.name} hue={s.avatarHue} size={34} src={resolvePeoplePhoto('staff', s.id, s.photoUrl)} />
-          <div>
-            <div className="fw6">{s.name}</div>
-            <div className="t-xs muted">{s.code || s.id} · {s.gender === 'M' ? 'Male' : 'Female'}</div>
+      render: (s) => {
+        const leaderRole = leadershipByEmail.get((s.email ?? '').trim().toLowerCase())
+        return (
+          <div className="row ai-center gap10">
+            <Avatar name={s.name} hue={s.avatarHue} size={34} src={resolvePeoplePhoto('staff', s.id, s.photoUrl)} />
+            <div>
+              <div className="row ai-center gap6">
+                <span className="fw6">{s.name}</span>
+                {leaderRole && <Badge tone="brand" soft>{leaderRole}</Badge>}
+              </div>
+              <div className="t-xs muted">{s.code || s.id} · {s.gender === 'M' ? 'Male' : 'Female'}</div>
+            </div>
           </div>
-        </div>
-      ),
+        )
+      },
     },
     {
       key: 'role', label: 'Role', sortValue: (s) => s.role,

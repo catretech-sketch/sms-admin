@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { listApprovals, actOnApproval, mapWireToApproval, approvalsForRole } from './approvals'
+import { listApprovals, actOnApproval, mapWireToApproval, approvalsForRole, inboxApprovals } from './approvals'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -70,6 +70,28 @@ describe('mapWireToApproval', () => {
     })
     expect(row.status).toBe('rejected')
     expect(row.decidedNote).toBe('No cover arranged')
+  })
+
+  it('maps decided_by_name so CRM can show who approved or rejected', () => {
+    const row = mapWireToApproval({
+      id: 'x', type: 'casual', status: 'approved', decided_note: 'Covered',
+      requester_name: 'Asha', decided_by_name: 'Priya Principal',
+      applied_on: '2026-05-18T10:00:00Z',
+    })
+    expect(row.decidedBy).toBe('Priya Principal')
+  })
+})
+
+describe('inboxApprovals', () => {
+  const approved: ReturnType<typeof mapWireToApproval> = mapWireToApproval({
+    id: 'leave-1', type: 'casual', status: 'approved', requester_name: 'Asha',
+    decided_by_name: 'Priya Principal', applied_on: '2026-05-18T10:00:00Z',
+  })
+
+  it('still shows a just-acted request on the Approved tab (SQL history, not a local hide)', () => {
+    const hidden = new Set(['leave-1'])
+    expect(inboxApprovals([approved], 'principal', 'approved', hidden)).toEqual([approved])
+    expect(inboxApprovals([approved], 'principal', 'pending', hidden)).toEqual([])
   })
 })
 

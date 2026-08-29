@@ -10,12 +10,13 @@ import {
   type Column, type BadgeTone,
 } from '@/components/ui'
 import { gateRole } from '@/lib/gating'
-import { useStudents, useStudent } from '@/api/hooks/useStudents'
+import { useStudents, useStudentsPage, useStudent } from '@/api/hooks/useStudents'
 import { useExams } from '@/api/hooks/useExams'
 import { useExamPapers } from '@/api/hooks/useExamPapers'
 import { useExamMarksMap, useStudentGrades } from '@/api/hooks/useGrades'
 import { useClasses } from '@/api/hooks/useClasses'
 import { studentGuardianName } from '@/api/students'
+import { formatStudentRoll } from '@/lib/studentRoll'
 import { listStoredDocs, downloadStoredDoc, openStoredDoc, isStoredImage, studentPhotoUrl, fetchStudentExtras } from '@/api/studentExtras'
 import { openMailCompose, guardianEmailsFromStudent } from '@/lib/composeMail'
 import { markKey } from '@/lib/examData'
@@ -39,8 +40,8 @@ import { DEFAULT_GRADES } from '@/lib/defaultClasses'
 /* ---------- shared helpers ---------- */
 const feeTone: Record<FeeStatus, BadgeTone> = { paid: 'success', partial: 'warning', due: 'danger' }
 const feeLabel: Record<FeeStatus, string> = { paid: 'Paid', partial: 'Partial', due: 'Due' }
-const dayStatusTone: Record<AttendanceStatus, BadgeTone> = { present: 'success', late: 'warning', absent: 'danger' }
-const dayStatusLabel: Record<AttendanceStatus, string> = { present: 'Present', late: 'Late', absent: 'Absent' }
+const dayStatusTone: Record<AttendanceStatus, BadgeTone> = { present: 'success', late: 'warning', absent: 'danger', half_day: 'warning' }
+const dayStatusLabel: Record<AttendanceStatus, string> = { present: 'Present', late: 'Late', absent: 'Absent', half_day: 'Half day' }
 const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 function fmtDayLabel(iso: string): string {
   const d = new Date(`${iso}T12:00:00`)
@@ -328,15 +329,41 @@ function StudentsScreen() {
   const app = useApp()
   const toast = useToast()
   const [q, setQ] = useState('')
+  const [qDebounced, setQDebounced] = useState('')
   const [grade, setGrade] = useState('all')
   const [status, setStatus] = useState('all')
   const [fee, setFee] = useState('all')
   const [importOpen, setImportOpen] = useState(false)
   const [view, setView] = useState<'list' | 'toppers'>('list')
+  const [cursor, setCursor] = useState<string | undefined>()
+  const [prevCursors, setPrevCursors] = useState<string[]>([])
 
   const editable = canEdit(app.role)
-  const { data } = useStudents()
-  const students = data ?? []
+  const classesQ = useClasses()
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setQDebounced(q), 300)
+    return () => window.clearTimeout(t)
+  }, [q])
+
+  useEffect(() => {
+    setCursor(undefined)
+    setPrevCursors([])
+  }, [qDebounced, grade, status, fee])
+
+  const listOpts = {
+    q: qDebounced.trim() || undefined,
+    grade,
+    status,
+    fee,
+    limit: 25 as const,
+    cursor,
+  }
+  const pageQ = useStudentsPage({ ...listOpts, enabled: view === 'list' })
+  const toppersQ = useStudents({ enabled: view === 'toppers' })
+
+  const students = view === 'toppers' ? (toppersQ.data ?? []) : (pageQ.data?.rows ?? [])
+  const nextCursor = pageQ.data?.nextCursor ?? null
 
   /* Official period attendance % from student API; null when unmarked. */
   const attendancePctOf = (s: Student): number | null =>
@@ -344,22 +371,13 @@ function StudentsScreen() {
 
   const gradeOptions = useMemo(() => {
     const unique = new Set<string>([...DEFAULT_GRADES])
-    for (const s of students) {
-      if (s.grade) unique.add(s.grade)
+    for (const c of classesQ.data ?? []) {
+      if (c.grade) unique.add(c.grade)
     }
     return [...unique]
-  }, [students])
+  }, [classesQ.data])
 
-  const rows = useMemo(() => {
-    const needle = q.trim().toLowerCase()
-    return students.filter((s) => {
-      if (needle && !(s.name.toLowerCase().includes(needle) || s.adm.toLowerCase().includes(needle) || s.cls.toLowerCase().includes(needle))) return false
-      if (grade !== 'all' && s.grade !== grade) return false
-      if (status !== 'all' && s.status !== status) return false
-      if (fee !== 'all' && s.feeStatus !== fee) return false
-      return true
-    })
-  }, [students, q, grade, status, fee])
+  const rows = students
 
   const columns: Column<Student>[] = [
     {
@@ -379,7 +397,7 @@ function StudentsScreen() {
       render: (s) => (
         <div>
           <div className="fw6">{s.cls}</div>
-          <div className="t-xs muted">Roll {s.roll}</div>
+          <div className="t-xs muted">Roll {formatStudentRoll(s.roll)}</div>
         </div>
       ),
     },
@@ -421,7 +439,9 @@ function StudentsScreen() {
     },
   ]
 
-  const sub = `${rows.length} of ${students.length} students · ${app.school.name}`
+  const sub = view === 'toppers'
+    ? `${students.length} students · ${app.school.name}`
+    : `${rows.length} on this page${nextCursor ? ' · more available' : ''} · ${app.school.name}`
 
   return (
     <div>
@@ -463,7 +483,7 @@ function StudentsScreen() {
         <DataTable<Student>
           columns={columns}
           rows={rows}
-          pageSize={12}
+          pageSize={25}
           rowKey={(s) => s.id}
           initialSort={{ key: 'name', dir: 'asc' }}
           bulk
@@ -501,6 +521,32 @@ function StudentsScreen() {
           )}
           empty={<Empty icon="users" title="No students match" body="Try adjusting the search or filters." />}
         />
+        <div className="row ai-center jc-between gap12" style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
+          <Btn
+            variant="secondary"
+            size="sm"
+            disabled={!prevCursors.length || pageQ.isFetching}
+            onClick={() => {
+              const prev = prevCursors[prevCursors.length - 1]
+              setPrevCursors((s) => s.slice(0, -1))
+              setCursor(prev)
+            }}
+          >
+            Previous
+          </Btn>
+          <span className="t-xs muted">{pageQ.isFetching ? 'Loading…' : `${rows.length} students`}</span>
+          <Btn
+            variant="secondary"
+            size="sm"
+            disabled={!nextCursor || pageQ.isFetching}
+            onClick={() => {
+              setPrevCursors((s) => [...s, cursor ?? ''])
+              setCursor(nextCursor ?? undefined)
+            }}
+          >
+            Next
+          </Btn>
+        </div>
       </Card>
 
       <ImportDrawer open={importOpen} onClose={() => setImportOpen(false)} />
@@ -545,7 +591,10 @@ function Student360() {
   const { data: fetched, isLoading, isError } = useStudent(app.focus)
   const examsQ = useExams()
   const classesQ = useClasses()
-  const studentsQ = useStudents()
+  const studentsQ = useStudents({
+    grade: fetched?.grade,
+    enabled: Boolean(fetched?.grade),
+  })
   const latestExam = useMemo(() => pickLatestExam(examsQ.data), [examsQ.data])
   // NOTE: keep every hook above the loading/error guards below so the hook
   // order stays stable across renders (React crashes otherwise).
@@ -706,7 +755,7 @@ function Student360() {
               </div>
               <div className="row ai-center gap12 wrap muted t-sm" style={{ marginTop: 4 }}>
                 <span>{stu.adm}</span><span>·</span>
-                <span>Class {stu.cls} · Roll {stu.roll}</span><span>·</span>
+                <span>Class {stu.cls} · Roll {formatStudentRoll(stu.roll)}</span><span>·</span>
                 <span>{stu.house || '—'} House</span><span>·</span>
                 <span>{guardian || '—'} · {stu.phone || '—'}</span>
               </div>
@@ -765,7 +814,7 @@ function Student360() {
               <DetailRow label="Gender" value={stu.gender === 'F' ? 'Female' : 'Male'} />
               <DetailRow label="Date of birth" value={stu.dob} />
               <DetailRow label="Class / section" value={stu.cls} />
-              <DetailRow label="Roll" value={stu.roll} />
+              <DetailRow label="Roll" value={formatStudentRoll(stu.roll)} />
               <DetailRow label="House" value={stu.house} />
               <DetailRow label="Email" value={stu.email} />
               <DetailRow label="Address" value={stu.address} />

@@ -119,8 +119,10 @@ describe('Add Student form', () => {
         (o) => (o as HTMLOptionElement).value === 'VIII-A',
       )).toBe(true),
     )
+    expect(screen.getByLabelText('Roll number preview')).toHaveValue('Select class first')
     fillRequired()
     fireEvent.change(classCombo(), { target: { value: 'VIII-A' } })
+    expect(screen.getByLabelText('Roll number preview')).toHaveValue('1')
     fireEvent.click(screen.getByText('Save student'))
 
     await waitFor(() => expect(probe().split('|')[1]).toBe('school.student'), { timeout: 10000 })

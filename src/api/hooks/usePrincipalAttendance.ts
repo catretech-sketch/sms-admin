@@ -11,7 +11,6 @@ export function usePrincipalAttendance(date: string, enabled = true): UseQueryRe
     queryFn: () => getPrincipalAttendance(date),
     enabled: enabled && Boolean(date),
     staleTime: 15_000,
-    refetchOnMount: 'always',
     refetchOnWindowFocus: true,
   })
 }

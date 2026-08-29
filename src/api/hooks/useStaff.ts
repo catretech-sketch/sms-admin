@@ -12,6 +12,7 @@ export function useStaff(opts: ListStaffOpts = {}): UseQueryResult<Staff[]> {
     queryKey: queryKeys.staff.list(opts),
     queryFn: () => listStaff(opts),
     enabled: allowed && opts.enabled !== false,
+    staleTime: 30_000,
   })
 }
 

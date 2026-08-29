@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   cellKey, clashingClass, clashingClasses, teacherBusyElsewhere, pickTeacher, conflictsFor,
   teacherLoads, clashingTeachers, teacherSchedule, subjectSchedule, planTimetableSync,
-  gridsFromRemoteSlots, generateAutoTimetableGrid,
+  gridsFromRemoteSlots, generateAutoTimetableGrid, classTimetableMode, subjectsInGrids,
   type Grids, type RemoteTimetableSlot,
 } from './timetable'
 
@@ -108,6 +108,18 @@ describe('planTimetableSync', () => {
       1: { start: '08:15', end: '09:00' },
     })
     expect(plan.toCreate[0]).toMatchObject({ startTime: '08:15', endTime: '09:00' })
+  })
+
+  it('opens the builder when a class grid already has periods even if mode is still choice', () => {
+    expect(classTimetableMode('choice', { [cellKey(0, 0)]: { subject: 'Math', teacherId: 't1' } })).toBe('build')
+    expect(classTimetableMode('choice', {})).toBe('choice')
+    expect(classTimetableMode('build', {})).toBe('build')
+  })
+
+  it('lists subjects actually placed on the grid', () => {
+    expect(subjectsInGrids({
+      'IX-A': { [cellKey(0, 0)]: { subject: 'Mathematics', teacherId: 't1' } },
+    })).toEqual(['Mathematics'])
   })
 
   it('hydrates grids from remote slots', () => {

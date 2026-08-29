@@ -14,6 +14,7 @@ import type {
   PeriodAttendanceAdvancedFilters,
   PeriodAttendanceAdvancedRow,
 } from '@/api/periodAttendanceAdvanced'
+import { formatMarkedAt } from '@/lib/dateInput'
 
 const DEFAULT_FILTERS: PeriodAttendanceAdvancedFilters = {
   preset: 'today',
@@ -103,10 +104,7 @@ function periodTime(row: PeriodAttendanceAdvancedRow): string {
 }
 
 function markedAt(value?: string | null): string {
-  if (!value) return '—'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+  return formatMarkedAt(value)
 }
 
 function geoDisplay(row: PeriodAttendanceAdvancedRow): string {
@@ -338,13 +336,13 @@ export function AttendanceAdvanced() {
                 <th>Admission No</th>
                 <th>Class</th>
                 <th>Section</th>
+                <th>Status</th>
+                <th>Marked By</th>
+                <th>Marked By Role</th>
+                <th>Assigned Teacher</th>
                 <th>Subject</th>
                 <th>Period</th>
                 <th>Period Time</th>
-                <th>Status</th>
-                <th>Assigned Teacher</th>
-                <th>Marked By</th>
-                <th>Marked By Role</th>
                 <th>Marked At</th>
                 <th>Geo-Fence</th>
                 <th>History</th>
@@ -357,13 +355,13 @@ export function AttendanceAdvanced() {
                   <td>{row.admissionNo || '—'}</td>
                   <td>{row.grade || row.classLabel || '—'}</td>
                   <td>{row.section || '—'}</td>
+                  <td><Badge tone={statusTone(row.status)} dot>{titleCase(row.status)}</Badge></td>
+                  <td className="fw6">{row.markedByName || '—'}</td>
+                  <td>{titleCase(row.markedByRole)}</td>
+                  <td>{row.assignedTeacherName || '—'}</td>
                   <td>{row.subject || '—'}</td>
                   <td>{row.period || '—'}</td>
                   <td>{periodTime(row)}</td>
-                  <td><Badge tone={statusTone(row.status)} dot>{titleCase(row.status)}</Badge></td>
-                  <td>{row.assignedTeacherName || '—'}</td>
-                  <td>{row.markedByName || row.markedBy || '—'}</td>
-                  <td>{titleCase(row.markedByRole)}</td>
                   <td>{markedAt(row.markedAt)}</td>
                   <td>{geoDisplay(row)}</td>
                   <td>

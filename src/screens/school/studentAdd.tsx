@@ -21,6 +21,7 @@ import { listSchoolHouses } from '@/api/schoolHouses'
 import { required, validateAadhaar, validateEmail, validatePhone, validateFile } from '@/lib/validation'
 import { properName, properPlace } from '@/lib/properCase'
 import { toDateInputValue } from '@/lib/dateInput'
+import { predictStudentRoll } from '@/lib/studentRoll'
 import type { Student } from '@/types'
 
 function classOptionValue(c: SchoolClass): string {
@@ -250,39 +251,14 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
     [liveClasses, f.cls],
   )
 
-  /** Live roll preview from DB classmates + typed name (A–Z), same rules as server. */
-  const predictedRoll = useMemo(() => {
-    const name = `${f.firstName.trim()} ${f.lastName.trim()}`.trim()
-    const { grade, section } = selectedClass
-    if (!name || !grade || !section) return null
-
-    const selfId = mode === 'edit' && existing?.id ? existing.id : '__new__'
-    const rows = (rosterQ.data ?? [])
-      .filter((s) =>
-        s.status === 'active'
-        && s.grade === grade
-        && s.section === section
-        && s.id !== selfId,
-      )
-      .map((s) => ({ id: s.id, name: s.name.trim(), adm: s.adm ?? '' }))
-
-    rows.push({
-      id: selfId,
-      name,
-      adm: (f.adm.trim() || suggestedAdm || '\uffff'),
-    })
-
-    rows.sort((a, b) => {
-      const byName = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-      if (byName !== 0) return byName
-      const byAdm = a.adm.localeCompare(b.adm, undefined, { sensitivity: 'base' })
-      if (byAdm !== 0) return byAdm
-      return a.id.localeCompare(b.id)
-    })
-
-    const idx = rows.findIndex((r) => r.id === selfId)
-    return idx >= 0 ? idx + 1 : null
-  }, [
+  /** Live roll preview — same A–Z-by-name rules as SQL Student_RenumberClass. */
+  const predictedRoll = useMemo(() => predictStudentRoll({
+    name: `${f.firstName.trim()} ${f.lastName.trim()}`.trim(),
+    adm: f.adm.trim() || suggestedAdm,
+    selfId: mode === 'edit' && existing?.id ? existing.id : '__new__',
+    classInfo: selectedClass,
+    roster: rosterQ.data ?? [],
+  }), [
     f.firstName, f.lastName, f.adm, selectedClass,
     mode, existing?.id, rosterQ.data, suggestedAdm,
   ])
@@ -414,7 +390,12 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
         app.go('school.student', { focus: saved.id })
         return
       }
-      toast.success(mode === 'edit' ? 'Student updated' : 'Student added', `${saved.name} · ${saved.cls}.`)
+      toast.success(
+        mode === 'edit' ? 'Student updated' : 'Student added',
+        saved.roll > 0
+          ? `${saved.name} · ${saved.cls} · Roll ${saved.roll}`
+          : `${saved.name} · ${saved.cls}.`,
+      )
       app.go('school.student', { focus: saved.id })
     }
 
@@ -474,12 +455,12 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
               {txt('firstName', 'First name', { required: true, icon: 'user', ph: 'Aarav', case: 'name' })}
               {txt('lastName', 'Last name', { required: true, ph: 'Sharma', case: 'name' })}
               {sel('cls', 'Class', clsOptions, true)}
-              <Field label="Roll number" hint="Auto A–Z by name in this class">
+              <Field label="Roll number" hint="Saved to the database · A–Z by name in this class">
                 <Input
-                  value={predictedRoll != null ? String(predictedRoll) : '—'}
+                  value={predictedRoll != null ? String(predictedRoll) : 'Select class first'}
                   readOnly
-                  disabled
                   aria-label="Roll number preview"
+                  style={{ fontWeight: 700 }}
                 />
               </Field>
               {sel('house', 'House', houseOptions)}

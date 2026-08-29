@@ -50,7 +50,15 @@ export function fromExam(e: Partial<Exam>): Record<string, unknown> {
 
 export async function listExams(): Promise<Exam[]> {
   const env = await listRequest<ListEnvelope>('/exams')
-  return env.data.map(toExam)
+  return (env.data ?? []).map(toExam)
+}
+
+export async function listExamLetterGrades(examId: string): Promise<{ grade: string; count: number }[]> {
+  const rows = await request<Record<string, unknown>[]>(`/exams/${examId}/letter-grades`)
+  return (rows ?? []).map((row) => {
+    const c = snakeToCamel<Record<string, unknown>>(row)
+    return { grade: String(c.grade ?? ''), count: Number(c.count) || 0 }
+  })
 }
 
 export async function createExam(e: Exam): Promise<Exam> {

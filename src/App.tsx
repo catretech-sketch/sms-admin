@@ -12,6 +12,8 @@ import { Tweaks } from '@/components/shell/Tweaks'
 import { LoginScreen } from '@/screens/LoginScreen'
 import { Router } from '@/router'
 import { PendingActivationScreen } from '@/components/shell/gates'
+import { useAttendanceLiveSocket } from '@/api/hooks/useAttendanceLive'
+import { useThreadsLiveSocket } from '@/api/hooks/useThreadsLive'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -19,6 +21,8 @@ const queryClient = new QueryClient({
 
 function Shell() {
   const app = useApp()
+  useAttendanceLiveSocket(app.loggedIn && app.consoleKind === 'school')
+  useThreadsLiveSocket(app.loggedIn && app.consoleKind === 'school')
   if (app.sessionRestoring) {
     return (
       <div className="col ai-center jc-center" style={{ minHeight: '100vh', gap: 12 }}>

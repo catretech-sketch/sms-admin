@@ -63,13 +63,20 @@ export function parentMailFromStudent(s: {
 }
 
 export async function listStudents(opts: ListStudentsOpts = {}): Promise<Student[]> {
+  const page = await listStudentsPage(opts)
+  return page.rows
+}
+
+export async function listStudentsPage(opts: ListStudentsOpts = {}): Promise<{ rows: Student[]; nextCursor: string | null }> {
   const query: Record<string, string | undefined> = {}
   if (opts.q) query.q = opts.q
   if (opts.grade && opts.grade !== 'all') query.grade = opts.grade
   if (opts.status && opts.status !== 'all') query.status = opts.status
   if (opts.fee && opts.fee !== 'all') query.fee = opts.fee
+  if (opts.limit != null) query.limit = String(opts.limit)
+  if (opts.cursor) query.cursor = opts.cursor
   const env = await listRequest<ListEnvelope>('/students', { query })
-  return env.data.map(toStudent)
+  return { rows: env.data.map(toStudent), nextCursor: env.next_cursor }
 }
 
 export async function getStudent(id: string): Promise<Student> {

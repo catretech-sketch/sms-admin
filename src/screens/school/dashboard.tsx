@@ -9,34 +9,29 @@ import {
 } from '@/components/ui'
 import type { BadgeTone } from '@/components/ui'
 import { SchoolPhoto } from '@/components/SchoolMark'
-import { grades } from '@/data/mockDb'
 import { useApprovals } from '@/api/hooks/useApprovals'
-import { approvalsForRole, type ApprovalFilter } from '@/api/approvals'
+import { inboxApprovals, type ApprovalFilter } from '@/api/approvals'
 import { useActOnApproval } from '@/api/hooks/useApprovalMutations'
-import { useStudents } from '@/api/hooks/useStudents'
+import { useCrmPeopleSnapshot } from '@/api/hooks/useCrmDashboard'
 import { useTeachers } from '@/api/hooks/useTeachers'
 import { useStaff } from '@/api/hooks/useStaff'
 import { usePrincipalAttendance } from '@/api/hooks/usePrincipalAttendance'
+import { usePeriodAttendanceRangeSummary, useDashboardAttendanceTrend } from '@/api/hooks/usePeriodAttendanceAdvanced'
+import { classWiseDayHero } from '@/api/periodAttendanceAdvanced'
 import { useFeeReportSummary } from '@/api/hooks/useFeeReports'
 import { useAnnouncements } from '@/api/hooks/useAnnouncements'
 import { useFeePayments } from '@/api/hooks/useFeePayments'
+import { useDashboardExamBands } from '@/api/hooks/useExams'
 import {
-  loadPeopleAttendance, countPeoplePresent, PEOPLE_ATTENDANCE_CHANGED,
+  countPeoplePresent, PEOPLE_ATTENDANCE_CHANGED,
   fetchRemotePeopleAttendance, type CheckInInfo,
 } from '@/api/peopleAttendance'
 import type { AttendanceStatus } from '@/api/attendance'
 import { fmtMoney, fmtNum } from '@/lib/format'
 import { principalStaffToCheckInMap } from '@/lib/geoAttendanceDemo'
+import { studentLiveAttendance } from '@/lib/studentLiveAttendance'
+import { enrollmentByStageFromCounts } from '@/lib/dashboardLive'
 import type { Approval, ApprovalStatus, Role } from '@/types'
-
-/* ---------- small helpers ---------- */
-const STAGES = [
-  { label: 'Pre-primary', share: 0.14, color: '#a855f7' },
-  { label: 'Primary', share: 0.34, color: '#16a34a' },
-  { label: 'Middle', share: 0.30, color: '#0ea5e9' },
-  { label: 'Secondary', share: 0.22, color: '#f59e0b' },
-]
-const RESULT_BANDS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', 'D', 'E']
 
 function announcementTone(type?: string): BadgeTone {
   const t = (type || '').toLowerCase()
@@ -65,30 +60,45 @@ function SchoolDashboard() {
   const liveAtt = canSeeLiveAttendance(app.role)
   const today = todayIso()
 
-  const studentsQ = useStudents()
+  const peopleQ = useCrmPeopleSnapshot()
   const teachersQ = useTeachers()
   const staffQ = useStaff()
   const attQ = usePrincipalAttendance(today, liveAtt)
+  const periodDayQ = usePeriodAttendanceRangeSummary(
+    { preset: 'custom', from: today, to: today },
+    liveAtt,
+  )
   const feeQ = useFeeReportSummary()
   const paymentsQ = useFeePayments()
   const announcementsQ = useAnnouncements()
+  /* Trend waits for today's KPI so 8 week rollups do not starve the first paint. */
+  const trendQ = useDashboardAttendanceTrend(liveAtt && (periodDayQ.isSuccess || periodDayQ.isError))
+  const examBandsQ = useDashboardExamBands()
 
   /* Teacher/staff marks from API (memory cache after success); never hydrate from localStorage. */
   const [teacherMarks, setTeacherMarks] = useState<Record<string, AttendanceStatus>>({})
   const [staffMarks, setStaffMarks] = useState<Record<string, AttendanceStatus>>({})
+  const [peopleMarksReady, setPeopleMarksReady] = useState(false)
   useEffect(() => {
     let cancelled = false
     setTeacherMarks({})
     setStaffMarks({})
-    void fetchRemotePeopleAttendance('teachers', today)
-      .then((m) => { if (!cancelled) setTeacherMarks(m) })
-      .catch(() => { if (!cancelled) setTeacherMarks({}) })
-    void fetchRemotePeopleAttendance('staff', today)
-      .then((m) => { if (!cancelled) setStaffMarks(m) })
-      .catch(() => { if (!cancelled) setStaffMarks({}) })
+    setPeopleMarksReady(false)
+    void Promise.all([
+      fetchRemotePeopleAttendance('teachers', today)
+        .then((m) => { if (!cancelled) setTeacherMarks(m) })
+        .catch(() => { if (!cancelled) setTeacherMarks({}) }),
+      fetchRemotePeopleAttendance('staff', today)
+        .then((m) => { if (!cancelled) setStaffMarks(m) })
+        .catch(() => { if (!cancelled) setStaffMarks({}) }),
+    ]).finally(() => { if (!cancelled) setPeopleMarksReady(true) })
     const bump = () => {
-      setTeacherMarks(loadPeopleAttendance('teachers', today))
-      setStaffMarks(loadPeopleAttendance('staff', today))
+      void fetchRemotePeopleAttendance('teachers', today)
+        .then((m) => { if (!cancelled) setTeacherMarks(m) })
+        .catch(() => { /* keep last API snapshot */ })
+      void fetchRemotePeopleAttendance('staff', today)
+        .then((m) => { if (!cancelled) setStaffMarks(m) })
+        .catch(() => { /* keep last API snapshot */ })
     }
     window.addEventListener(PEOPLE_ATTENDANCE_CHANGED, bump)
     window.addEventListener('focus', bump)
@@ -99,17 +109,24 @@ function SchoolDashboard() {
     }
   }, [today])
 
-  const liveStudents = studentsQ.data?.length ?? s.students
-  const liveTeachers = teachersQ.data?.length ?? Math.round(s.staff * 0.62)
-  const liveSupport = staffQ.data?.length ?? Math.max(0, s.staff - liveTeachers)
+  const liveStudents = peopleQ.data?.studentCount ?? 0
+  const liveTeachers = peopleQ.data?.teacherCount ?? 0
+  const liveSupport = peopleQ.data?.staffCount ?? 0
+  const countsLoading = peopleQ.isLoading
+  const rosterLoading = teachersQ.isLoading || staffQ.isLoading
+  const liveGrades = peopleQ.data?.uniqueGrades ?? 0
 
-  const apiRoll = attQ.data?.studentTotal ?? 0
-  const studentTotal = Math.max(apiRoll, liveStudents)
-  const studentsPresent = attQ.data?.presentTotal
-    ?? Math.round((liveStudents * (s.attendance || 0)) / 100)
-  const attendancePct = studentTotal > 0
-    ? Math.round((studentsPresent / studentTotal) * 100)
-    : (attQ.data ? Math.round(Number(attQ.data.overallPct) || 0) : Math.round(s.attendance || 0))
+  const studentHero = classWiseDayHero({ range: periodDayQ.data })
+  const studentAtt = studentLiveAttendance({
+    loaded: !liveAtt || periodDayQ.isSuccess || periodDayQ.isError,
+    presentTotal: studentHero.present,
+    studentTotal: studentHero.marked,
+    overallPct: studentHero.pct,
+    enrollment: liveStudents,
+  })
+  const studentTotal = studentAtt.marked > 0 ? studentAtt.marked : liveStudents
+  const studentsPresent = studentAtt.present
+  const attendancePct = studentAtt.pct
 
   /* Teachers & staff: app check-in OR CRM mark — same rule as Attendance roster. */
   const teachersPresent = useMemo(() => {
@@ -153,13 +170,10 @@ function SchoolDashboard() {
   const latestPayment = feeQ.data?.latestPayment
   const feeLoading = feeQ.isLoading
   const feeReady = Boolean(feeQ.data) || feeQ.isError
-  const ratio = Math.round(liveStudents / Math.max(1, liveTeachers))
+  const ratio = liveTeachers ? Math.round(liveStudents / liveTeachers) : 0
 
-  const months = ['Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun']
-  const attTrend = useMemo(
-    () => [90.4, 91.2, 89.8, 92.1, 93.0, 92.4, 93.6, attendancePct],
-    [attendancePct],
-  )
+  const attTrend = useMemo(() => (trendQ.data ?? []).filter((p) => !p.empty), [trendQ.data])
+  const attSpark = attTrend.map((p) => p.value)
 
   const recentPayments = useMemo(() => {
     const rows = paymentsQ.data ?? []
@@ -188,27 +202,31 @@ function SchoolDashboard() {
         text: `Fees · collected today ${fmtMoney(feesToday, cur)} · outstanding ${fmtMoney(outstanding, cur)} · ${fmtNum(defaulters)} due`,
       })
     }
-    if (attQ.isSuccess || studentsPresent > 0) {
+    if (periodDayQ.isSuccess && attendancePct != null) {
       rows.push({
         time: 'today',
-        text: `Students · ${fmtNum(studentsPresent)} of ${fmtNum(studentTotal)} present (${attendancePct}%)`,
+        text: `Students · ${studentAtt.footnote} (${attendancePct}%)`,
       })
     }
-    rows.push({
-      time: 'today',
-      text: `Teachers · ${fmtNum(teachersPresent)} of ${fmtNum(liveTeachers)} present (${teacherRate}%)`,
-    })
-    rows.push({
-      time: 'today',
-      text: `Staff · ${fmtNum(supportPresent)} of ${fmtNum(liveSupport)} present (${supportRate}%)`,
-    })
+    if (teachersQ.isSuccess) {
+      rows.push({
+        time: 'today',
+        text: `Teachers · ${fmtNum(teachersPresent)} of ${fmtNum(liveTeachers)} present (${teacherRate}%)`,
+      })
+    }
+    if (staffQ.isSuccess) {
+      rows.push({
+        time: 'today',
+        text: `Staff · ${fmtNum(supportPresent)} of ${fmtNum(liveSupport)} present (${supportRate}%)`,
+      })
+    }
     return rows
   }, [
     recentPayments, latestPayment, cur, feeReady, feeLoading,
     feesToday, outstanding, defaulters,
-    attQ.isSuccess, studentsPresent, studentTotal, attendancePct,
-    teachersPresent, liveTeachers, teacherRate,
-    supportPresent, liveSupport, supportRate,
+    periodDayQ.isSuccess, attendancePct, studentAtt.footnote,
+    teachersQ.isSuccess, teachersPresent, liveTeachers, teacherRate,
+    staffQ.isSuccess, supportPresent, liveSupport, supportRate,
   ])
 
   const liveAnnouncements = useMemo(() => {
@@ -220,9 +238,17 @@ function SchoolDashboard() {
     }))
   }, [announcementsQ.data])
 
-  const genderBoys = Math.round(liveStudents * 0.53)
-  const genderGirls = liveStudents - genderBoys
-  const attLiveLabel = attQ.isFetching ? 'Refreshing…' : (attQ.isSuccess ? 'Live today' : 'Live roster')
+  const stageSlices = useMemo(
+    () => enrollmentByStageFromCounts(peopleQ.data?.grades ?? []),
+    [peopleQ.data?.grades],
+  )
+  const gender = {
+    boys: peopleQ.data?.boys ?? 0,
+    girls: peopleQ.data?.girls ?? 0,
+    unspecified: peopleQ.data?.unspecified ?? 0,
+  }
+  const examBands = examBandsQ.data?.bands ?? []
+  const attLiveLabel = periodDayQ.isFetching ? 'Refreshing…' : (periodDayQ.isSuccess ? 'Live today' : 'Live roster')
 
   return (
     <div className="col gap20">
@@ -241,17 +267,17 @@ function SchoolDashboard() {
       <div className="sm-kpi-grid">
         <Kpi
           icon="users" iconBg="var(--brand-50)" iconColor="var(--brand-600)"
-          label="Total enrollment" value={fmtNum(liveStudents)}
-          delta="3.8%" deltaDir="up"
-          foot={`${grades.length} grades · ${fmtNum(peopleTotal)} staff`}
-          spark={[1980, 2012, 2040, 2065, 2090, 2110, 2130, liveStudents]} sparkColor="var(--brand-600)"
+          label="Total enrollment" value={countsLoading ? '—' : fmtNum(liveStudents)}
+          foot={countsLoading
+            ? 'Loading roster…'
+            : `${fmtNum(liveGrades)} grade${liveGrades === 1 ? '' : 's'} · ${fmtNum(peopleTotal)} staff`}
         />
         <Kpi
           icon="check" iconBg="var(--success-bg)" iconColor="var(--success)"
-          label="Today's attendance" value={`${attendancePct}%`}
+          label="Today's attendance" value={attendancePct == null ? '—' : `${attendancePct}%`}
           delta={attLiveLabel} deltaDir="up"
-          foot={`${fmtNum(studentsPresent)} of ${fmtNum(studentTotal)} students present`}
-          spark={[91, 92, 90, 93, 92, 94, 93, attendancePct]} sparkColor="var(--success)"
+          foot={studentAtt.footnote}
+          spark={attSpark.length >= 2 ? attSpark : undefined} sparkColor="var(--success)"
         />
         <Kpi
           icon="rupee" iconBg="var(--info-bg)" iconColor="var(--info)"
@@ -267,10 +293,11 @@ function SchoolDashboard() {
         />
         <Kpi
           icon="briefcase" iconBg="var(--brand-50)" iconColor="var(--brand-600)"
-          label="Teachers & staff" value={`${fmtNum(peoplePresent)}/${fmtNum(peopleTotal)}`}
-          delta={`${peopleRate}%`} deltaDir="up"
-          foot={`Teachers ${fmtNum(teachersPresent)}/${fmtNum(liveTeachers)} · Staff ${fmtNum(supportPresent)}/${fmtNum(liveSupport)} · ${fmtNum(staffAway)} away`}
-          spark={[176, 178, 175, 180, 179, 181, 180, peoplePresent]} sparkColor="var(--brand-600)"
+          label="Teachers & staff" value={rosterLoading || !peopleMarksReady ? '—' : `${fmtNum(peoplePresent)}/${fmtNum(peopleTotal)}`}
+          delta={peopleTotal ? `${peopleRate}%` : undefined} deltaDir="up"
+          foot={rosterLoading || !peopleMarksReady
+            ? 'Loading staff…'
+            : `Teachers ${fmtNum(teachersPresent)}/${fmtNum(liveTeachers)} · Staff ${fmtNum(supportPresent)}/${fmtNum(liveSupport)} · ${fmtNum(staffAway)} away`}
         />
       </div>
 
@@ -278,20 +305,24 @@ function SchoolDashboard() {
       <div className="sm-grid-3">
         <PeopleCard
           icon="users" tone="var(--brand-600)" label="Students"
-          count={liveStudents} sub={`Student–teacher ratio ${ratio}:1 · ${attLiveLabel}`}
-          rate={attendancePct} present={studentsPresent} total={studentTotal}
+          count={liveStudents} sub={liveTeachers ? `Student–teacher ratio ${ratio}:1 · ${attLiveLabel}` : attLiveLabel}
+          rate={studentAtt.meter} present={studentsPresent} total={studentTotal}
+          foot={studentAtt.footnote}
+          loading={liveAtt && periodDayQ.isPending}
           onClick={() => app.go('school.attendance')}
         />
         <PeopleCard
           icon="cap" tone="var(--success)" label="Teachers"
           count={liveTeachers} sub="Teacher app check-in + Attendance marks"
           rate={teacherRate} present={teachersPresent} total={liveTeachers}
+          loading={rosterLoading || !peopleMarksReady}
           onClick={() => app.go('school.attendance')}
         />
         <PeopleCard
           icon="briefcase" tone="var(--info)" label="Support staff"
           count={liveSupport} sub="From Attendance · Staff tab"
           rate={supportRate} present={supportPresent} total={liveSupport}
+          loading={rosterLoading || !peopleMarksReady}
           onClick={() => app.go('school.attendance')}
         />
       </div>
@@ -301,15 +332,30 @@ function SchoolDashboard() {
         <Card>
           <CardHead
             title="Attendance trend"
-            sub={attQ.isSuccess ? `Daily average · today ${attendancePct}% (live)` : 'Daily average · last 8 months'}
+            sub={trendQ.isLoading
+              ? 'Loading last 8 weeks…'
+              : (attTrend.length
+                ? 'Weekly average · period marks'
+                : 'No period marks in the last 8 weeks')}
             icon="trend"
             action={<Btn size="sm" variant="ghost" icon="check" onClick={() => app.go('school.attendance')}>Open attendance</Btn>}
           />
           <div style={{ marginTop: 12 }}>
-            <LineChart
-              series={[{ data: attTrend, color: 'var(--brand-600)', label: 'Attendance %' }]}
-              labels={months} yMax={100} yFmt={(v) => `${Math.round(v)}%`}
-            />
+            {trendQ.isLoading ? (
+              <Empty icon="trend" title="Loading trend…" body="Fetching weekly period attendance." />
+            ) : attTrend.length === 0 ? (
+              <Empty icon="trend" title="No attendance trend yet" body="Weekly % appears after period marks are saved." />
+            ) : attTrend.length === 1 ? (
+              <div className="t-md">
+                {attTrend[0].label}: <strong>{attTrend[0].value}%</strong>
+                <div className="t-xs muted3" style={{ marginTop: 6 }}>Need at least two marked weeks for a chart.</div>
+              </div>
+            ) : (
+              <LineChart
+                series={[{ data: attTrend.map((p) => p.value), color: 'var(--brand-600)', label: 'Attendance %' }]}
+                labels={attTrend.map((p) => p.label)} yMax={100} yFmt={(v) => `${Math.round(v)}%`}
+              />
+            )}
           </div>
         </Card>
 
@@ -374,60 +420,86 @@ function SchoolDashboard() {
       <div className="sm-grid-3">
         <Card>
           <CardHead title="Enrolment by stage" icon="layers" />
-          <div className="row ai-center jc-center" style={{ margin: '8px 0 14px' }}>
-            <Donut
-              segments={STAGES.map((st) => ({ value: Math.round(liveStudents * st.share), color: st.color, label: st.label }))}
-              size={138} thickness={16}
-              center={<div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 20, fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1 }}>{fmtNum(liveStudents)}</div>
-                <div className="t-xs muted3">students</div>
-              </div>}
-            />
-          </div>
-          <Legend items={STAGES.map((st) => ({ color: st.color, label: st.label }))} />
+          {countsLoading ? (
+            <Empty icon="layers" title="Loading enrolment…" body="Counting students by grade." />
+          ) : liveStudents === 0 || stageSlices.every((st) => st.value === 0) ? (
+            <Empty icon="layers" title="No enrolment yet" body="Stage split appears after students are on the roster." />
+          ) : (
+            <>
+              <div className="row ai-center jc-center" style={{ margin: '8px 0 14px' }}>
+                <Donut
+                  segments={stageSlices.filter((st) => st.value > 0)}
+                  size={138} thickness={16}
+                  center={<div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 20, fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1 }}>{fmtNum(liveStudents)}</div>
+                    <div className="t-xs muted3">students</div>
+                  </div>}
+                />
+              </div>
+              <Legend items={stageSlices.filter((st) => st.value > 0).map((st) => ({
+                color: st.color,
+                label: `${st.label} — ${fmtNum(st.value)}`,
+              }))} />
+            </>
+          )}
         </Card>
 
         <Card>
           <CardHead title="Gender ratio" icon="users" />
-          <div className="row ai-center jc-center" style={{ margin: '8px 0 14px' }}>
-            <Donut
-              segments={[
-                { value: genderBoys, color: '#0ea5e9', label: 'Boys' },
-                { value: genderGirls, color: '#ec4899', label: 'Girls' },
-              ]}
-              size={138} thickness={16}
-              center={<div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 20, fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1 }}>
-                  {liveStudents ? Math.round((genderBoys / liveStudents) * 100) : 0}:{liveStudents ? Math.round((genderGirls / liveStudents) * 100) : 0}
-                </div>
-                <div className="t-xs muted3">boys : girls</div>
-              </div>}
-            />
-          </div>
-          <Legend items={[
-            { color: '#0ea5e9', label: `Boys — ${fmtNum(genderBoys)}` },
-            { color: '#ec4899', label: `Girls — ${fmtNum(genderGirls)}` },
-          ]} />
+          {countsLoading ? (
+            <Empty icon="users" title="Loading gender…" body="Counting recorded student gender." />
+          ) : liveStudents === 0 ? (
+            <Empty icon="users" title="No students yet" body="Gender ratio uses each student’s recorded gender." />
+          ) : (
+            <>
+              <div className="row ai-center jc-center" style={{ margin: '8px 0 14px' }}>
+                <Donut
+                  segments={[
+                    ...(gender.boys ? [{ value: gender.boys, color: '#0ea5e9', label: 'Boys' }] : []),
+                    ...(gender.girls ? [{ value: gender.girls, color: '#ec4899', label: 'Girls' }] : []),
+                    ...(gender.unspecified ? [{ value: gender.unspecified, color: '#94a3b8', label: 'Unspecified' }] : []),
+                  ]}
+                  size={138} thickness={16}
+                  center={<div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 20, fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1 }}>
+                      {gender.boys}:{gender.girls}
+                    </div>
+                    <div className="t-xs muted3">boys : girls</div>
+                  </div>}
+                />
+              </div>
+              <Legend items={[
+                { color: '#0ea5e9', label: `Boys — ${fmtNum(gender.boys)}` },
+                { color: '#ec4899', label: `Girls — ${fmtNum(gender.girls)}` },
+                ...(gender.unspecified ? [{ color: '#94a3b8', label: `Unspecified — ${fmtNum(gender.unspecified)}` }] : []),
+              ]} />
+            </>
+          )}
         </Card>
 
         <Card>
-          <CardHead title="Result distribution" sub="Last term · grade bands" icon="cap" />
+          <CardHead
+            title="Result distribution"
+            sub={examBandsQ.data?.examName ? examBandsQ.data.examName : 'Latest exam · saved grades'}
+            icon="cap"
+          />
           <div style={{ marginTop: 12 }}>
-            <Bars
-              data={[
-                { value: 14, label: 'A1', color: '#16a34a' },
-                { value: 22, label: 'A2', color: '#16a34a' },
-                { value: 26, label: 'B1', color: '#0ea5e9' },
-                { value: 18, label: 'B2', color: '#0ea5e9' },
-                { value: 11, label: 'C1', color: '#f59e0b' },
-                { value: 6, label: 'C2', color: '#f59e0b' },
-                { value: 2, label: 'D', color: '#dc2626' },
-                { value: 1, label: 'E', color: '#dc2626' },
-              ]}
-              h={150} valueFmt={(v) => `${v}%`}
-            />
+            {examBandsQ.isLoading ? (
+              <Empty icon="cap" title="Loading results…" body="Reading saved exam grades." />
+            ) : examBands.length === 0 ? (
+              <Empty icon="cap" title="No exam grades yet" body="Grade bands appear after marks are saved on an exam paper." />
+            ) : (
+              <>
+                <Bars
+                  data={examBands.map((b) => ({ value: b.value, label: b.label, color: b.color }))}
+                  h={150} valueFmt={(v) => `${v}`}
+                />
+                <div className="t-xs muted3" style={{ marginTop: 8 }}>
+                  Students per band · {fmtNum(examBands.reduce((n, b) => n + b.value, 0))} marked papers
+                </div>
+              </>
+            )}
           </div>
-          <div className="t-xs muted3" style={{ marginTop: 8 }}>Share of students per band across {RESULT_BANDS.length} grades.</div>
         </Card>
       </div>
 
@@ -480,9 +552,9 @@ function SchoolDashboard() {
 }
 
 /* ---------- People-at-a-glance card ---------- */
-function PeopleCard({ icon, tone, label, count, sub, rate, present, total, onClick }: {
+function PeopleCard({ icon, tone, label, count, sub, rate, present, total, foot, loading, onClick }: {
   icon: string; tone: string; label: string; count: number; sub: string
-  rate: number; present: number; total: number; onClick: () => void
+  rate: number; present: number; total: number; foot?: string; loading?: boolean; onClick: () => void
 }) {
   return (
     <Card hover onClick={onClick}>
@@ -501,9 +573,11 @@ function PeopleCard({ icon, tone, label, count, sub, rate, present, total, onCli
       <div className="t-sm muted" style={{ marginTop: 10 }}>{sub}</div>
       <div className="row ai-center gap8" style={{ marginTop: 10 }}>
         <div className="sm-meter" style={{ flex: 1, width: 'auto' }}>
-          <span style={{ width: `${rate}%`, background: tone }} />
+          <span style={{ width: `${loading ? 0 : rate}%`, background: tone }} />
         </div>
-        <span className="t-xs muted3" style={{ whiteSpace: 'nowrap' }}>{fmtNum(present)} of {fmtNum(total)} present</span>
+        <span className="t-xs muted3" style={{ whiteSpace: 'nowrap' }}>
+          {loading ? 'Loading…' : (foot ?? `${fmtNum(present)} of ${fmtNum(total)} present`)}
+        </span>
       </div>
     </Card>
   )
@@ -599,14 +673,23 @@ function ApprovalCard({
         </div>
       )}
 
-      {a.decidedNote && a.status !== 'pending' && (
+      {a.status !== 'pending' && (a.decidedBy || a.decidedNote) && (
         <div className="t-sm" style={{
           marginTop: 10, padding: '10px 12px', borderRadius: 10,
           background: a.status === 'rejected' ? 'var(--danger-bg)' : 'var(--success-bg)',
           color: a.status === 'rejected' ? 'var(--danger)' : 'var(--success)',
         }}>
-          <span className="fw6">{a.status === 'rejected' ? 'Rejection note: ' : 'Decision note: '}</span>
-          {a.decidedNote}
+          {a.decidedBy && (
+            <div className="fw6" style={{ marginBottom: a.decidedNote ? 4 : 0 }}>
+              {a.status === 'rejected' ? 'Rejected by ' : 'Approved by '}{a.decidedBy}
+            </div>
+          )}
+          {a.decidedNote && (
+            <div>
+              <span className="fw6">{a.status === 'rejected' ? 'Rejection note: ' : 'Decision note: '}</span>
+              {a.decidedNote}
+            </div>
+          )}
         </div>
       )}
 
@@ -645,7 +728,7 @@ function ApprovalsInbox() {
   const actOn = useActOnApproval()
 
   const { data: approvalsData, isLoading } = useApprovals({ status: tab })
-  const list = approvalsForRole(approvalsData ?? [], app.role).filter((a) => !acted.has(a.id))
+  const list = inboxApprovals(approvalsData ?? [], app.role, tab, acted)
   const meta = TAB_META[tab]
 
   const approve = (a: Approval) => {

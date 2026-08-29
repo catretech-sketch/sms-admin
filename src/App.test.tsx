@@ -2,6 +2,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import App from './App'
 
+vi.mock('@/api/hooks/useAttendanceLive', () => ({
+  useAttendanceLiveSocket: () => ({ connected: false }),
+}))
+
+vi.mock('@/api/hooks/useThreadsLive', () => ({
+  useThreadsLiveSocket: () => ({ connected: false }),
+}))
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
