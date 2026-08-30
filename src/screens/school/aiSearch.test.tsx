@@ -34,11 +34,11 @@ function mockFetch() {
   })
 }
 
-function renderScreen(role?: string) {
+function renderScreen(role?: string, userName?: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <ToastProvider><AiSearchScreen role={role} /></ToastProvider>
+      <ToastProvider><AiSearchScreen role={role} userName={userName} /></ToastProvider>
     </QueryClientProvider>,
   )
 }
@@ -51,6 +51,12 @@ describe('AiSearchScreen', () => {
     expect(screen.getByText(/How can I help you/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'How many students present today?' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Find Rahul' })).toBeInTheDocument()
+  })
+
+  it('greets a known user by name when userName is provided', () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderScreen(undefined, 'Ravi Menon')
+    expect(screen.getByText(/Hi Ravi Menon! How can I help you/i)).toBeInTheDocument()
   })
 
   it('tapping a suggestion chip submits it as a typed question', async () => {

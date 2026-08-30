@@ -49,11 +49,12 @@ const SUGGESTED_QUESTIONS = [
   'Find Rahul',
 ]
 
-/** `role` is only used to label entries in the local unsupported-query log (see
- *  aiSearchQueryLog.ts) — passed in by the caller (AiFloatingButton, which already has
- *  `app.role` from useApp()) rather than calling useApp() here, so this screen and its
- *  tests stay independent of session/auth context. Defaults to 'unknown' if omitted. */
-export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
+/** `role` labels entries in the local unsupported-query log (see aiSearchQueryLog.ts);
+ *  `userName` personalizes the empty-state greeting. Both are passed in by the caller
+ *  (AiFloatingButton, which already has `app.role`/`app.user` from useApp()) rather than
+ *  calling useApp() here, so this screen and its tests stay independent of session/auth
+ *  context. Both are optional and fall back to a generic, role-less greeting/log entry. */
+export function AiSearchScreen({ role = 'unknown', userName }: { role?: string; userName?: string } = {}) {
   const toast = useToast()
   const [lang, setLang] = useState<'en' | 'hi'>('en')
   const [viewOnly, setViewOnly] = useState(false)
@@ -225,7 +226,7 @@ export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
         {turns.length === 0 && pendingQuery == null ? (
           <Empty
             icon="sparkle"
-            title="👋 Hello! How can I help you?"
+            title={userName ? `👋 Hi ${userName}! How can I help you?` : '👋 Hello! How can I help you?'}
             body="Ask me anything about your school — try one of these, or type your own question."
             action={
               <div className="row ai-center gap8 wrap" style={{ justifyContent: 'center' }}>
