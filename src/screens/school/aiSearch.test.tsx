@@ -126,6 +126,8 @@ describe('AiSearchScreen', () => {
     fireEvent.click(ask)
 
     await waitFor(() => expect(screen.getByText(/Found 1 student matching "sharma"/i)).toBeInTheDocument())
-    await waitFor(() => expect(screen.getByText(/of 1 students present today/i)).toBeInTheDocument())
+    // totalStudents now comes from the marked-periods denominator (12), not the roster
+    // page size (1) — see aiSearchResolver.ts's DailyAttendanceSummary fix.
+    await waitFor(() => expect(screen.getByText(/of 12 students present today/i)).toBeInTheDocument())
   })
 })

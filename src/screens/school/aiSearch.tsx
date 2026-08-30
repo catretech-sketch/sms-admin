@@ -14,6 +14,7 @@ import { useToast } from '@/lib/hooks'
 import { useStudents } from '@/api/hooks/useStudents'
 import { usePeriodAttendanceRangeSummary } from '@/api/hooks/usePeriodAttendanceAdvanced'
 import { classWiseDayHero } from '@/api/periodAttendanceAdvanced'
+import { studentLiveAttendance } from '@/lib/studentLiveAttendance'
 import { useAiSearch } from '@/api/hooks/useAiSearch'
 import type { AiSearchResponse, StudentSearchRow } from '@/lib/aiSearchResolver'
 
@@ -64,10 +65,21 @@ export function AiSearchScreen() {
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   const turnId = useRef(0)
 
+  useEffect(() => {
+    return () => { recognitionRef.current?.stop() }
+  }, [])
+
   const studentsQ = useStudents()
   const today = todayIso()
   const attendanceQ = usePeriodAttendanceRangeSummary({ preset: 'custom', from: today, to: today })
   const hero = useMemo(() => classWiseDayHero({ range: attendanceQ.data }), [attendanceQ.data])
+  const attendanceSummary = useMemo(() => studentLiveAttendance({
+    loaded: attendanceQ.isSuccess || attendanceQ.isError,
+    presentTotal: hero.present,
+    studentTotal: hero.marked,
+    overallPct: hero.pct,
+    enrollment: studentsQ.data?.length ?? 0,
+  }), [attendanceQ.isSuccess, attendanceQ.isError, hero, studentsQ.data])
   const search = useAiSearch()
 
   const speechCtor = getSpeechRecognitionCtor()
@@ -99,7 +111,16 @@ export function AiSearchScreen() {
       id: s.id, name: s.name, cls: s.cls, section: s.section, attendance: s.attendance,
     }))
     search.mutate(
-      { query: resolvedQuery, students, attendanceHero: hero },
+      {
+        query: resolvedQuery,
+        students,
+        attendanceHero: {
+          present: attendanceSummary.present,
+          marked: attendanceSummary.marked,
+          absent: Math.max(0, attendanceSummary.marked - attendanceSummary.present),
+          pct: attendanceSummary.pct,
+        },
+      },
       {
         onSuccess: (response) => {
           turnId.current += 1
@@ -113,7 +134,7 @@ export function AiSearchScreen() {
       },
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingQuery, studentsQ.data, studentsQ.isLoading, search.isPending, hero])
+  }, [pendingQuery, studentsQ.data, studentsQ.isLoading, search.isPending, hero, attendanceSummary])
 
   const toggleMic = () => {
     if (!speechCtor) return
@@ -173,7 +194,7 @@ export function AiSearchScreen() {
           </Btn>
         </div>
 
-        {turns.length === 0 ? (
+        {turns.length === 0 && pendingQuery == null ? (
           <Empty icon="sparkle" title="Ask your first question" body='Try: "How many students present today?" or "Find Rahul".' />
         ) : (
           <div className="col gap16">
@@ -191,6 +212,12 @@ export function AiSearchScreen() {
                 )}
               </div>
             ))}
+            {pendingQuery != null && (
+              <div className="col gap8">
+                <div className="row jc-end"><Badge tone="brand">{pendingQuery}</Badge></div>
+                <div className="muted">Thinking…</div>
+              </div>
+            )}
           </div>
         )}
       </Card>

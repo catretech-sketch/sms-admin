@@ -139,6 +139,9 @@ function CommunicationScreen() {
         }
       />
       {aiMode ? (
+        // TierGate mounts its children inside an aria-hidden blur div (never omits them), so
+        // always wrapping AiSearchScreen here would still mount it (and its data fetches) for
+        // non-Platinum schools. Branch explicitly instead so the gated path never mounts it.
         hasAiAccess ? (
           <AiSearchScreen />
         ) : (

@@ -31,7 +31,7 @@ describe('resolveAiQuery — DailyAttendanceSummary', () => {
     expect(r.intent).toBe('DailyAttendanceSummary')
     expect(r.language).toBe('en')
     expect(r.data).toEqual({
-      totalStudents: 3, present: 781, absent: 61, attendancePercentage: 93,
+      totalStudents: 842, present: 781, absent: 61, attendancePercentage: 93,
     })
     expect(r.answer).toContain('781')
   })
@@ -40,6 +40,15 @@ describe('resolveAiQuery — DailyAttendanceSummary', () => {
     expect(r.intent).toBe('DailyAttendanceSummary')
     expect(r.language).toBe('hinglish')
     expect(r.answer).toContain('781')
+  })
+  it('tolerates extra words between keywords ("Aaj kitne bacche School Mein Aaye Hain")', () => {
+    const r = resolveAiQuery('Aaj kitne bacche School Mein Aaye Hain', ctx)
+    expect(r.intent).toBe('DailyAttendanceSummary')
+  })
+  it('matches a native Devanagari-script attendance query', () => {
+    const r = resolveAiQuery('आज कितने बच्चे स्कूल में आए हैं', ctx)
+    expect(r.intent).toBe('DailyAttendanceSummary')
+    expect(r.language).toBe('hi')
   })
 })
 

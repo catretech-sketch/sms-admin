@@ -49,8 +49,12 @@ export interface AiSearchResponse {
 const MUTATION_VERBS = /\b(mark|delete|remove|update|add|create|edit|change)\b/i
 const HINDI_KEYWORDS = ['kitne', 'kitni', 'bachche', 'bacche', 'aaj', 'kya', 'kaun', 'hai', 'hain', 'kaisa', 'haal']
 const ATTENDANCE_SUMMARY_EN = /how many\b.*\b(student|students)\b.*(present|absent|came|attend)/i
-const ATTENDANCE_SUMMARY_HI = /(kitne|kitni)\s+(bachche|bacche|student|students)\s+(aaye|aaya)|aaj ki attendance/i
+const ATTENDANCE_SUMMARY_HI = /(kitne|kitni).*(bachche|bacche|student|students).*(aaye|aaya)|aaj ki attendance/i
+// Native Devanagari script — romanized Hindi/Hinglish keywords above never match this script.
+const ATTENDANCE_SUMMARY_DEVANAGARI = /कितने.*(बच्चे|बच्चा|विद्यार्थी).*आ(ये|ए)|आज.*उपस्थिति/
 const STUDENT_SEARCH_EN = /^(?:find|search(?: for)?)\s+(.+)$/i
+// NOTE: native-script (Devanagari) student search (e.g. finding a student by name written
+// in Hindi script) is a known follow-up, not required now.
 const STUDENT_SEARCH_HI = /^(.+?)\s+ka\s+(?:attendance|details|record)/i
 
 const WRITE_BLOCKED_ANSWER =
@@ -70,7 +74,7 @@ function isMutationQuery(query: string): boolean {
 }
 
 function matchAttendanceSummary(query: string): boolean {
-  return ATTENDANCE_SUMMARY_EN.test(query) || ATTENDANCE_SUMMARY_HI.test(query)
+  return ATTENDANCE_SUMMARY_EN.test(query) || ATTENDANCE_SUMMARY_HI.test(query) || ATTENDANCE_SUMMARY_DEVANAGARI.test(query)
 }
 
 function matchStudentSearch(query: string): string | null {
@@ -91,6 +95,9 @@ function studentSearchAnswer(lang: AiSearchLanguage, count: number, needle: stri
   return `"${needle}" se milte ${count} student mile.`
 }
 
+// NOTE: ctx.students is whatever the caller passed (currently one page from useStudents(),
+// matching this app's existing single-page convention) — StudentSearch and totalStudents
+// only reflect that page, not the full roster, if the school has more than one page.
 export function resolveAiQuery(
   rawQuery: string,
   ctx: { students: AiSearchStudent[]; attendanceHero: AiSearchAttendanceHero },
@@ -105,7 +112,11 @@ export function resolveAiQuery(
 
   if (matchAttendanceSummary(query)) {
     const data: DailyAttendanceSummaryData = {
-      totalStudents: ctx.students.length,
+      // present/absent are counts over ctx.attendanceHero.marked (the actual period-marks
+      // denominator), not the full roster — pairing them with the roster size produces
+      // incoherent numbers (e.g. "781 of 3 students"). Use marked as the denominator once
+      // marks exist; only fall back to full enrollment before any marks are in for the day.
+      totalStudents: ctx.attendanceHero.marked > 0 ? ctx.attendanceHero.marked : ctx.students.length,
       present: ctx.attendanceHero.present,
       absent: ctx.attendanceHero.absent,
       attendancePercentage: ctx.attendanceHero.pct ?? 0,
