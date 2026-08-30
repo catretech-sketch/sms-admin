@@ -19,7 +19,6 @@ import {
   Segmented, DataTable, type Column, type BadgeTone,
 } from '@/components/ui'
 import { TierGate } from '@/components/shell/gates'
-import { AiSearchScreen } from './aiSearch'
 import { FleetLiveMap } from '@/components/maps/RouteBuilderMap'
 import { useComplaints, useCreateComplaint, useUpdateComplaint } from '@/api/hooks/useComplaints'
 import { useThreads, useThreadMessages, useCreateThread, useSendMessage } from '@/api/hooks/useThreads'
@@ -120,49 +119,23 @@ function relTime(iso?: string | null): string {
    ============================================================ */
 function CommunicationScreen() {
   const [tab, setTab] = useState('messenger')
-  const [aiMode, setAiMode] = useState(false)
-  const app = useApp()
   const { data: threadsData } = useThreads()
   const { data: complaintsData } = useComplaints()
   const unread = (threadsData ?? []).reduce((n, t) => n + t.unread, 0)
   const openComplaints = (complaintsData ?? []).filter((c) => c.status !== 'resolved').length
-  const hasAiAccess = tierIncludes(app.plan, 'ai_search')
   return (
     <div>
-      <PageHead
-        title="Communication"
-        sub="Messenger · Complaints · Announcements"
-        actions={
-          <Btn variant={aiMode ? 'primary' : 'secondary'} icon="sparkle" onClick={() => setAiMode((v) => !v)}>
-            {aiMode ? 'Exit AI Mode' : 'AI Mode'}
-          </Btn>
-        }
-      />
-      {aiMode ? (
-        // TierGate mounts its children inside an aria-hidden blur div (never omits them), so
-        // always wrapping AiSearchScreen here would still mount it (and its data fetches) for
-        // non-Platinum schools. Branch explicitly instead so the gated path never mounts it.
-        hasAiAccess ? (
-          <AiSearchScreen />
-        ) : (
-          <TierGate feature="ai_search" title="AI Mode" blurb="Ask natural-language questions about your school on the Platinum plan.">
-            <div />
-          </TierGate>
-        )
-      ) : (
-        <>
-          <div style={{ marginBottom: 14 }}>
-            <Tabs value={tab} onChange={setTab} tabs={[
-              { value: 'messenger', label: 'Messenger', icon: 'message', count: unread },
-              { value: 'complaints', label: 'Complaints', icon: 'inbox', count: openComplaints },
-              { value: 'announcements', label: 'Announcements', icon: 'bell' },
-            ]} />
-          </div>
-          {tab === 'messenger' && <MessengerTab />}
-          {tab === 'complaints' && <ComplaintsTab />}
-          {tab === 'announcements' && <AnnouncementsTab />}
-        </>
-      )}
+      <PageHead title="Communication" sub="Messenger · Complaints · Announcements" />
+      <div style={{ marginBottom: 14 }}>
+        <Tabs value={tab} onChange={setTab} tabs={[
+          { value: 'messenger', label: 'Messenger', icon: 'message', count: unread },
+          { value: 'complaints', label: 'Complaints', icon: 'inbox', count: openComplaints },
+          { value: 'announcements', label: 'Announcements', icon: 'bell' },
+        ]} />
+      </div>
+      {tab === 'messenger' && <MessengerTab />}
+      {tab === 'complaints' && <ComplaintsTab />}
+      {tab === 'announcements' && <AnnouncementsTab />}
     </div>
   )
 }

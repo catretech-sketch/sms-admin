@@ -9,6 +9,7 @@ import { useApp } from '@/lib/hooks'
 import { Sidebar } from '@/components/shell/Sidebar'
 import { Topbar } from '@/components/shell/Topbar'
 import { Tweaks } from '@/components/shell/Tweaks'
+import { AiFloatingButton } from '@/components/shell/AiFloatingButton'
 import { LoginScreen } from '@/screens/LoginScreen'
 import { Router } from '@/router'
 import { PendingActivationScreen } from '@/components/shell/gates'
@@ -45,6 +46,7 @@ function Shell() {
         </main>
       </div>
       <Tweaks />
+      <AiFloatingButton />
     </div>
   )
 }
