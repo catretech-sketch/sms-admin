@@ -76,35 +76,44 @@ export function AiSearchScreen() {
   const submit = (query: string) => {
     const trimmed = query.trim()
     if (!trimmed) return
+    /* Clear the input immediately — decoupled from the async mutation below — so a query
+       typed while a prior search is still in flight is never wiped out by that prior
+       search's completion handler (see the pendingQuery guard below). */
     setPendingQuery(trimmed)
+    setText('')
   }
 
   /* Students load asynchronously; defer the actual search until the roster is ready so the
-     resolver isn't run against a stale/empty list captured at click time. */
+     resolver isn't run against a stale/empty list captured at click time. Also acts as a
+     one-at-a-time queue: if the user submits a new query while a previous one is still
+     in flight, pendingQuery is overwritten to the new query but the in-flight mutation's
+     completion handlers only clear pendingQuery when it still matches the query THEY
+     resolved — so a newer queued query survives and this effect re-fires for it once the
+     prior mutation settles. */
   useEffect(() => {
     if (pendingQuery == null) return
     if (studentsQ.isLoading) return
     if (search.isPending) return
+    const resolvedQuery = pendingQuery
     const students = (studentsQ.data ?? []).map((s) => ({
       id: s.id, name: s.name, cls: s.cls, section: s.section, attendance: s.attendance,
     }))
     search.mutate(
-      { query: pendingQuery, students, attendanceHero: hero },
+      { query: resolvedQuery, students, attendanceHero: hero },
       {
         onSuccess: (response) => {
           turnId.current += 1
-          setTurns((t) => [...t, { id: turnId.current, query: pendingQuery, response }])
-          setPendingQuery(null)
-          setText('')
+          setTurns((t) => [...t, { id: turnId.current, query: resolvedQuery, response }])
+          setPendingQuery((p) => (p === resolvedQuery ? null : p))
         },
         onError: () => {
           toast.danger('Search failed', 'Could not process that question. Try again.')
-          setPendingQuery(null)
+          setPendingQuery((p) => (p === resolvedQuery ? null : p))
         },
       },
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingQuery, studentsQ.data, studentsQ.isLoading, hero])
+  }, [pendingQuery, studentsQ.data, studentsQ.isLoading, search.isPending, hero])
 
   const toggleMic = () => {
     if (!speechCtor) return
@@ -159,7 +168,7 @@ export function AiSearchScreen() {
             style={{ flex: 1, minWidth: 240 }}
             onKeyDown={(e) => { if (e.key === 'Enter') submit(text) }}
           />
-          <Btn variant="primary" icon="arrowRight" onClick={() => submit(text)} disabled={!text.trim() || search.isPending}>
+          <Btn variant="primary" icon="arrowRight" onClick={() => submit(text)} disabled={!text.trim()}>
             Ask
           </Btn>
         </div>

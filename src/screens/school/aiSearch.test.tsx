@@ -101,4 +101,31 @@ describe('AiSearchScreen', () => {
     expect(instances[0].lang).toBe('hi-IN')
     vi.unstubAllGlobals()
   })
+
+  it('does not drop a second query submitted while the first is still in flight', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderScreen()
+    const input = screen.getByPlaceholderText(/How many students present today/i)
+    const ask = screen.getByRole('button', { name: /^Ask$/i })
+
+    // Warm up: let the students roster finish loading via one query/answer round trip,
+    // so the next two submissions below actually reach the in-flight mutation (rather
+    // than both being queued before the roster is ready, which collapses to "last one
+    // wins" — a separate, unremarkable case from the one this test targets).
+    fireEvent.change(input, { target: { value: 'find rahul' } })
+    fireEvent.click(ask)
+    await waitFor(() => expect(screen.getByText(/Found 1 student matching "rahul"/i)).toBeInTheDocument())
+
+    // Fire a second query, then — without awaiting anything — immediately edit the text
+    // and fire a third, different query while the second is still in flight. If the
+    // second query's completion handler ever unconditionally clears the pending/queued
+    // state, the third query gets silently dropped and never renders an answer.
+    fireEvent.change(input, { target: { value: 'find sharma' } })
+    fireEvent.click(ask)
+    fireEvent.change(input, { target: { value: 'how many students present today' } })
+    fireEvent.click(ask)
+
+    await waitFor(() => expect(screen.getByText(/Found 1 student matching "sharma"/i)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/of 1 students present today/i)).toBeInTheDocument())
+  })
 })
