@@ -129,10 +129,10 @@ html[data-theme=dark] .sm-gate-veil { background: rgba(11,17,32,.74); }
 html[dir=rtl] .sm-tweaks-fab { right: auto; left: 20px; }
 .sm-tweaks-panel { position: fixed; bottom: 78px; right: 20px; z-index: 46; width: 300px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--sh-xl); padding: 16px; }
 html[dir=rtl] .sm-tweaks-panel { right: auto; left: 20px; }
-.sm-ai-fab { position: fixed; bottom: 20px; right: 80px; z-index: 45; width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--border); background: var(--bg-elev); color: var(--brand-600); box-shadow: var(--sh-lg); cursor: grab; touch-action: none; display: flex; align-items: center; justify-content: center; }
+.sm-ai-fab { position: fixed; bottom: 20px; right: 80px; z-index: 45; width: 64px; height: 64px; border-radius: 50%; border: 1px solid var(--border); background: var(--bg-elev); color: var(--brand-600); box-shadow: var(--sh-lg); cursor: grab; touch-action: none; display: flex; align-items: center; justify-content: center; }
 .sm-ai-fab.is-dragging { cursor: grabbing; }
 html[dir=rtl] .sm-ai-fab { right: auto; left: 80px; }
-.sm-ai-panel { position: fixed; bottom: 78px; right: 80px; z-index: 46; width: 420px; max-width: calc(100vw - 96px); max-height: 70vh; overflow-y: auto; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--sh-xl); padding: 0; }
+.sm-ai-panel { position: fixed; bottom: 96px; right: 80px; z-index: 46; width: 420px; max-width: calc(100vw - 96px); max-height: 70vh; overflow-y: auto; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--sh-xl); padding: 0; }
 html[dir=rtl] .sm-ai-panel { right: auto; left: 80px; }
 .sm-tweaks-row { margin-bottom: 14px; }
 

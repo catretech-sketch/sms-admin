@@ -12,7 +12,7 @@ import { TierGate } from '@/components/shell/gates'
 import { AiSearchScreen } from '@/screens/school/aiSearch'
 import { clampPosition, isClick, type Point } from '@/lib/draggablePosition'
 
-const FAB_SIZE = 46
+const FAB_SIZE = 64
 const PANEL_WIDTH = 420
 const PANEL_GAP = 8
 const EDGE_MARGIN = 8
@@ -151,7 +151,7 @@ export function AiFloatingButton() {
         aria-label="AI Mode"
         title="AI Mode"
       >
-        <Icon name={open ? 'x' : 'bot'} size={20} />
+        <Icon name={open ? 'x' : 'bot'} size={28} />
       </button>
       {open && (
         <div className="sm-ai-panel" style={panelStyle}>

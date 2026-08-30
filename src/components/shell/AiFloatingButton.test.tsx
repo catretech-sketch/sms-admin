@@ -163,7 +163,7 @@ describe('AiFloatingButton', () => {
     firePointer(fab, 'pointerup', originalWidth - 10, 100)
     Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 400 })
     fireEvent(window, new Event('resize'))
-    await waitFor(() => expect(parseInt(fab.style.left, 10)).toBeLessThanOrEqual(400 - 46))
+    await waitFor(() => expect(parseInt(fab.style.left, 10)).toBeLessThanOrEqual(400 - 64))
     Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: originalWidth })
   })
 })
