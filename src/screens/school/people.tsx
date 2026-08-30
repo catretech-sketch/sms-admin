@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import { can } from '@/lib/gating'
+import { TierGate } from '@/components/shell/gates'
 import {
   PageHead, Card, CardHead, Btn, Badge, Avatar, Search, Select,
   Drawer, Icon, Empty, Progress, DataTable, Spinner,
@@ -451,7 +452,7 @@ const CATS: { value: string; label: string; icon: string; tone: BadgeTone }[] = 
   { value: 'support', label: 'Support', icon: 'users', tone: 'success' },
 ]
 
-function StaffScreen() {
+function StaffRoster() {
   const app = useApp()
   const toast = useToast()
   const [q, setQ] = useState('')
@@ -615,6 +616,15 @@ function StaffScreen() {
 
       <StaffProfile staff={profile} onClose={() => setProfile(null)} onMessage={(s) => { message(s); setProfile(null) }} />
     </div>
+  )
+}
+
+function StaffScreen() {
+  return (
+    <TierGate feature="staff_support" title="Staff & support"
+      blurb="Manage non-teaching staff on the Platinum plan.">
+      <StaffRoster />
+    </TierGate>
   )
 }
 

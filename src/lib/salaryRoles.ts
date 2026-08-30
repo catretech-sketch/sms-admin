@@ -12,7 +12,7 @@ export const TEACHER_DESIGNATIONS = [
 
 /** Support-staff roles (keys for staff salary-structure templates). */
 export const STAFF_ROLES = [
-  'Driver', 'Conductor', 'Clerk', 'Cleaner', 'Gardener', 'Security Guard', 'Peon',
+  'Driver', 'Conductor', 'Peon', 'Bus Attendant', 'Watchman', 'Security Guard',
 ] as const
 
 /** Leadership roles (login users, not People) that can also draw a salary. */

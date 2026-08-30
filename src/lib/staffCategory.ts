@@ -11,7 +11,7 @@ export const STAFF_CATEGORY_LABELS: Record<StaffCategory, string> = {
 
 const DEPT_HINTS: [StaffCategory, RegExp][] = [
   ['transport', /transport|driver|conductor|bus/i],
-  ['security', /security|guard|gate/i],
+  ['security', /security|guard|gate|watchman/i],
   ['academic', /academic|lab|library|librarian/i],
   ['admin', /admin|office|account|clerk|principal|vice/i],
   ['support', /support|housekeep|nurse|cook|gardener|peon|clean/i],
