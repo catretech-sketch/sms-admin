@@ -15,11 +15,12 @@ export function AiFloatingButton() {
   const [open, setOpen] = useState(false)
 
   if (app.consoleKind !== 'school') return null
+  if (app.school.status !== 'active' && !app.isPlatform) return null
 
   return (
     <>
-      <button className="sm-ai-fab" onClick={() => setOpen((o) => !o)} aria-label="AI Mode">
-        <Icon name={open ? 'x' : 'sparkle'} size={20} />
+      <button className="sm-ai-fab" onClick={() => setOpen((o) => !o)} aria-label="AI Mode" title="AI Mode">
+        <Icon name={open ? 'x' : 'zap'} size={20} />
       </button>
       {open && (
         <div className="sm-ai-panel">

@@ -10,10 +10,10 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
-function schoolResponse(tier: string) {
+function schoolResponse(tier: string, status = 'active') {
   return jsonResponse({
     data: [{
-      id: 'school-1', name: 'Greenwood High', slug: 'greenwood', country: 'IN', status: 'active',
+      id: 'school-1', name: 'Greenwood High', slug: 'greenwood', country: 'IN', status,
       plan_id: null, plan_name: tier, tier, mrr: 0, students_count: 0, staff_count: 0,
       storage_gb: 0, created: '2026-01-01', contact_name: null, contact_email: null,
       contact_phone: null, address: null, health_score: 100,
@@ -22,7 +22,7 @@ function schoolResponse(tier: string) {
   })
 }
 
-function mockFetch(opts: { tier: string; isPlatform?: boolean }) {
+function mockFetch(opts: { tier: string; isPlatform?: boolean; status?: string }) {
   return vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
     if (url.includes('/auth/refresh')) return Promise.resolve(jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } }))
@@ -34,7 +34,7 @@ function mockFetch(opts: { tier: string; isPlatform?: boolean }) {
         },
       }))
     }
-    if (url.includes('/me/schools') && (init?.method ?? 'GET') === 'GET') return Promise.resolve(schoolResponse(opts.tier))
+    if (url.includes('/me/schools') && (init?.method ?? 'GET') === 'GET') return Promise.resolve(schoolResponse(opts.tier, opts.status))
     if (url.includes('/students')) return Promise.resolve(jsonResponse({ data: [], next_cursor: null }))
     if (url.includes('/attendance/period-records/summary/range')) {
       return Promise.resolve(jsonResponse({ data: { total_marked_periods: 0, present: 0, absent: 0, late: 0, leave: 0, attendance_percentage: null } }))
@@ -43,16 +43,18 @@ function mockFetch(opts: { tier: string; isPlatform?: boolean }) {
   })
 }
 
-function renderButton(opts: { tier: string; isPlatform?: boolean }) {
-  vi.stubGlobal('fetch', mockFetch(opts))
+function renderButton(opts: { tier: string; isPlatform?: boolean; status?: string }) {
+  const fetchMock = mockFetch(opts)
+  vi.stubGlobal('fetch', fetchMock)
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
-  return render(
+  render(
     <QueryClientProvider client={qc}>
       <AppProvider>
         <ToastProvider><AiFloatingButton /></ToastProvider>
       </AppProvider>
     </QueryClientProvider>,
   )
+  return fetchMock
 }
 
 beforeEach(() => {
@@ -72,9 +74,21 @@ describe('AiFloatingButton', () => {
   })
 
   it('does not render in the owner console', async () => {
-    renderButton({ tier: 'platinum', isPlatform: true })
-    // Give the session restore a tick to settle, then confirm the fab never appears.
-    await new Promise((r) => setTimeout(r, 10))
+    const fetchMock = renderButton({ tier: 'platinum', isPlatform: true })
+    // Confirm session restore actually progressed (the owner console never fetches /me/schools,
+    // so /auth/me completing is the real signal that consoleKind has settled) before asserting absence.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/auth/me'), expect.anything(),
+    ))
+    expect(screen.queryByRole('button', { name: /AI Mode/i })).not.toBeInTheDocument()
+  })
+
+  it('does not render when the school is pending activation', async () => {
+    const fetchMock = renderButton({ tier: 'platinum', status: 'past_due' })
+    // Confirm session restore actually progressed (schools were fetched) before asserting absence.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/me/schools'), expect.anything(),
+    ))
     expect(screen.queryByRole('button', { name: /AI Mode/i })).not.toBeInTheDocument()
   })
 
