@@ -90,20 +90,27 @@ One derived status, not a fifth independently-tracked piece of state:
 listening ? 'Listening' : pendingQuery ? 'Processing' : ttsSpeaking ? 'Speaking' : 'Idle'
 ```
 
-A small status pill next to the Speak button reflects this (🎙 Listening… / ⏳ Thinking… / 🔊
-Speaking… / 🎤 Ask, matching the icon language from the original ask). `pendingQuery` already
-exists from the shipped AI Mode work (the single-slot query queue) and is reused here as-is for
-"Processing" — no new state needed for that leg.
+No separate status pill is built for this — three simple, already-existing UI elements cover
+all four states without a new widget: the Speak button's own label (`'Listening…'` while
+`listening`, `'Speak'` otherwise) plus its red/danger styling whenever `listening || speaking`
+is true, together with the pre-existing "Thinking…" bubble that AI Mode already renders in the
+transcript for a pending query. Idle and Processing need no dedicated affordance beyond that
+existing bubble; Listening and Speaking are both covered by the button's danger styling, with
+its label distinguishing the former (this was simplified from an earlier standalone-pill design
+during brainstorming, once it was clear the button and transcript already said everything a pill
+would).
 
 **Conflict resolution** (tapping Speak while the AI is currently speaking): stops speech
 immediately (`textToSpeech.stop()`), then starts listening — chosen over disabling the button,
-since it reads as a natural conversational interruption (confirmed with the user).
+since it reads as a natural conversational interruption (confirmed with the user). This is the
+button's only behavior while speaking; there is no separate stop-only mode.
 
-**Stop controls**: the same Speak button doubles as the "stop" affordance for whichever state is
-active — tapping it while `listening` stops listening (unchanged from today); tapping it while
-`speaking` stops speech only (does not also start listening — an explicit "make it stop" action).
-Stopping speech never deletes the turn's answer text from the transcript — only the audio
-playback ends.
+**Stop controls**: the same Speak button doubles as the "stop" affordance while `listening` —
+tapping it then stops listening (unchanged from today). While `speaking`, tapping it always
+starts a new voice turn (per the conflict resolution above), silencing the current speech as a
+side effect rather than as its own action; the button is intentionally never labeled "Stop
+speaking", since that would promise a stop-only behavior it doesn't have. Stopping speech never
+deletes the turn's answer text from the transcript — only the audio playback ends.
 
 ## 5. Error handling
 
