@@ -60,6 +60,26 @@ describe('AiSearchScreen', () => {
     await waitFor(() => expect(screen.getByText(/Found 1 student matching "Rahul"/i)).toBeInTheDocument())
   })
 
+  it('View only blocks Ask, chips, and mic, and clears once toggled off', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderScreen()
+    fireEvent.click(screen.getByRole('button', { name: /View only/i }))
+
+    const input = screen.getByPlaceholderText(/How many students present today/i)
+    expect(input).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^Ask$/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Find Rahul' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Speak/i })).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Find Rahul' }))
+    expect(screen.queryByText(/Found 1 student matching/i)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /View only/i }))
+    expect(input).not.toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Find Rahul' }))
+    await waitFor(() => expect(screen.getByText(/Found 1 student matching "Rahul"/i)).toBeInTheDocument())
+  })
+
   it('typing a question and pressing Ask renders an answer bubble', async () => {
     vi.stubGlobal('fetch', mockFetch())
     renderScreen()

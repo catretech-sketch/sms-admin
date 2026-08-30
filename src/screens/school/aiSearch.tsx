@@ -10,7 +10,7 @@
    ============================================================ */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  PageHead, Card, Btn, Badge, Segmented, Input, DataTable, DemoBadge, Empty,
+  PageHead, Card, Btn, Badge, Segmented, Input, DataTable, DemoBadge, Empty, Toggle,
   type Column,
 } from '@/components/ui'
 import { useToast } from '@/lib/hooks'
@@ -56,6 +56,7 @@ const SUGGESTED_QUESTIONS = [
 export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
   const toast = useToast()
   const [lang, setLang] = useState<'en' | 'hi'>('en')
+  const [viewOnly, setViewOnly] = useState(false)
   const [text, setText] = useState('')
   const [turns, setTurns] = useState<ChatTurn[]>([])
   const [pendingQuery, setPendingQuery] = useState<PendingQuery | null>(null)
@@ -76,6 +77,7 @@ export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
   const tts = useTextToSpeech()
 
   const submit = (query: string, source: QuerySource) => {
+    if (viewOnly) return
     const trimmed = query.trim()
     if (!trimmed) return
     /* Clear the input immediately — decoupled from the async mutation below — so a query
@@ -153,6 +155,7 @@ export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
   }, [pendingQuery, studentsQ.data, studentsQ.isLoading, search.isPending, hero, attendanceSummary])
 
   const handleSpeakTap = () => {
+    if (viewOnly) return
     if (tts.speaking) {
       tts.stop()
       speechToText.start()
@@ -162,7 +165,7 @@ export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
   }
 
   const micActive = tts.speaking || speechToText.listening
-  const micDisabled = !speechToText.supported && !tts.speaking
+  const micDisabled = (!speechToText.supported && !tts.speaking) || viewOnly
   const micLabel = speechToText.listening ? 'Listening…' : 'Speak'
 
   return (
@@ -173,6 +176,9 @@ export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
         actions={<DemoBadge label="Local answers — Claude-backed search coming soon" />}
       />
       <Card>
+        <div className="row ai-center gap12 wrap" style={{ marginBottom: 12 }}>
+          <Toggle checked={viewOnly} onChange={() => setViewOnly((v) => !v)} label="View only" />
+        </div>
         <div className="row ai-center gap12 wrap" style={{ marginBottom: 16 }}>
           <Segmented
             value={lang}
@@ -184,7 +190,7 @@ export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
             icon="mic"
             onClick={handleSpeakTap}
             disabled={micDisabled}
-            title={micDisabled ? 'Voice input not available in this browser — type your question instead' : undefined}
+            title={viewOnly ? 'Turn off View only to use voice input' : (micDisabled ? 'Voice input not available in this browser — type your question instead' : undefined)}
           >
             {micLabel}
           </Btn>
@@ -194,8 +200,9 @@ export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
             placeholder="e.g. How many students present today?"
             style={{ flex: 1, minWidth: 240 }}
             onKeyDown={(e) => { if (e.key === 'Enter') submit(text, 'text') }}
+            disabled={viewOnly}
           />
-          <Btn variant="primary" icon="arrowRight" onClick={() => submit(text, 'text')} disabled={!text.trim()}>
+          <Btn variant="primary" icon="arrowRight" onClick={() => submit(text, 'text')} disabled={!text.trim() || viewOnly}>
             Ask
           </Btn>
         </div>
@@ -208,7 +215,7 @@ export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
             action={
               <div className="row ai-center gap8 wrap" style={{ justifyContent: 'center' }}>
                 {SUGGESTED_QUESTIONS.map((q) => (
-                  <Btn key={q} variant="secondary" size="sm" onClick={() => submit(q, 'text')}>{q}</Btn>
+                  <Btn key={q} variant="secondary" size="sm" onClick={() => submit(q, 'text')} disabled={viewOnly}>{q}</Btn>
                 ))}
               </div>
             }
