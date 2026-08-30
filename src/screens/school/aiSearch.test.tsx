@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ToastProvider } from '@/context/ToastProvider'
 import { AiSearchScreen } from './aiSearch'
@@ -129,5 +129,145 @@ describe('AiSearchScreen', () => {
     // totalStudents now comes from the marked-periods denominator (12), not the roster
     // page size (1) — see aiSearchResolver.ts's DailyAttendanceSummary fix.
     await waitFor(() => expect(screen.getByText(/of 12 students present today/i)).toBeInTheDocument())
+  })
+
+  it('auto-submits a voice-recognized transcript without pressing Ask', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    const recognitionInstances: { onresult: ((e: { results: { transcript: string }[][] }) => void) | null }[] = []
+    class FakeRecognition {
+      lang = ''
+      interimResults = false
+      continuous = false
+      onresult: ((e: { results: { transcript: string }[][] }) => void) | null = null
+      onerror: (() => void) | null = null
+      onend: (() => void) | null = null
+      start = vi.fn()
+      stop = vi.fn()
+      constructor() { recognitionInstances.push(this) }
+    }
+    vi.stubGlobal('SpeechRecognition', FakeRecognition)
+    renderScreen()
+    fireEvent.click(screen.getByRole('button', { name: /Speak/i }))
+    recognitionInstances[0].onresult?.({ results: [[{ transcript: 'find rahul' }]] })
+    await waitFor(() => expect(screen.getByText(/Found 1 student matching "rahul"/i)).toBeInTheDocument())
+    vi.unstubAllGlobals()
+  })
+
+  it('speaks the answer aloud for a voice-submitted question, using the response language', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    const recognitionInstances: { onresult: ((e: { results: { transcript: string }[][] }) => void) | null }[] = []
+    class FakeRecognition {
+      lang = ''
+      interimResults = false
+      continuous = false
+      onresult: ((e: { results: { transcript: string }[][] }) => void) | null = null
+      onerror: (() => void) | null = null
+      onend: (() => void) | null = null
+      start = vi.fn()
+      stop = vi.fn()
+      constructor() { recognitionInstances.push(this) }
+    }
+    const utterances: { lang: string; text: string }[] = []
+    class FakeUtterance {
+      lang = ''
+      onstart: (() => void) | null = null
+      onend: (() => void) | null = null
+      onerror: (() => void) | null = null
+      text: string
+      constructor(text: string) { this.text = text; utterances.push(this) }
+    }
+    const speak = vi.fn()
+    vi.stubGlobal('SpeechRecognition', FakeRecognition)
+    vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance)
+    vi.stubGlobal('speechSynthesis', { cancel: vi.fn(), speak })
+    renderScreen()
+    fireEvent.click(screen.getByRole('button', { name: /Speak/i }))
+    recognitionInstances[0].onresult?.({ results: [[{ transcript: 'find rahul' }]] })
+    await waitFor(() => expect(screen.getByText(/Found 1 student matching "rahul"/i)).toBeInTheDocument())
+    expect(speak).toHaveBeenCalledTimes(1)
+    expect(utterances[0].text).toBe('Found 1 student matching "rahul".')
+    expect(utterances[0].lang).toBe('en-IN')
+    vi.unstubAllGlobals()
+  })
+
+  it('does not speak the answer for a typed question', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    const speak = vi.fn()
+    class FakeUtterance {
+      lang = ''
+      onstart: (() => void) | null = null
+      onend: (() => void) | null = null
+      onerror: (() => void) | null = null
+      constructor(_text: string) {}
+    }
+    vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance)
+    vi.stubGlobal('speechSynthesis', { cancel: vi.fn(), speak })
+    renderScreen()
+    fireEvent.change(screen.getByPlaceholderText(/How many students present today/i), { target: { value: 'find rahul' } })
+    fireEvent.click(screen.getByRole('button', { name: /^Ask$/i }))
+    await waitFor(() => expect(screen.getByText(/Found 1 student matching "rahul"/i)).toBeInTheDocument())
+    expect(speak).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+
+  it('tapping Speak while the AI is speaking stops speech and starts listening', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    const recognitionInstances: { start: ReturnType<typeof vi.fn>; onresult: ((e: { results: { transcript: string }[][] }) => void) | null }[] = []
+    class FakeRecognition {
+      lang = ''
+      interimResults = false
+      continuous = false
+      onresult: ((e: { results: { transcript: string }[][] }) => void) | null = null
+      onerror: (() => void) | null = null
+      onend: (() => void) | null = null
+      start = vi.fn()
+      stop = vi.fn()
+      constructor() { recognitionInstances.push(this) }
+    }
+    class FakeUtterance {
+      lang = ''
+      onstart: (() => void) | null = null
+      onend: (() => void) | null = null
+      onerror: (() => void) | null = null
+      constructor(_text: string) {}
+    }
+    const cancel = vi.fn()
+    const speak = vi.fn((u: FakeUtterance) => { u.onstart?.() })
+    vi.stubGlobal('SpeechRecognition', FakeRecognition)
+    vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance)
+    vi.stubGlobal('speechSynthesis', { cancel, speak })
+    renderScreen()
+
+    fireEvent.click(screen.getByRole('button', { name: /Speak/i }))
+    recognitionInstances[0].onresult?.({ results: [[{ transcript: 'find rahul' }]] })
+    await waitFor(() => expect(screen.getByRole('button', { name: /Stop speaking/i })).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: /Stop speaking/i }))
+    expect(cancel).toHaveBeenCalled()
+    expect(recognitionInstances).toHaveLength(2)
+    expect(recognitionInstances[1].start).toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+
+  it('permanently disables the mic button after a not-allowed (permission denied) error', () => {
+    vi.stubGlobal('fetch', mockFetch())
+    const recognitionInstances: { onerror: ((e: { error: string }) => void) | null }[] = []
+    class FakeRecognition {
+      lang = ''
+      interimResults = false
+      continuous = false
+      onresult: (() => void) | null = null
+      onerror: ((e: { error: string }) => void) | null = null
+      onend: (() => void) | null = null
+      start = vi.fn()
+      stop = vi.fn()
+      constructor() { recognitionInstances.push(this) }
+    }
+    vi.stubGlobal('SpeechRecognition', FakeRecognition)
+    renderScreen()
+    fireEvent.click(screen.getByRole('button', { name: /Speak/i }))
+    act(() => { recognitionInstances[0].onerror?.({ error: 'not-allowed' }) })
+    expect(screen.getByRole('button', { name: /Speak/i })).toBeDisabled()
+    vi.unstubAllGlobals()
   })
 })

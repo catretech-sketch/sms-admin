@@ -4,6 +4,9 @@
    (see aiSearchResolver.ts); same response shape the future
    POST /v1/ai/search backend will return. Platinum-gated by the
    caller (CommunicationScreen wraps this in <TierGate feature="ai_search">).
+   Voice input/output are separate hooks (speechToText.ts,
+   textToSpeech.ts) — this screen only orchestrates them; see
+   docs/superpowers/specs/2026-08-30-ai-voice-mode-design.md.
    ============================================================ */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -16,6 +19,8 @@ import { usePeriodAttendanceRangeSummary } from '@/api/hooks/usePeriodAttendance
 import { classWiseDayHero } from '@/api/periodAttendanceAdvanced'
 import { studentLiveAttendance } from '@/lib/studentLiveAttendance'
 import { useAiSearch } from '@/api/hooks/useAiSearch'
+import { useSpeechToText, type SpeechToTextErrorCode } from '@/lib/speechToText'
+import { useTextToSpeech } from '@/lib/textToSpeech'
 import type { AiSearchResponse, StudentSearchRow } from '@/lib/aiSearchResolver'
 
 function todayIso(): string {
@@ -23,27 +28,10 @@ function todayIso(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-/* Minimal local typing for the Web Speech API — not declared in TS's default DOM lib. */
-interface SpeechRecognitionResultLike { transcript: string }
-interface SpeechRecognitionEventLike { results: ArrayLike<ArrayLike<SpeechRecognitionResultLike>> }
-interface SpeechRecognitionLike {
-  lang: string
-  interimResults: boolean
-  continuous: boolean
-  onresult: ((e: SpeechRecognitionEventLike) => void) | null
-  onerror: (() => void) | null
-  onend: (() => void) | null
-  start: () => void
-  stop: () => void
-}
-type SpeechRecognitionCtor = new () => SpeechRecognitionLike
+type QuerySource = 'voice' | 'text'
 
-function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
-  const w = window as unknown as { SpeechRecognition?: SpeechRecognitionCtor; webkitSpeechRecognition?: SpeechRecognitionCtor }
-  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null
-}
-
-interface ChatTurn { id: number; query: string; response: AiSearchResponse }
+interface PendingQuery { query: string; source: QuerySource }
+interface ChatTurn { id: number; query: string; response: AiSearchResponse; source: QuerySource }
 
 function isStudentRows(data: AiSearchResponse['data']): data is StudentSearchRow[] {
   return Array.isArray(data)
@@ -59,15 +47,9 @@ export function AiSearchScreen() {
   const toast = useToast()
   const [lang, setLang] = useState<'en' | 'hi'>('en')
   const [text, setText] = useState('')
-  const [listening, setListening] = useState(false)
   const [turns, setTurns] = useState<ChatTurn[]>([])
-  const [pendingQuery, setPendingQuery] = useState<string | null>(null)
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+  const [pendingQuery, setPendingQuery] = useState<PendingQuery | null>(null)
   const turnId = useRef(0)
-
-  useEffect(() => {
-    return () => { recognitionRef.current?.stop() }
-  }, [])
 
   const studentsQ = useStudents()
   const today = todayIso()
@@ -81,19 +63,35 @@ export function AiSearchScreen() {
     enrollment: studentsQ.data?.length ?? 0,
   }), [attendanceQ.isSuccess, attendanceQ.isError, hero, studentsQ.data])
   const search = useAiSearch()
+  const tts = useTextToSpeech()
 
-  const speechCtor = getSpeechRecognitionCtor()
-  const micSupported = speechCtor != null
-
-  const submit = (query: string) => {
+  const submit = (query: string, source: QuerySource) => {
     const trimmed = query.trim()
     if (!trimmed) return
     /* Clear the input immediately — decoupled from the async mutation below — so a query
        typed while a prior search is still in flight is never wiped out by that prior
        search's completion handler (see the pendingQuery guard below). */
-    setPendingQuery(trimmed)
+    setPendingQuery({ query: trimmed, source })
     setText('')
   }
+
+  const handleSpeechResult = (transcript: string) => {
+    /* Voice queries auto-submit — no Ask press needed, per the voice-mode acceptance
+       criteria ("press Speak, say a question, hear the answer, without typing anything"). */
+    submit(transcript, 'voice')
+  }
+
+  const handleSpeechError = (code: SpeechToTextErrorCode) => {
+    if (code === 'not-allowed') {
+      toast.danger('Microphone blocked', 'Voice input has been disabled for this session — allow microphone access and reload to use it again.')
+    } else if (code === 'no-speech') {
+      toast.danger('No speech detected', 'Try again, or type your question instead.')
+    } else {
+      toast.danger('Voice input failed', 'Could not hear that — try typing instead.')
+    }
+  }
+
+  const speechToText = useSpeechToText({ lang, onResult: handleSpeechResult, onError: handleSpeechError })
 
   /* Students load asynchronously; defer the actual search until the roster is ready so the
      resolver isn't run against a stale/empty list captured at click time. Also acts as a
@@ -106,13 +104,13 @@ export function AiSearchScreen() {
     if (pendingQuery == null) return
     if (studentsQ.isLoading) return
     if (search.isPending) return
-    const resolvedQuery = pendingQuery
+    const resolved = pendingQuery
     const students = (studentsQ.data ?? []).map((s) => ({
       id: s.id, name: s.name, cls: s.cls, section: s.section, attendance: s.attendance,
     }))
     search.mutate(
       {
-        query: resolvedQuery,
+        query: resolved.query,
         students,
         attendanceHero: {
           present: attendanceSummary.present,
@@ -124,40 +122,33 @@ export function AiSearchScreen() {
       {
         onSuccess: (response) => {
           turnId.current += 1
-          setTurns((t) => [...t, { id: turnId.current, query: resolvedQuery, response }])
-          setPendingQuery((p) => (p === resolvedQuery ? null : p))
+          setTurns((t) => [...t, { id: turnId.current, query: resolved.query, response, source: resolved.source }])
+          setPendingQuery((p) => (p === resolved ? null : p))
+          if (resolved.source === 'voice' && response.answer) {
+            tts.speak(response.answer, response.language)
+          }
         },
         onError: () => {
           toast.danger('Search failed', 'Could not process that question. Try again.')
-          setPendingQuery((p) => (p === resolvedQuery ? null : p))
+          setPendingQuery((p) => (p === resolved ? null : p))
         },
       },
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingQuery, studentsQ.data, studentsQ.isLoading, search.isPending, hero, attendanceSummary])
 
-  const toggleMic = () => {
-    if (!speechCtor) return
-    if (listening) {
-      recognitionRef.current?.stop()
+  const handleSpeakTap = () => {
+    if (tts.speaking) {
+      tts.stop()
+      speechToText.start()
       return
     }
-    const recognition = new speechCtor()
-    recognition.lang = lang === 'hi' ? 'hi-IN' : 'en-IN'
-    recognition.interimResults = false
-    recognition.continuous = false
-    recognition.onresult = (event) => {
-      setText(event.results[0]?.[0]?.transcript ?? '')
-    }
-    recognition.onerror = () => {
-      toast.danger('Voice input failed', 'Could not hear that — try typing instead.')
-      setListening(false)
-    }
-    recognition.onend = () => setListening(false)
-    recognitionRef.current = recognition
-    setListening(true)
-    recognition.start()
+    speechToText.start()
   }
+
+  const micActive = tts.speaking || speechToText.listening
+  const micDisabled = !speechToText.supported && !tts.speaking
+  const micLabel = tts.speaking ? 'Stop speaking' : speechToText.listening ? 'Listening…' : 'Speak'
 
   return (
     <div>
@@ -174,22 +165,22 @@ export function AiSearchScreen() {
             options={[{ value: 'en', label: 'English' }, { value: 'hi', label: 'हिंदी' }]}
           />
           <Btn
-            variant={listening ? 'danger' : 'secondary'}
+            variant={micActive ? 'danger' : 'secondary'}
             icon="mic"
-            onClick={toggleMic}
-            disabled={!micSupported}
-            title={micSupported ? undefined : 'Voice input not available in this browser — type your question instead'}
+            onClick={handleSpeakTap}
+            disabled={micDisabled}
+            title={micDisabled ? 'Voice input not available in this browser — type your question instead' : undefined}
           >
-            {listening ? 'Listening…' : 'Speak'}
+            {micLabel}
           </Btn>
           <Input
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder="e.g. How many students present today?"
             style={{ flex: 1, minWidth: 240 }}
-            onKeyDown={(e) => { if (e.key === 'Enter') submit(text) }}
+            onKeyDown={(e) => { if (e.key === 'Enter') submit(text, 'text') }}
           />
-          <Btn variant="primary" icon="arrowRight" onClick={() => submit(text)} disabled={!text.trim()}>
+          <Btn variant="primary" icon="arrowRight" onClick={() => submit(text, 'text')} disabled={!text.trim()}>
             Ask
           </Btn>
         </div>
@@ -214,7 +205,7 @@ export function AiSearchScreen() {
             ))}
             {pendingQuery != null && (
               <div className="col gap8">
-                <div className="row jc-end"><Badge tone="brand">{pendingQuery}</Badge></div>
+                <div className="row jc-end"><Badge tone="brand">{pendingQuery.query}</Badge></div>
                 <div className="muted">Thinking…</div>
               </div>
             )}
