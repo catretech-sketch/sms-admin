@@ -24,6 +24,7 @@ export const FEATURE_TIER: Record<string, Tier> = {
   'analytics.weak_students': 'gold', 'reporting.advanced': 'gold',
   hr_payroll: 'platinum', staff_support: 'platinum',
   'attendance.geofence': 'platinum', 'transport.gps': 'platinum', 'support.dedicated': 'platinum',
+  ai_search: 'platinum',
 }
 
 /* ---------- Roles & permission matrix ---------- */

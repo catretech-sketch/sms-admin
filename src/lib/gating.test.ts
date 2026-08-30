@@ -34,6 +34,9 @@ describe('gating', () => {
     expect(tierIncludes('silver', 'attendance.geofence')).toBe(false)
     expect(tierIncludes('gold', 'attendance.geofence')).toBe(false)
     expect(tierIncludes('platinum', 'attendance.geofence')).toBe(true)
+    expect(tierIncludes('silver', 'ai_search')).toBe(false)
+    expect(tierIncludes('gold', 'ai_search')).toBe(false)
+    expect(tierIncludes('platinum', 'ai_search')).toBe(true)
   })
   it('requiredTier defaults to silver for unknown features', () => {
     expect(requiredTier('nonexistent')).toBe('silver')
