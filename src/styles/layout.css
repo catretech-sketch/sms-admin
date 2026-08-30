@@ -157,6 +157,8 @@ html[dir=rtl] .sm-ai-panel { right: auto; left: 80px; }
 .sm-ai-input-row .sm-btn-secondary { background: #0f172a; border-color: #334155; color: #f1f5f9; border-radius: var(--r-pill); }
 .sm-ai-input-row .sm-btn-secondary:hover:not(:disabled) { background: #1e293b; }
 .sm-ai-input-row .sm-btn-primary { background: linear-gradient(135deg, #3b82f6, #8b5cf6); border-radius: var(--r-pill); }
+.sm-ai-circle { width: 42px; height: 42px; min-width: 42px; padding: 0; border-radius: 50% !important; gap: 0; }
+.sm-ai-status { text-align: center; font-size: 12px; color: #94a3b8; margin: 0 0 16px; }
 .sm-ai-body { max-height: 360px; overflow-y: auto; padding-right: 2px; }
 .sm-ai-bubble-bot { background: #334155; border-radius: 14px 14px 14px 4px; padding: 10px 14px; display: inline-block; max-width: 85%; }
 .sm-ai-chip { background: rgba(59, 130, 246, .15); border-color: rgba(59, 130, 246, .3); color: #93c5fd; border-radius: var(--r-pill); }

@@ -167,6 +167,14 @@ export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
   const micActive = tts.speaking || speechToText.listening
   const micDisabled = (!speechToText.supported && !tts.speaking) || viewOnly
   const micLabel = speechToText.listening ? 'Listening…' : 'Speak'
+  const micTitle = viewOnly
+    ? 'Turn off View only to use voice input'
+    : (micDisabled ? 'Voice input not available in this browser — type your question instead' : micLabel)
+  const statusText = viewOnly
+    ? 'View only — turn it off to ask a question'
+    : speechToText.listening ? 'Listening… speak now'
+    : search.isPending ? 'Thinking…'
+    : 'Ready — type or speak'
 
   return (
     <div className="sm-ai-chat">
@@ -179,7 +187,7 @@ export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
         <Toggle checked={viewOnly} onChange={() => setViewOnly((v) => !v)} label="View only" />
       </div>
       <Card>
-        <div className="row ai-center gap12 wrap sm-ai-input-row" style={{ marginBottom: 16 }}>
+        <div className="row ai-center gap12 wrap sm-ai-input-row" style={{ marginBottom: 8 }}>
           <Segmented
             value={lang}
             onChange={(v) => setLang(v as 'en' | 'hi')}
@@ -188,12 +196,12 @@ export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
           <Btn
             variant={micActive ? 'danger' : 'secondary'}
             icon="mic"
+            className="sm-ai-circle"
             onClick={handleSpeakTap}
             disabled={micDisabled}
-            title={viewOnly ? 'Turn off View only to use voice input' : (micDisabled ? 'Voice input not available in this browser — type your question instead' : undefined)}
-          >
-            {micLabel}
-          </Btn>
+            aria-label={micLabel}
+            title={micTitle}
+          />
           <Input
             value={text}
             onChange={(e) => setText(e.target.value)}
@@ -202,10 +210,17 @@ export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
             onKeyDown={(e) => { if (e.key === 'Enter') submit(text, 'text') }}
             disabled={viewOnly}
           />
-          <Btn variant="primary" icon="arrowRight" onClick={() => submit(text, 'text')} disabled={!text.trim() || viewOnly}>
-            Ask
-          </Btn>
+          <Btn
+            variant="primary"
+            icon="arrowRight"
+            className="sm-ai-circle"
+            onClick={() => submit(text, 'text')}
+            disabled={!text.trim() || viewOnly}
+            aria-label="Ask"
+            title="Ask"
+          />
         </div>
+        <div className="sm-ai-status">{statusText}</div>
 
         {turns.length === 0 && pendingQuery == null ? (
           <Empty
