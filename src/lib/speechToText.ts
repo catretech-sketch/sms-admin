@@ -62,6 +62,8 @@ export function useSpeechToText({ lang, onResult, onError }: UseSpeechToTextOpti
       recognitionRef.current?.stop()
       return
     }
+    const prev = recognitionRef.current
+    if (prev) { prev.onresult = null; prev.onerror = null; prev.onend = null }
     const recognition = new speechCtor()
     recognition.lang = lang === 'hi' ? 'hi-IN' : 'en-IN'
     recognition.interimResults = false
@@ -77,6 +79,12 @@ export function useSpeechToText({ lang, onResult, onError }: UseSpeechToTextOpti
       setListening(false)
     }
     recognition.onerror = (event) => {
+      if (event.error === 'aborted') {
+        /* Emitted on a deliberate stop() or unmount teardown — not a real failure,
+           so no error is reported to the consumer (no toast). */
+        setListening(false)
+        return
+      }
       const code: SpeechToTextErrorCode =
         event.error === 'not-allowed' ? 'not-allowed' : event.error === 'no-speech' ? 'no-speech' : 'other'
       if (code === 'not-allowed') setPermanentlyDenied(true)

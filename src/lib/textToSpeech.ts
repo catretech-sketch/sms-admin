@@ -1,7 +1,7 @@
 /** Text-to-speech: thin wrapper over the browser's SpeechSynthesis API (Web Speech API),
  *  used to speak AI Mode's answer aloud for voice-originated queries. See
  *  docs/superpowers/specs/2026-08-30-ai-voice-mode-design.md §2. */
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 
 interface SpeechSynthesisUtteranceLike {
   lang: string
@@ -42,7 +42,6 @@ export interface UseTextToSpeechResult {
 
 export function useTextToSpeech(): UseTextToSpeechResult {
   const [speaking, setSpeaking] = useState(false)
-  const synthRef = useRef<SpeechSynthesisLike | null>(null)
 
   const supported = getSpeechSynthesis() != null && getUtteranceCtor() != null
 
@@ -56,12 +55,11 @@ export function useTextToSpeech(): UseTextToSpeechResult {
     utterance.onstart = () => setSpeaking(true)
     utterance.onend = () => setSpeaking(false)
     utterance.onerror = () => setSpeaking(false)
-    synthRef.current = synth
     synth.speak(utterance)
   }
 
   const stop = () => {
-    synthRef.current?.cancel()
+    getSpeechSynthesis()?.cancel()
     setSpeaking(false)
   }
 

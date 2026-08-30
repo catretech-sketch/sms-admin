@@ -240,9 +240,9 @@ describe('AiSearchScreen', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Speak/i }))
     recognitionInstances[0].onresult?.({ results: [[{ transcript: 'find rahul' }]] })
-    await waitFor(() => expect(screen.getByRole('button', { name: /Stop speaking/i })).toBeInTheDocument())
+    await waitFor(() => expect(speak).toHaveBeenCalledTimes(1))
 
-    fireEvent.click(screen.getByRole('button', { name: /Stop speaking/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^Speak$/i }))
     expect(cancel).toHaveBeenCalled()
     expect(recognitionInstances).toHaveLength(2)
     expect(recognitionInstances[1].start).toHaveBeenCalled()

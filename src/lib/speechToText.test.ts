@@ -106,6 +106,17 @@ describe('useSpeechToText', () => {
     expect(onError).toHaveBeenCalledWith('other')
   })
 
+  it('silently resets listening on an aborted error, without calling onError', () => {
+    const { instances } = installFakeRecognition()
+    const onError = vi.fn()
+    const { result } = renderHook(() => useSpeechToText({ lang: 'en', onResult: vi.fn(), onError }))
+    act(() => { result.current.start() })
+    act(() => { instances[0].onerror?.({ error: 'aborted' }) })
+    expect(onError).not.toHaveBeenCalled()
+    expect(result.current.listening).toBe(false)
+    expect(result.current.supported).toBe(true)
+  })
+
   it('stops listening when onend fires', () => {
     const { instances } = installFakeRecognition()
     const { result } = renderHook(() => useSpeechToText({ lang: 'en', onResult: vi.fn(), onError: vi.fn() }))

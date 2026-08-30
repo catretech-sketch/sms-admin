@@ -148,7 +148,7 @@ export function AiSearchScreen() {
 
   const micActive = tts.speaking || speechToText.listening
   const micDisabled = !speechToText.supported && !tts.speaking
-  const micLabel = tts.speaking ? 'Stop speaking' : speechToText.listening ? 'Listening…' : 'Speak'
+  const micLabel = speechToText.listening ? 'Listening…' : 'Speak'
 
   return (
     <div>
