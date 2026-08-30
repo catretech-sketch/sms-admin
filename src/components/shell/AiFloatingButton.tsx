@@ -25,7 +25,7 @@ export function AiFloatingButton() {
       {open && (
         <div className="sm-ai-panel">
           {tierIncludes(app.plan, 'ai_search') ? (
-            <AiSearchScreen />
+            <AiSearchScreen role={app.role} />
           ) : (
             // TierGate mounts its children inside an aria-hidden blur div (never omits them), so
             // always wrapping AiSearchScreen here would still mount it (and its data fetches) for

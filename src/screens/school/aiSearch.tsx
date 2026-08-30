@@ -3,7 +3,7 @@
    already-live student/attendance data. Local resolver today
    (see aiSearchResolver.ts); same response shape the future
    POST /v1/ai/search backend will return. Platinum-gated by the
-   caller (CommunicationScreen wraps this in <TierGate feature="ai_search">).
+   caller (AiFloatingButton wraps this in <TierGate feature="ai_search">).
    Voice input/output are separate hooks (speechToText.ts,
    textToSpeech.ts) — this screen only orchestrates them; see
    docs/superpowers/specs/2026-08-30-ai-voice-mode-design.md.
@@ -21,6 +21,7 @@ import { studentLiveAttendance } from '@/lib/studentLiveAttendance'
 import { useAiSearch } from '@/api/hooks/useAiSearch'
 import { useSpeechToText, type SpeechToTextErrorCode } from '@/lib/speechToText'
 import { useTextToSpeech } from '@/lib/textToSpeech'
+import { logUnsupportedAiQuery } from '@/lib/aiSearchQueryLog'
 import type { AiSearchResponse, StudentSearchRow } from '@/lib/aiSearchResolver'
 
 function todayIso(): string {
@@ -43,7 +44,11 @@ const STUDENT_COLUMNS: Column<StudentSearchRow>[] = [
   { key: 'attendancePct', label: 'Attendance', render: (r) => (r.attendancePct == null ? '—' : `${r.attendancePct}%`) },
 ]
 
-export function AiSearchScreen() {
+/** `role` is only used to label entries in the local unsupported-query log (see
+ *  aiSearchQueryLog.ts) — passed in by the caller (AiFloatingButton, which already has
+ *  `app.role` from useApp()) rather than calling useApp() here, so this screen and its
+ *  tests stay independent of session/auth context. Defaults to 'unknown' if omitted. */
+export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
   const toast = useToast()
   const [lang, setLang] = useState<'en' | 'hi'>('en')
   const [text, setText] = useState('')
@@ -126,6 +131,11 @@ export function AiSearchScreen() {
           setPendingQuery((p) => (p === resolved ? null : p))
           if (resolved.source === 'voice' && response.answer) {
             tts.speak(response.answer, response.language)
+          }
+          if (response.intent === 'Unsupported' || response.intent === 'WriteBlocked') {
+            logUnsupportedAiQuery({
+              question: resolved.query, language: response.language, intent: response.intent, role,
+            })
           }
         },
         onError: () => {

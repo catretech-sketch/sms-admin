@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ToastProvider } from '@/context/ToastProvider'
 import { AiSearchScreen } from './aiSearch'
+import { getAiSearchQueryLog } from '@/lib/aiSearchQueryLog'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -33,11 +34,11 @@ function mockFetch() {
   })
 }
 
-function renderScreen() {
+function renderScreen(role?: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <ToastProvider><AiSearchScreen /></ToastProvider>
+      <ToastProvider><AiSearchScreen role={role} /></ToastProvider>
     </QueryClientProvider>,
   )
 }
@@ -269,5 +270,27 @@ describe('AiSearchScreen', () => {
     act(() => { recognitionInstances[0].onerror?.({ error: 'not-allowed' }) })
     expect(screen.getByRole('button', { name: /Speak/i })).toBeDisabled()
     vi.unstubAllGlobals()
+  })
+
+  it('logs an Unsupported query (with role) to the local query log', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    localStorage.clear()
+    renderScreen('teacher')
+    fireEvent.change(screen.getByPlaceholderText(/How many students present today/i), { target: { value: 'what is the weather today' } })
+    fireEvent.click(screen.getByRole('button', { name: /^Ask$/i }))
+    await waitFor(() => expect(screen.getByText(/couldn't understand/i)).toBeInTheDocument())
+    const log = getAiSearchQueryLog()
+    expect(log).toHaveLength(1)
+    expect(log[0]).toMatchObject({ question: 'what is the weather today', intent: 'Unsupported', role: 'teacher' })
+  })
+
+  it('does not log a successful query', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    localStorage.clear()
+    renderScreen('admin')
+    fireEvent.change(screen.getByPlaceholderText(/How many students present today/i), { target: { value: 'find rahul' } })
+    fireEvent.click(screen.getByRole('button', { name: /^Ask$/i }))
+    await waitFor(() => expect(screen.getByText(/Found 1 student matching "rahul"/i)).toBeInTheDocument())
+    expect(getAiSearchQueryLog()).toEqual([])
   })
 })
