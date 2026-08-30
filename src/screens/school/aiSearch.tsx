@@ -44,6 +44,11 @@ const STUDENT_COLUMNS: Column<StudentSearchRow>[] = [
   { key: 'attendancePct', label: 'Attendance', render: (r) => (r.attendancePct == null ? '—' : `${r.attendancePct}%`) },
 ]
 
+const SUGGESTED_QUESTIONS = [
+  'How many students present today?',
+  'Find Rahul',
+]
+
 /** `role` is only used to label entries in the local unsupported-query log (see
  *  aiSearchQueryLog.ts) — passed in by the caller (AiFloatingButton, which already has
  *  `app.role` from useApp()) rather than calling useApp() here, so this screen and its
@@ -196,7 +201,18 @@ export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
         </div>
 
         {turns.length === 0 && pendingQuery == null ? (
-          <Empty icon="sparkle" title="Ask your first question" body='Try: "How many students present today?" or "Find Rahul".' />
+          <Empty
+            icon="sparkle"
+            title="👋 Hello! How can I help you?"
+            body="Ask me anything about your school — try one of these, or type your own question."
+            action={
+              <div className="row ai-center gap8 wrap" style={{ justifyContent: 'center' }}>
+                {SUGGESTED_QUESTIONS.map((q) => (
+                  <Btn key={q} variant="secondary" size="sm" onClick={() => submit(q, 'text')}>{q}</Btn>
+                ))}
+              </div>
+            }
+          />
         ) : (
           <div className="col gap16">
             {turns.map((t) => (

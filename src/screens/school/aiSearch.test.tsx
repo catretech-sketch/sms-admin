@@ -44,11 +44,20 @@ function renderScreen(role?: string) {
 }
 
 describe('AiSearchScreen', () => {
-  it('shows the demo badge and an empty state before any question is asked', () => {
+  it('shows the demo badge and a greeting with suggestion chips before any question is asked', () => {
     vi.stubGlobal('fetch', mockFetch())
     renderScreen()
     expect(screen.getByText(/Local answers/i)).toBeInTheDocument()
-    expect(screen.getByText(/Ask your first question/i)).toBeInTheDocument()
+    expect(screen.getByText(/How can I help you/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'How many students present today?' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Find Rahul' })).toBeInTheDocument()
+  })
+
+  it('tapping a suggestion chip submits it as a typed question', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderScreen()
+    fireEvent.click(screen.getByRole('button', { name: 'Find Rahul' }))
+    await waitFor(() => expect(screen.getByText(/Found 1 student matching "Rahul"/i)).toBeInTheDocument())
   })
 
   it('typing a question and pressing Ask renders an answer bubble', async () => {
