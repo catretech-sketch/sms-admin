@@ -10,7 +10,7 @@
    ============================================================ */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  PageHead, Card, Btn, Badge, Segmented, Input, DataTable, DemoBadge, Empty, Toggle,
+  PageHead, Card, Btn, Badge, Segmented, Input, DataTable, DemoBadge, Empty, Toggle, Icon,
   type Column,
 } from '@/components/ui'
 import { useToast } from '@/lib/hooks'
@@ -169,17 +169,17 @@ export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
   const micLabel = speechToText.listening ? 'Listening…' : 'Speak'
 
   return (
-    <div>
+    <div className="sm-ai-chat">
       <PageHead
-        title="AI Mode"
+        title={<span className="row ai-center gap8"><span className="sm-ai-logo"><Icon name="bot" size={18} /></span>AI Mode</span>}
         sub="Ask a question about your school — by voice or text"
         actions={<DemoBadge label="Local answers — Claude-backed search coming soon" />}
       />
+      <div className="sm-ai-viewonly-bar">
+        <Toggle checked={viewOnly} onChange={() => setViewOnly((v) => !v)} label="View only" />
+      </div>
       <Card>
-        <div className="row ai-center gap12 wrap" style={{ marginBottom: 12 }}>
-          <Toggle checked={viewOnly} onChange={() => setViewOnly((v) => !v)} label="View only" />
-        </div>
-        <div className="row ai-center gap12 wrap" style={{ marginBottom: 16 }}>
+        <div className="row ai-center gap12 wrap sm-ai-input-row" style={{ marginBottom: 16 }}>
           <Segmented
             value={lang}
             onChange={(v) => setLang(v as 'en' | 'hi')}
@@ -215,17 +215,17 @@ export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
             action={
               <div className="row ai-center gap8 wrap" style={{ justifyContent: 'center' }}>
                 {SUGGESTED_QUESTIONS.map((q) => (
-                  <Btn key={q} variant="secondary" size="sm" onClick={() => submit(q, 'text')} disabled={viewOnly}>{q}</Btn>
+                  <Btn key={q} variant="secondary" size="sm" className="sm-ai-chip" onClick={() => submit(q, 'text')} disabled={viewOnly}>{q}</Btn>
                 ))}
               </div>
             }
           />
         ) : (
-          <div className="col gap16">
+          <div className="col gap16 sm-ai-body">
             {turns.map((t) => (
               <div key={t.id} className="col gap8">
                 <div className="row jc-end"><Badge tone="brand">{t.query}</Badge></div>
-                <div style={{ color: t.response.success ? undefined : 'var(--danger)' }}>{t.response.answer}</div>
+                <div className="sm-ai-bubble-bot" style={{ color: t.response.success ? undefined : 'var(--danger)' }}>{t.response.answer}</div>
                 {isStudentRows(t.response.data) && t.response.data.length > 0 && (
                   <DataTable<StudentSearchRow>
                     columns={STUDENT_COLUMNS}
@@ -239,7 +239,7 @@ export function AiSearchScreen({ role = 'unknown' }: { role?: string } = {}) {
             {pendingQuery != null && (
               <div className="col gap8">
                 <div className="row jc-end"><Badge tone="brand">{pendingQuery.query}</Badge></div>
-                <div className="muted">Thinking…</div>
+                <div className="muted sm-ai-bubble-bot">Thinking…</div>
               </div>
             )}
           </div>
