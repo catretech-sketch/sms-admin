@@ -68,6 +68,13 @@ export function useSpeechToText({ lang, onResult, onError }: UseSpeechToTextOpti
     recognition.continuous = false
     recognition.onresult = (event) => {
       onResult(event.results[0]?.[0]?.transcript ?? '')
+      /* continuous is always false here — a single-shot recognizer ends itself right after
+         its one result, matching the real Web Speech API's behavior (the browser fires
+         'end' shortly after 'result' for a non-continuous recognizer). Resetting here
+         rather than waiting on that later 'end' event lets a caller immediately start a
+         fresh recognition session (e.g. after speaking the answer aloud) without the stale
+         'still listening' flag blocking it. */
+      setListening(false)
     }
     recognition.onerror = (event) => {
       const code: SpeechToTextErrorCode =
