@@ -63,6 +63,7 @@ const ICONS: Record<string, string> = {
   menu: 'M3 12h18M3 6h18M3 18h18',
   layers: 'M12 2 2 7l10 5 10-5zM2 17l10 5 10-5M2 12l10 5 10-5',
   beaker: 'M9 2v6L4 18a2 2 0 0 0 1.8 3h12.4A2 2 0 0 0 20 18L15 8V2M8 2h8M7 14h10',
+  bot: 'M12 2v3M7 8h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2zM9 13v2M15 13v2',
 }
 
 // convenience aliases used across the app

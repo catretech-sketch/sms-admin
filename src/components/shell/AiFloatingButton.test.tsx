@@ -6,6 +6,15 @@ import { ToastProvider } from '@/context/ToastProvider'
 import { tokenStore } from '@/api/auth/tokenStore'
 import { AiFloatingButton } from './AiFloatingButton'
 
+/* jsdom has no PointerEvent constructor, so fireEvent.pointerDown/Move/Up never carry
+   clientX/clientY through to React's handlers in this test environment. A MouseEvent
+   carries clientX/clientY correctly, and React routes purely by the DOM event's `.type`
+   string — so dispatching a MouseEvent typed as 'pointerdown'/'pointermove'/'pointerup'
+   exercises the exact same onPointerDown/Move/Up props real browsers would call. */
+function firePointer(el: Element, type: 'pointerdown' | 'pointermove' | 'pointerup', clientX: number, clientY: number) {
+  fireEvent(el, new MouseEvent(type, { clientX, clientY, bubbles: true, cancelable: true }))
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
@@ -60,6 +69,7 @@ function renderButton(opts: { tier: string; isPlatform?: boolean; status?: strin
 beforeEach(() => {
   tokenStore.set({ access_token: 'a', refresh_token: 'r' })
   tokenStore.setEmail('admin@greenwood.edu')
+  localStorage.removeItem('sm_ai_fab_position')
 })
 
 afterEach(() => {
@@ -114,5 +124,46 @@ describe('AiFloatingButton', () => {
     await waitFor(() => expect(screen.getByText(/Ask a question about your school/i)).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: /AI Mode/i }))
     expect(screen.queryByText(/Ask a question about your school/i)).not.toBeInTheDocument()
+  })
+
+  it('dragging the fab moves and persists its position without opening the panel', async () => {
+    renderButton({ tier: 'platinum' })
+    await waitFor(() => expect(screen.getByRole('button', { name: /AI Mode/i })).toBeInTheDocument())
+    const fab = screen.getByRole('button', { name: /AI Mode/i })
+    const before = fab.style.left
+    firePointer(fab, 'pointerdown', 100, 100)
+    firePointer(fab, 'pointermove', 160, 100)
+    firePointer(fab, 'pointerup', 160, 100)
+    // Some browsers still fire a click after a drag release — must not open the panel.
+    fireEvent.click(fab)
+    expect(screen.queryByText(/Ask a question about your school/i)).not.toBeInTheDocument()
+    expect(fab.style.left).not.toBe(before)
+    const saved = JSON.parse(localStorage.getItem('sm_ai_fab_position') ?? 'null')
+    expect(saved).not.toBeNull()
+    expect(typeof saved.x).toBe('number')
+  })
+
+  it('a plain click (no movement) still opens the panel', async () => {
+    renderButton({ tier: 'platinum' })
+    await waitFor(() => expect(screen.getByRole('button', { name: /AI Mode/i })).toBeInTheDocument())
+    const fab = screen.getByRole('button', { name: /AI Mode/i })
+    firePointer(fab, 'pointerdown', 100, 100)
+    firePointer(fab, 'pointerup', 100, 100)
+    fireEvent.click(fab)
+    await waitFor(() => expect(screen.getByText(/Ask a question about your school/i)).toBeInTheDocument())
+  })
+
+  it('clamps the fab position on window resize', async () => {
+    renderButton({ tier: 'platinum' })
+    await waitFor(() => expect(screen.getByRole('button', { name: /AI Mode/i })).toBeInTheDocument())
+    const fab = screen.getByRole('button', { name: /AI Mode/i })
+    const originalWidth = window.innerWidth
+    firePointer(fab, 'pointerdown', 100, 100)
+    firePointer(fab, 'pointermove', originalWidth - 10, 100)
+    firePointer(fab, 'pointerup', originalWidth - 10, 100)
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 400 })
+    fireEvent(window, new Event('resize'))
+    await waitFor(() => expect(parseInt(fab.style.left, 10)).toBeLessThanOrEqual(400 - 46))
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: originalWidth })
   })
 })
