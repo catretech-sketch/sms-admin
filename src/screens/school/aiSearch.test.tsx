@@ -50,7 +50,6 @@ describe('AiSearchScreen', () => {
     expect(screen.getByText(/Local answers/i)).toBeInTheDocument()
     expect(screen.getByText(/How can I help you/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'How many students present today?' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Find Rahul' })).toBeInTheDocument()
   })
 
   it('greets a known user by name when userName is provided', () => {
@@ -62,8 +61,8 @@ describe('AiSearchScreen', () => {
   it('tapping a suggestion chip submits it as a typed question', async () => {
     vi.stubGlobal('fetch', mockFetch())
     renderScreen()
-    fireEvent.click(screen.getByRole('button', { name: 'Find Rahul' }))
-    await waitFor(() => expect(screen.getByText(/Found 1 student matching "Rahul"/i)).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'How many students present today?' }))
+    await waitFor(() => expect(screen.getByText(/of \d+ students present today/i)).toBeInTheDocument())
   })
 
   it('View only blocks Ask, chips, and mic, and clears once toggled off', async () => {
@@ -74,16 +73,16 @@ describe('AiSearchScreen', () => {
     const input = screen.getByPlaceholderText(/How many students present today/i)
     expect(input).toBeDisabled()
     expect(screen.getByRole('button', { name: /^Ask$/i })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Find Rahul' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'How many students present today?' })).toBeDisabled()
     expect(screen.getByRole('button', { name: /Speak/i })).toBeDisabled()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Find Rahul' }))
-    expect(screen.queryByText(/Found 1 student matching/i)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'How many students present today?' }))
+    expect(screen.queryByText(/of \d+ students present today/i)).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /View only/i }))
     expect(input).not.toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: 'Find Rahul' }))
-    await waitFor(() => expect(screen.getByText(/Found 1 student matching "Rahul"/i)).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'How many students present today?' }))
+    await waitFor(() => expect(screen.getByText(/of \d+ students present today/i)).toBeInTheDocument())
   })
 
   it('typing a question and pressing Ask renders an answer bubble', async () => {

@@ -46,7 +46,6 @@ const STUDENT_COLUMNS: Column<StudentSearchRow>[] = [
 
 const SUGGESTED_QUESTIONS = [
   'How many students present today?',
-  'Find Rahul',
 ]
 
 /** `role` labels entries in the local unsupported-query log (see aiSearchQueryLog.ts);
