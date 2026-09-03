@@ -16,7 +16,7 @@ import {
 import { depts } from '@/data/mockDb'
 import { fmtMoney } from '@/lib/format'
 import { normalizeStaffCategory, staffCategoryLabel } from '@/lib/staffCategory'
-import type { Teacher, Staff } from '@/types'
+import type { Teacher, Staff, Role } from '@/types'
 import { useTeachers } from '@/api/hooks/useTeachers'
 import { normalizeSubjects } from '@/api/teachers'
 import { useStaff } from '@/api/hooks/useStaff'
@@ -28,7 +28,8 @@ import {
 import { fetchTeacherExtras } from '@/api/teacherExtras'
 import { fetchStaffExtras } from '@/api/staffExtras'
 import { openMailCompose } from '@/lib/composeMail'
-import { useLeadershipRoleByEmail } from '@/api/hooks/useUsers'
+import { useLeadershipRoleByEmail, useSchoolUserByEmail } from '@/api/hooks/useUsers'
+import { useSetUserActive } from '@/api/hooks/useUserMutations'
 
 /* ---------- shared helpers ---------- */
 const attColor = (v: number): string => (v >= 90 ? 'var(--success)' : v >= 80 ? 'var(--brand-600)' : v >= 75 ? 'var(--warning)' : 'var(--danger)')
@@ -126,6 +127,55 @@ function PeopleDocsList({
   )
 }
 
+const CAN_MANAGE_ACCESS: Role[] = ['owner', 'admin', 'principal', 'vice_principal']
+
+function AccessCard({ email, name }: { email: string | undefined; name: string }) {
+  const app = useApp()
+  const toast = useToast()
+  const account = useSchoolUserByEmail(email)
+  const setActive = useSetUserActive()
+
+  if (!CAN_MANAGE_ACCESS.includes(app.role)) return null
+
+  if (!account) {
+    return (
+      <Card>
+        <CardHead title="App access" icon="key" />
+        <div className="t-sm muted" style={{ marginTop: 8 }}>Not yet invited to the app.</div>
+      </Card>
+    )
+  }
+
+  const suspended = account.status === 'inactive'
+  const toggle = () => {
+    setActive.mutate({ userId: account.id, active: suspended }, {
+      onSuccess: () => toast.success(
+        suspended ? 'Access restored' : 'Account suspended',
+        `${name} ${suspended ? 'can sign in again' : 'can no longer sign in'}.`,
+      ),
+      onError: (err) => toast.danger('Could not update access', err instanceof Error ? err.message : 'Try again.'),
+    })
+  }
+
+  return (
+    <Card>
+      <CardHead title="App access" icon="key" />
+      <div className="row ai-center jc-between" style={{ marginTop: 8 }}>
+        <Badge tone={suspended ? 'danger' : 'success'}>{suspended ? 'Suspended' : 'Active'}</Badge>
+        <Btn
+          variant="secondary"
+          size="sm"
+          icon={suspended ? 'checkCircle' : 'lock'}
+          onClick={toggle}
+          disabled={setActive.isPending}
+        >
+          {setActive.isPending ? 'Saving…' : suspended ? 'Unsuspend' : 'Suspend'}
+        </Btn>
+      </div>
+    </Card>
+  )
+}
+
 function TeacherProfile({ teacher, onClose, onMessage }: { teacher: Teacher | null; onClose: () => void; onMessage: (t: Teacher) => void }) {
   const app = useApp()
   const toast = useToast()
@@ -192,6 +242,8 @@ function TeacherProfile({ teacher, onClose, onMessage }: { teacher: Teacher | nu
           </div>
         </Card>
 
+        <AccessCard email={teacher.email} name={teacher.name} />
+
         <Card>
           <CardHead title="Photo & documents" sub="Stored on this device" icon="doc" />
           <div style={{ marginTop: 8 }}>
@@ -237,6 +289,7 @@ function StaffProfile({ staff, onClose, onMessage }: { staff: Staff | null; onCl
             <StatRow label="Status" value={<Badge tone={statusTone(staff.status)}>{statusLabel(staff.status)}</Badge>} />
           </div>
         </Card>
+        <AccessCard email={staff.email} name={staff.name} />
         <Card>
           <CardHead title="Photo & documents" sub="Stored on this device" icon="doc" />
           <div style={{ marginTop: 8 }}>
