@@ -1400,6 +1400,7 @@ function BusRidersModal({ bus, onClose }: { bus: FleetBus; onClose: () => void }
     () => (studentsData ?? []).filter((s) => !assignedIds.has(s.id)).sort((a, b) => a.name.localeCompare(b.name)),
     [studentsData, assignedIds],
   )
+  const atCapacity = bus.capacity != null && riders.length >= bus.capacity
   const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Please try again.')
 
   useEffect(() => { setPickStop('') }, [pick])
@@ -1443,9 +1444,14 @@ function BusRidersModal({ bus, onClose }: { bus: FleetBus; onClose: () => void }
                 ]} />
             </Field>
           )}
-          <Btn variant="primary" icon="plus" disabled={!pick || assign.isPending} onClick={add}>
+          <Btn variant="primary" icon="plus" disabled={!pick || assign.isPending || atCapacity} onClick={add}>
             {assign.isPending ? 'Adding…' : 'Add'}
           </Btn>
+          {atCapacity && (
+            <div className="t-xs" style={{ color: 'var(--danger)' }}>
+              Bus capacity reached ({riders.length}/{bus.capacity})
+            </div>
+          )}
         </div>
 
         {ridersQ.isLoading ? (
@@ -1454,7 +1460,9 @@ function BusRidersModal({ bus, onClose }: { bus: FleetBus; onClose: () => void }
           <Empty icon="users" title="No riders yet" body="Assign students above to build this bus's roster." />
         ) : (
           <div className="col gap8">
-            <div className="t-xs muted3">{riders.length} rider{riders.length === 1 ? '' : 's'}</div>
+            <div className="t-xs muted3">
+              {riders.length}{bus.capacity != null ? ` / ${bus.capacity}` : ''} rider{riders.length === 1 ? '' : 's'}
+            </div>
             {riders.map((r) => (
               <div key={r.studentId} className="row ai-center jc-between gap10"
                 style={{ padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 10 }}>
