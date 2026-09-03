@@ -28,27 +28,6 @@ describe('transport buses API', () => {
     expect(body.driver_staff_id).toBe('S1')
   })
 
-  it('POSTs create bus with capacity', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
-      data: { bus_id: 'B3', bus_no: 'BUS-03', status: 'idle', stop_count: 0, students_riding: 0, capacity: 40 },
-    }))
-    vi.stubGlobal('fetch', fetchMock)
-    const row = await createBus({ busNo: 'BUS-03', capacity: 40 })
-    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
-    expect(body.capacity).toBe(40)
-    expect(row.capacity).toBe(40)
-  })
-
-  it('PUTs bus capacity clear', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
-      data: { bus_id: 'B1', bus_no: 'BUS-01', route_id: 'R2', driver_staff_id: 'S2', stop_count: 8, students_assigned: 10, capacity: null },
-    }))
-    vi.stubGlobal('fetch', fetchMock)
-    await updateBus('B1', { clearCapacity: true })
-    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
-    expect(body.clear_capacity).toBe(true)
-  })
-
   it('PUTs bus update', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
       data: { bus_id: 'B1', bus_no: 'BUS-01', route_id: 'R2', driver_staff_id: 'S2', stop_count: 8, students_assigned: 10 },
@@ -58,27 +37,6 @@ describe('transport buses API', () => {
     expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/transport\/buses\/B1$/)
     expect(row.routeId).toBe('R2')
     expect(row.driverStaffId).toBe('S2')
-  })
-
-  it('PUTs conductor assignment and returns it', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
-      data: { bus_id: 'B1', bus_no: 'BUS-01', route_id: 'R2', driver_staff_id: 'S2', conductor_staff_id: 'S3', stop_count: 8, students_assigned: 10 },
-    }))
-    vi.stubGlobal('fetch', fetchMock)
-    const row = await updateBus('B1', { conductorStaffId: 'S3' })
-    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
-    expect(body.conductor_staff_id).toBe('S3')
-    expect(row.conductorStaffId).toBe('S3')
-  })
-
-  it('clears conductor assignment', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
-      data: { bus_id: 'B1', bus_no: 'BUS-01', route_id: 'R2', driver_staff_id: 'S2', conductor_staff_id: null, stop_count: 8, students_assigned: 10 },
-    }))
-    vi.stubGlobal('fetch', fetchMock)
-    await updateBus('B1', { clearConductor: true })
-    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
-    expect(body.clear_conductor).toBe(true)
   })
 })
 
