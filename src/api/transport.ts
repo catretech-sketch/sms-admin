@@ -13,6 +13,7 @@ export interface FleetBus {
   routeName?: string | null
   driver?: string | null
   driverPhone?: string | null
+  conductorStaffId?: string | null
   stopCount: number
   studentsRiding: number
   status: BusStatus
@@ -21,6 +22,7 @@ export interface FleetBus {
   speedKmh?: number | null
   nextStopName?: string | null
   lastPingAt?: string | null
+  capacity?: number | null
 }
 
 export interface StudentBusAssignment {
@@ -42,6 +44,8 @@ export interface CreateBusInput {
   driver?: string | null
   driverPhone?: string | null
   driverStaffId?: string | null
+  conductorStaffId?: string | null
+  capacity?: number | null
 }
 
 export interface UpdateBusInput {
@@ -49,6 +53,10 @@ export interface UpdateBusInput {
   routeId?: string | null
   driverStaffId?: string | null
   clearDriver?: boolean
+  conductorStaffId?: string | null
+  clearConductor?: boolean
+  capacity?: number | null
+  clearCapacity?: boolean
 }
 
 export interface TransportBus {
@@ -59,10 +67,12 @@ export interface TransportBus {
   driverStaffId?: string | null
   driver?: string | null
   driverPhone?: string | null
+  conductorStaffId?: string | null
   stopCount: number
   studentsAssigned: number
   teacherUserId?: string | null
   teacherName?: string | null
+  capacity?: number | null
 }
 export interface TransportRoute { id: string; name: string; stops: number }
 export interface CreateRouteInput { name: string; stops?: number }
@@ -130,6 +140,8 @@ export async function createBus(input: CreateBusInput): Promise<FleetBus> {
     driver: input.driver?.trim() || null,
     driverPhone: input.driverPhone?.trim() || null,
     driverStaffId: input.driverStaffId || null,
+    conductorStaffId: input.conductorStaffId || null,
+    capacity: input.capacity ?? null,
   })
   return asObj<FleetBus>(await request<Record<string, unknown>>('/transport/buses', { method: 'POST', body }))
 }
@@ -141,6 +153,10 @@ export async function updateBus(busId: string, input: UpdateBusInput): Promise<T
     routeId: input.routeId || null,
     driverStaffId: input.driverStaffId || null,
     clearDriver: input.clearDriver ?? false,
+    conductorStaffId: input.conductorStaffId || null,
+    clearConductor: input.clearConductor ?? false,
+    capacity: input.capacity ?? null,
+    clearCapacity: input.clearCapacity ?? false,
   })
   return asObj<TransportBus>(await request<Record<string, unknown>>(`/transport/buses/${busId}`, { method: 'PUT', body }))
 }
