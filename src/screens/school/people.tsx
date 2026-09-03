@@ -146,6 +146,8 @@ function AccessCard({ email, name }: { email: string | undefined; name: string }
     )
   }
 
+  const pending = account.status !== 'active' && account.status !== 'inactive'
+  const isOwnerAccount = account.roles.includes('school.owner')
   const suspended = account.status === 'inactive'
   const toggle = () => {
     setActive.mutate({ userId: account.id, active: suspended }, {
@@ -161,16 +163,22 @@ function AccessCard({ email, name }: { email: string | undefined; name: string }
     <Card>
       <CardHead title="App access" icon="key" />
       <div className="row ai-center jc-between" style={{ marginTop: 8 }}>
-        <Badge tone={suspended ? 'danger' : 'success'}>{suspended ? 'Suspended' : 'Active'}</Badge>
-        <Btn
-          variant="secondary"
-          size="sm"
-          icon={suspended ? 'checkCircle' : 'lock'}
-          onClick={toggle}
-          disabled={setActive.isPending}
-        >
-          {setActive.isPending ? 'Saving…' : suspended ? 'Unsuspend' : 'Suspend'}
-        </Btn>
+        {pending ? (
+          <Badge tone="neutral">{account.status}</Badge>
+        ) : (
+          <Badge tone={suspended ? 'danger' : 'success'}>{suspended ? 'Suspended' : 'Active'}</Badge>
+        )}
+        {!pending && !isOwnerAccount && (
+          <Btn
+            variant="secondary"
+            size="sm"
+            icon={suspended ? 'checkCircle' : 'lock'}
+            onClick={toggle}
+            disabled={setActive.isPending}
+          >
+            {setActive.isPending ? 'Saving…' : suspended ? 'Unsuspend' : 'Suspend'}
+          </Btn>
+        )}
       </div>
     </Card>
   )

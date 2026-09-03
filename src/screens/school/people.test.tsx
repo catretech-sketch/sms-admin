@@ -144,4 +144,19 @@ describe('Teacher profile — App access card', () => {
     await openTeacherProfile()
     expect(screen.queryByText('App access')).not.toBeInTheDocument()
   })
+
+  it('does not offer Suspend for a pending invite', async () => {
+    stubFetch('school.admin', [{ id: 'U1', email: TEACHER.email, status: 'pending', roles: ['school.teacher'] }])
+    renderTeachers()
+    await openTeacherProfile()
+    expect(within(accessCard()).getByText('pending')).toBeInTheDocument()
+    expect(within(accessCard()).queryByText('Suspend')).not.toBeInTheDocument()
+  })
+
+  it('shows the Access card for a principal viewer too', async () => {
+    stubFetch('school.principal', [{ id: 'U1', email: TEACHER.email, status: 'active', roles: ['school.teacher'] }])
+    renderTeachers()
+    await openTeacherProfile()
+    expect(within(accessCard()).getByText('Suspend')).toBeInTheDocument()
+  })
 })
