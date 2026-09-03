@@ -440,17 +440,20 @@ function BusEditModal({
   const [busNo, setBusNo] = useState('')
   const [routeId, setRouteId] = useState('')
   const [driverStaffId, setDriverStaffId] = useState('')
+  const [capacity, setCapacity] = useState('')
 
   useEffect(() => {
     if (!open) return
     setBusNo(bus?.busNo ?? '')
     setRouteId(bus?.routeId ?? '')
     setDriverStaffId(bus?.driverStaffId ?? '')
+    setCapacity(bus?.capacity != null ? String(bus.capacity) : '')
   }, [open, bus])
 
   async function save() {
     const trimmed = busNo.trim()
     if (!trimmed) { toast.danger('Bus number is required'); return }
+    const capNum = capacity.trim() ? Number(capacity) : null
     try {
       if (isEdit) {
         await update.mutateAsync({
@@ -459,6 +462,8 @@ function BusEditModal({
           routeId: routeId || null,
           driverStaffId: driverStaffId || null,
           clearDriver: !driverStaffId,
+          capacity: capNum,
+          clearCapacity: capNum == null,
         })
         toast.success('Bus updated')
       } else {
@@ -466,6 +471,7 @@ function BusEditModal({
           busNo: trimmed,
           routeId: routeId || null,
           driverStaffId: driverStaffId || null,
+          capacity: capNum,
         })
         toast.success('Bus added')
       }
@@ -510,6 +516,9 @@ function BusEditModal({
         <Field label="Driver (staff)" hint={driversQ.isError ? 'Could not load staff list' : 'Pick any staff member; transport drivers are usually category Transport'}>
           <Select value={driverStaffId} onChange={(e) => setDriverStaffId(e.target.value)} options={driverSelectOptions} disabled={driversQ.isLoading} />
         </Field>
+        <Field label="Capacity" hint="Optional — leave blank for unlimited seats">
+          <Input type="number" min={1} value={capacity} onChange={(e) => setCapacity(e.target.value)} placeholder="e.g. 40" />
+        </Field>
       </div>
     </Modal>
   )
@@ -548,7 +557,7 @@ function TransportBusesBody() {
           <table className="sm-table">
             <thead>
               <tr>
-                <th>Bus</th><th>Route</th><th>Driver</th><th>Stops</th><th>Students</th><th />
+                <th>Bus</th><th>Route</th><th>Driver</th><th>Stops</th><th>Students</th><th>Capacity</th><th />
               </tr>
             </thead>
             <tbody>
@@ -559,6 +568,7 @@ function TransportBusesBody() {
                   <td>{b.driver ?? '—'}{b.driverPhone ? ` · ${b.driverPhone}` : ''}</td>
                   <td>{b.stopCount}</td>
                   <td>{b.studentsAssigned}</td>
+                  <td>{b.studentsAssigned} / {b.capacity ?? '∞'}</td>
                   <td><IconBtn icon="edit" title="Edit" onClick={() => setEditBus(b)} /></td>
                 </tr>
               ))}
