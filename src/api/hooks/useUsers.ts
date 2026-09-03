@@ -31,3 +31,14 @@ export function useLeadershipRoleByEmail(): Map<string, string> {
     return map
   }, [data])
 }
+
+/** Find the linked login account (if any) for a person by email — used to show and
+ *  toggle app access (Suspend/Unsuspend) from a Teacher/Staff profile drawer. */
+export function useSchoolUserByEmail(email: string | undefined): SchoolUserDto | undefined {
+  const { data } = useSchoolUsers()
+  const needle = email?.trim().toLowerCase()
+  return useMemo(() => {
+    if (!needle) return undefined
+    return (data ?? []).find((u) => u.email?.trim().toLowerCase() === needle)
+  }, [data, needle])
+}
