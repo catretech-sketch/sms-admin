@@ -160,6 +160,7 @@ function PaymentModal({ invoice, cur, schoolName, schoolCity, studentAdm, logoUr
   const [chequeBank, setChequeBank] = useState('')
   const [chequeDate, setChequeDate] = useState('')
   const [upiVpa, setUpiVpa] = useState('')
+  const idempotencyKeyRef = useRef(crypto.randomUUID())
 
   const feeTypeOptions = useMemo(
     () => [
@@ -203,6 +204,7 @@ function PaymentModal({ invoice, cur, schoolName, schoolCity, studentAdm, logoUr
       amount: n, mode,
       ref: paymentRef,
       date: localDateIso(),
+      idempotencyKey: idempotencyKeyRef.current,
       ...(mode === 'Cheque' ? { cheque: { number: chequeNumber.trim(), bank: chequeBank.trim() || undefined, date: chequeDate || undefined } } : {}),
     }
     payInvoice.mutate({ invoiceId: invoice.id, payment }, {
@@ -320,6 +322,7 @@ function WaiverModal({ invoice, cur, onClose }: { invoice: FeeInvoice; cur: stri
   const payInvoice = usePayInvoice()
   const [amount, setAmount] = useState(String(invoice.due))
   const [reason, setReason] = useState('Financial hardship')
+  const idempotencyKeyRef = useRef(crypto.randomUUID())
 
   const submit = () => {
     const n = Number(amount)
@@ -328,6 +331,7 @@ function WaiverModal({ invoice, cur, onClose }: { invoice: FeeInvoice; cur: stri
       id: Date.now(), invoiceId: invoice.id, studentId: invoice.studentId, studentName: invoice.studentName, cls: invoice.cls,
       amount: n, mode: 'Adjustment / waiver', ref: '', note: reason,
       date: localDateIso(),
+      idempotencyKey: idempotencyKeyRef.current,
     }
     payInvoice.mutate({ invoiceId: invoice.id, payment }, {
       onSuccess: () => { toast.success('Waiver approved', `${fmtMoney(n, cur)} waived for ${invoice.studentName} · ${reason}.`); onClose() },

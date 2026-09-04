@@ -214,6 +214,45 @@ describe('Fee collection tab', () => {
     })
   })
 
+  it('sends a stable idempotency_key on payment submission', async () => {
+    const { container } = renderScreen()
+    await waitFor(() => {
+      expect(within(container).getByText('Asha Verma')).toBeInTheDocument()
+    })
+    fireEvent.click(within(container).getAllByText('Record')[0])
+    const dialog = within(container).getByRole('dialog')
+    await waitFor(() => { expect(within(dialog).getByDisplayValue('Academic')).toBeInTheDocument() })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Record payment' }))
+
+    const fetchMock = vi.mocked(fetch)
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(([url, opts]) => opts?.method === 'POST' && String(url).includes('/fees/invoices/inv-1/pay'))
+      expect(postCall).toBeDefined()
+      const body = JSON.parse((postCall?.[1] as RequestInit).body as string)
+      expect(typeof body.idempotency_key).toBe('string')
+      expect(body.idempotency_key.length).toBeGreaterThan(0)
+    })
+  })
+
+  it('approves a waiver with a stable idempotency_key', async () => {
+    const { container } = renderScreen({ asRole: 'principal' })
+    await waitFor(() => {
+      expect(within(container).getAllByText('Waiver').length).toBeGreaterThan(0)
+    })
+    fireEvent.click(within(container).getAllByText('Waiver')[0])
+    const dialog = within(container).getByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve waiver' }))
+
+    const fetchMock = vi.mocked(fetch)
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(([url, opts]) => opts?.method === 'POST' && String(url).includes('/fees/invoices/inv-1/pay'))
+      expect(postCall).toBeDefined()
+      const body = JSON.parse((postCall?.[1] as RequestInit).body as string)
+      expect(typeof body.idempotency_key).toBe('string')
+      expect(body.idempotency_key.length).toBeGreaterThan(0)
+    })
+  })
+
   it('shows cheque fields only when payment mode is Cheque', async () => {
     const { container } = renderScreen()
     await waitFor(() => {

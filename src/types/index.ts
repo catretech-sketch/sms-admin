@@ -89,6 +89,7 @@ export interface FeePayment {
   collectedBy?: string
   cheque?: FeeCheque
   gateway?: FeeGateway
+  idempotencyKey?: string
 }
 
 export interface FeeReportSummary {
