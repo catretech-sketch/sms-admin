@@ -24,6 +24,9 @@ let feeInvoices: Record<string, unknown>[] = []
 let feePayments: Record<string, unknown>[] = []
 let schoolIntegrations: Record<string, unknown> = {}
 let razorpayOrderWire: Record<string, unknown> = { order_id: 'order_abc', amount: 36000, currency: 'INR', key_id: 'rzp_test_1' }
+let failNextPay = false
+
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 const wireSummary = {
   collected_today: 12000,
@@ -81,6 +84,7 @@ beforeEach(() => {
     razorpay: { enabled: false, key_id: '', mode: 'test', status: 'not_configured' },
   }
   razorpayOrderWire = { order_id: 'order_abc', amount: 36000, currency: 'INR', key_id: 'rzp_test_1' }
+  failNextPay = false
 
   vi.stubGlobal('fetch', vi.fn((url: string, opts?: RequestInit) => {
     const u = String(url)
@@ -122,6 +126,10 @@ beforeEach(() => {
 
     if (u.includes('/pay') && method === 'POST') {
       const body = JSON.parse((opts?.body as string) ?? '{}')
+      if (failNextPay) {
+        failNextPay = false
+        return new Response(JSON.stringify({ error: { message: 'Server error' } }), { status: 500, headers: { 'Content-Type': 'application/json' } })
+      }
       return jsonOk({ data: { id: Date.now(), student_id: body.student_id, student_name: body.student_name, cls: body.cls, head_id: body.head_id, amount: body.amount, mode: body.mode, ref: body.ref ?? '', date: '01 Jan 2026' } })
     }
 
@@ -229,9 +237,36 @@ describe('Fee collection tab', () => {
       const postCall = fetchMock.mock.calls.find(([url, opts]) => opts?.method === 'POST' && String(url).includes('/fees/invoices/inv-1/pay'))
       expect(postCall).toBeDefined()
       const body = JSON.parse((postCall?.[1] as RequestInit).body as string)
-      expect(typeof body.idempotency_key).toBe('string')
-      expect(body.idempotency_key.length).toBeGreaterThan(0)
+      expect(body.idempotency_key).toMatch(GUID_RE)
     })
+  })
+
+  it('sends the same idempotency_key when a payment submission is retried after a failure', async () => {
+    failNextPay = true
+    const { container } = renderScreen()
+    await waitFor(() => {
+      expect(within(container).getByText('Asha Verma')).toBeInTheDocument()
+    })
+    fireEvent.click(within(container).getAllByText('Record')[0])
+    const dialog = within(container).getByRole('dialog')
+    await waitFor(() => { expect(within(dialog).getByDisplayValue('Academic')).toBeInTheDocument() })
+
+    const fetchMock = vi.mocked(fetch)
+    const payCalls = () => fetchMock.mock.calls.filter(([url, opts]) => opts?.method === 'POST' && String(url).includes('/fees/invoices/inv-1/pay'))
+
+    // First submit fails (server error); the modal stays open so the user can retry.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Record payment' }))
+    await waitFor(() => { expect(payCalls().length).toBe(1) })
+
+    // Retry within the same modal instance — the idempotency key must not be regenerated.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Record payment' }))
+    await waitFor(() => { expect(payCalls().length).toBe(2) })
+
+    const [firstCall, secondCall] = payCalls()
+    const firstBody = JSON.parse((firstCall[1] as RequestInit).body as string)
+    const secondBody = JSON.parse((secondCall[1] as RequestInit).body as string)
+    expect(firstBody.idempotency_key).toMatch(GUID_RE)
+    expect(secondBody.idempotency_key).toBe(firstBody.idempotency_key)
   })
 
   it('approves a waiver with a stable idempotency_key', async () => {
@@ -248,8 +283,7 @@ describe('Fee collection tab', () => {
       const postCall = fetchMock.mock.calls.find(([url, opts]) => opts?.method === 'POST' && String(url).includes('/fees/invoices/inv-1/pay'))
       expect(postCall).toBeDefined()
       const body = JSON.parse((postCall?.[1] as RequestInit).body as string)
-      expect(typeof body.idempotency_key).toBe('string')
-      expect(body.idempotency_key.length).toBeGreaterThan(0)
+      expect(body.idempotency_key).toMatch(GUID_RE)
     })
   })
 

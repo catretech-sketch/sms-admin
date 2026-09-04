@@ -27,6 +27,7 @@ import { downloadFeeReceipt, type FeeReceiptData } from '@/lib/feeReceipt'
 import { getStudent } from '@/api/students'
 import { studentPhotoUrl } from '@/api/studentExtras'
 import { can } from '@/lib/gating'
+import { newIdempotencyKey } from '@/lib/idempotencyKey'
 import {
   PageHead, Card, CardHead, Kpi, Btn, Badge, Avatar, Search, Select, Field, Input,
   Modal, Tabs, Icon, Empty, Bars, DataTable, Checkbox, type Column, type BadgeTone,
@@ -160,7 +161,8 @@ function PaymentModal({ invoice, cur, schoolName, schoolCity, studentAdm, logoUr
   const [chequeBank, setChequeBank] = useState('')
   const [chequeDate, setChequeDate] = useState('')
   const [upiVpa, setUpiVpa] = useState('')
-  const idempotencyKeyRef = useRef(crypto.randomUUID())
+  const idempotencyKeyRef = useRef<string | undefined>(undefined)
+  if (!idempotencyKeyRef.current) idempotencyKeyRef.current = newIdempotencyKey()
 
   const feeTypeOptions = useMemo(
     () => [
@@ -322,7 +324,8 @@ function WaiverModal({ invoice, cur, onClose }: { invoice: FeeInvoice; cur: stri
   const payInvoice = usePayInvoice()
   const [amount, setAmount] = useState(String(invoice.due))
   const [reason, setReason] = useState('Financial hardship')
-  const idempotencyKeyRef = useRef(crypto.randomUUID())
+  const idempotencyKeyRef = useRef<string | undefined>(undefined)
+  if (!idempotencyKeyRef.current) idempotencyKeyRef.current = newIdempotencyKey()
 
   const submit = () => {
     const n = Number(amount)
