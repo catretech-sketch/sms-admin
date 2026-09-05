@@ -38,6 +38,15 @@ export interface ReportSpec {
   chartMoney?: boolean
   /** Chart style — horizontal bars (default) or a donut/pie. */
   chartKind?: 'bar' | 'pie'
+  /** Optional per-cell background + text color (e.g. status letters), keyed [rowIndex][colIndex].
+   *  Omit (or leave a cell undefined) for the default styling — other reports are unaffected. */
+  cellColor?: (CellColor | undefined)[][]
+}
+
+/** A pastel background + matching dark text, e.g. green for "present", red for "absent". */
+export interface CellColor {
+  bg: string
+  text: string
 }
 
 function csvCell(v: string | number): string {
@@ -163,8 +172,12 @@ export function buildReportHtml(spec: ReportSpec, meta: ReportMeta, opts: { auto
   const body = spec.rows.length === 0
     ? `<tr><td class="empty" colspan="${spec.columns.length}">No records for this period.</td></tr>`
     : spec.rows
-      .map((r) => `<tr>${r
-        .map((v, i) => `<td class="${spec.align?.[i] === 'r' || spec.money?.[i] ? 'r' : ''}">${pdfCell(spec, i, v, meta.currency)}</td>`)
+      .map((r, ri) => `<tr>${r
+        .map((v, i) => {
+          const cc = spec.cellColor?.[ri]?.[i]
+          const style = cc ? ` style="background:${esc(cc.bg)};color:${esc(cc.text)};font-weight:700"` : ''
+          return `<td class="${spec.align?.[i] === 'r' || spec.money?.[i] ? 'r' : ''}"${style}>${pdfCell(spec, i, v, meta.currency)}</td>`
+        })
         .join('')}</tr>`)
       .join('')
 

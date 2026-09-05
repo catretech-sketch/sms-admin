@@ -2,6 +2,7 @@
 import { request } from './client'
 import { snakeToCamel } from './mapper'
 import { attendanceCalendarDate, type AttendanceRecord, type AttendanceStatus } from './attendance'
+import type { TrendPoint } from '@/lib/attendanceTrend'
 
 export type PeriodAttendanceAdvancedFilters = {
   preset?: string
@@ -250,6 +251,101 @@ export function classWiseDayHero(input: {
   return { present: 0, marked: 0, absent: 0, pct: null }
 }
 
+export type ClassStudentAttendanceTier = 'excellent' | 'good' | 'watch' | 'critical'
+
+/** `subject` is whatever was recorded on the mark at the time (a later timetable edit never
+ *  retroactively changes it — the backend stores it as a column, not a live timetable join).
+ *  `date`/`period` are included so a caller can additionally resolve the *current* published
+ *  timetable's subject for this slot, if that's what the UI wants to show instead/alongside. */
+export type ClassStudentRecentPeriod = {
+  status: AttendanceStatus
+  subject: string
+  date: string
+  period: number
+}
+
+export type ClassStudentSummaryRow = {
+  studentId: string
+  studentName: string
+  present: number
+  absent: number
+  late: number
+  attendancePercentage: number | null
+  /** Chronological, most recent last, capped to CLASS_STUDENT_RECENT_PERIODS. */
+  recentPeriods: ClassStudentRecentPeriod[]
+  tier: ClassStudentAttendanceTier
+}
+
+const CLASS_STUDENT_RECENT_PERIODS = 6
+
+function classStudentTier(pct: number | null): ClassStudentAttendanceTier {
+  if (pct == null) return 'critical'
+  if (pct >= 98) return 'excellent'
+  if (pct >= 85) return 'good'
+  if (pct >= 75) return 'watch'
+  return 'critical'
+}
+
+/** Per-student present/absent/late counts + recent period-status sequence, for the Advanced tab's Class subview table. */
+export function buildClassStudentSummaries(rows: PeriodAttendanceAdvancedRow[]): ClassStudentSummaryRow[] {
+  const byStudent = new Map<string, { name: string; marks: { date: string; period: number; status: AttendanceStatus; subject: string }[] }>()
+  for (const r of rows) {
+    const status = asPeriodAttendanceStatus(r.status)
+    if (!status || !r.studentId) continue
+    const cur = byStudent.get(r.studentId) ?? { name: r.studentName, marks: [] }
+    cur.marks.push({ date: r.date, period: r.period, status, subject: r.subject })
+    byStudent.set(r.studentId, cur)
+  }
+
+  const out: ClassStudentSummaryRow[] = []
+  for (const [studentId, { name, marks }] of byStudent) {
+    marks.sort((a, b) => a.date.localeCompare(b.date) || a.period - b.period)
+    let present = 0
+    let absent = 0
+    let late = 0
+    for (const m of marks) {
+      if (m.status === 'absent') absent += 1
+      else if (m.status === 'late') late += 1
+      else present += 1 /* present + half_day both count as attended */
+    }
+    const total = marks.length
+    const pct = total > 0 ? Math.round((present / total) * 100) : null
+    out.push({
+      studentId,
+      studentName: name,
+      present,
+      absent,
+      late,
+      attendancePercentage: pct,
+      recentPeriods: marks.slice(-CLASS_STUDENT_RECENT_PERIODS)
+        .map((m) => ({ status: m.status, subject: m.subject, date: m.date, period: m.period })),
+      tier: classStudentTier(pct),
+    })
+  }
+  return out.sort((a, b) => a.studentName.localeCompare(b.studentName))
+}
+
+/** Day-by-day attendance % for a class, derived from the same raw rows as buildClassStudentSummaries (no extra fetch). */
+export function buildClassDailyTrend(rows: PeriodAttendanceAdvancedRow[]): TrendPoint[] {
+  const byDay = new Map<string, { present: number; total: number }>()
+  for (const r of rows) {
+    const status = asPeriodAttendanceStatus(r.status)
+    if (!status) continue
+    const day = attendanceCalendarDate(r.date)
+    const cur = byDay.get(day) ?? { present: 0, total: 0 }
+    cur.total += 1
+    if (status !== 'absent') cur.present += 1
+    byDay.set(day, cur)
+  }
+  return [...byDay.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([day, c]) => ({
+      label: String(new Date(`${day}T00:00:00`).getDate()),
+      value: c.total > 0 ? Math.round((c.present / c.total) * 100) : 0,
+      empty: c.total === 0,
+    }))
+}
+
 /** Copy for the class-wise day hero — never treat an in-flight request as unmarked. */
 export function classWiseHeroDisplay(input: {
   loading: boolean
@@ -290,6 +386,26 @@ export type AdvSubjectSummaryRow = {
   absent: number
   late: number
   attendancePercentage: number | null
+}
+
+/** Collapse per-(subject, teacher) rows into one row per subject (e.g. a subject taught by multiple teachers). */
+export function mergeSubjectSummariesBySubject(rows: AdvSubjectSummaryRow[]): AdvSubjectSummaryRow[] {
+  const byName = new Map<string, AdvSubjectSummaryRow>()
+  for (const r of rows) {
+    const cur = byName.get(r.subject)
+    if (!cur) {
+      byName.set(r.subject, { ...r, teacherName: null })
+      continue
+    }
+    cur.periods += r.periods
+    cur.marked += r.marked
+    cur.pending += r.pending
+    cur.present += r.present
+    cur.absent += r.absent
+    cur.late += r.late
+    cur.attendancePercentage = cur.marked > 0 ? Math.round(((cur.present + cur.late) / cur.marked) * 100) : null
+  }
+  return [...byName.values()]
 }
 
 export type AdvTeacherSummaryRow = {

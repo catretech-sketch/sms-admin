@@ -63,7 +63,10 @@ const ICONS: Record<string, string> = {
   menu: 'M3 12h18M3 6h18M3 18h18',
   layers: 'M12 2 2 7l10 5 10-5zM2 17l10 5 10-5M2 12l10 5 10-5',
   beaker: 'M9 2v6L4 18a2 2 0 0 0 1.8 3h12.4A2 2 0 0 0 20 18L15 8V2M8 2h8M7 14h10',
-  bot: 'M5 6l7-2.5 7 2.5-7 2.5zM12 3.5v2M6 9h12a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zM8.5 14a1 1 0 0 1 2 0M13.5 14a1 1 0 0 1 2 0M9 17q3 2 6 0',
+  /* Friendly chat-bot face — rounded head, antenna, dot eyes, small smile.
+     No mortarboard shape: an earlier version drew one above the head and it
+     read as an "AI teacher" mascot instead of a generic assistant. */
+  bot: 'M6 10h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2zM12 10V7M12 5h.01M4 12v3M20 12v3M9.5 14.5h.01M14.5 14.5h.01M9 18q3 1.5 6 0',
 }
 
 // convenience aliases used across the app

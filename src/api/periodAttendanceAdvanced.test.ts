@@ -12,7 +12,11 @@ import {
   periodCountsByClass,
   classWiseDayHero,
   classWiseHeroDisplay,
+  buildClassStudentSummaries,
+  buildClassDailyTrend,
+  mergeSubjectSummariesBySubject,
   type PeriodAttendanceAdvancedRow,
+  type AdvSubjectSummaryRow,
 } from './periodAttendanceAdvanced'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -372,6 +376,146 @@ describe('period row SQL helpers', () => {
     const local = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
     const m = periodCountsByClass([{ ...base, date: instant, status: 'present' }], local)
     expect(m.get('c1')).toEqual({ present: 1, absent: 0, total: 1 })
+  })
+})
+
+describe('buildClassStudentSummaries', () => {
+  const base: PeriodAttendanceAdvancedRow = {
+    id: 'p1', classId: 'c1', grade: 'IV', section: 'B', classLabel: 'IV-B',
+    studentId: 's1', studentName: 'Asha', admissionNo: '1', date: '2026-08-01',
+    period: 1, subject: 'Math', status: 'present', geoFenceStatus: 'not_required',
+  }
+
+  it('aggregates present/absent/late counts and percentage per student', () => {
+    const rows = buildClassStudentSummaries([
+      { ...base, period: 1, date: '2026-08-01', status: 'present' },
+      { ...base, id: 'p2', period: 2, date: '2026-08-01', status: 'absent' },
+      { ...base, id: 'p3', period: 1, date: '2026-08-02', status: 'late' },
+      { ...base, id: 'p4', studentId: 's2', studentName: 'Ben', period: 1, date: '2026-08-01', status: 'present' },
+    ])
+    expect(rows).toHaveLength(2)
+    const asha = rows.find((r) => r.studentId === 's1')!
+    expect(asha).toMatchObject({ present: 1, absent: 1, late: 1, attendancePercentage: 33 })
+    const ben = rows.find((r) => r.studentId === 's2')!
+    expect(ben).toMatchObject({ present: 1, absent: 0, late: 0, attendancePercentage: 100, tier: 'excellent' })
+  })
+
+  it('counts half_day as attended and ignores unrecognized statuses', () => {
+    const rows = buildClassStudentSummaries([
+      { ...base, period: 1, status: 'half_day' },
+      { ...base, id: 'p2', period: 2, status: 'unknown' },
+    ])
+    expect(rows).toEqual([expect.objectContaining({ present: 1, absent: 0, late: 0, attendancePercentage: 100 })])
+  })
+
+  it('buckets attendance tiers matching Excellent/Good/Watch/Critical thresholds', () => {
+    const rowsFor = (presentCount: number, total: number) => buildClassStudentSummaries(
+      Array.from({ length: total }, (_, i) => ({
+        ...base, id: `p${i}`, period: i + 1, status: i < presentCount ? 'present' : 'absent',
+      })),
+    )
+    expect(rowsFor(100, 100)[0].tier).toBe('excellent')
+    expect(rowsFor(90, 100)[0].tier).toBe('good')
+    expect(rowsFor(80, 100)[0].tier).toBe('watch')
+    expect(rowsFor(60, 100)[0].tier).toBe('critical')
+  })
+
+  it('returns at most the 6 most recent periods (status + subject), in chronological order', () => {
+    const rows = buildClassStudentSummaries(
+      Array.from({ length: 8 }, (_, i) => ({
+        ...base, id: `p${i}`, period: 1, date: `2026-08-0${i + 1}`, status: 'present',
+      })).map((r, i) => (i === 7 ? { ...r, status: 'absent', subject: 'Science' } : r)),
+    )
+    expect(rows[0].recentPeriods).toHaveLength(6)
+    // most recent (8th day) mark is last
+    expect(rows[0].recentPeriods[5]).toEqual({ status: 'absent', subject: 'Science', date: '2026-08-08', period: 1 })
+  })
+
+  it('carries the subject, date, and period through each recent period', () => {
+    const rows = buildClassStudentSummaries([
+      { ...base, period: 1, date: '2026-08-01', subject: 'Math', status: 'present' },
+      { ...base, id: 'p2', period: 2, date: '2026-08-01', subject: 'English', status: 'absent' },
+    ])
+    expect(rows[0].recentPeriods).toEqual([
+      { status: 'present', subject: 'Math', date: '2026-08-01', period: 1 },
+      { status: 'absent', subject: 'English', date: '2026-08-01', period: 2 },
+    ])
+  })
+
+  it('sorts students alphabetically by name', () => {
+    const rows = buildClassStudentSummaries([
+      { ...base, studentId: 's2', studentName: 'Zara', period: 1, status: 'present' },
+      { ...base, studentId: 's1', studentName: 'Asha', period: 1, status: 'present' },
+    ])
+    expect(rows.map((r) => r.studentName)).toEqual(['Asha', 'Zara'])
+  })
+})
+
+describe('buildClassDailyTrend', () => {
+  const base: PeriodAttendanceAdvancedRow = {
+    id: 'p1', classId: 'c1', grade: 'IV', section: 'B', classLabel: 'IV-B',
+    studentId: 's1', studentName: 'Asha', admissionNo: '1', date: '2026-08-01',
+    period: 1, subject: 'Math', status: 'present', geoFenceStatus: 'not_required',
+  }
+
+  it('buckets rows by calendar day and computes % (present-or-later counts as attended)', () => {
+    const trend = buildClassDailyTrend([
+      { ...base, period: 1, date: '2026-08-01', status: 'present' },
+      { ...base, id: 'p2', period: 2, date: '2026-08-01', status: 'absent' },
+      { ...base, id: 'p3', period: 1, date: '2026-08-02', status: 'late' },
+    ])
+    expect(trend).toEqual([
+      { label: '1', value: 50, empty: false },
+      { label: '2', value: 100, empty: false },
+    ])
+  })
+
+  it('sorts days chronologically and ignores unrecognized statuses', () => {
+    const trend = buildClassDailyTrend([
+      { ...base, id: 'p1', date: '2026-08-05', status: 'present' },
+      { ...base, id: 'p2', date: '2026-08-01', status: 'present' },
+      { ...base, id: 'p3', date: '2026-08-03', status: 'unknown' },
+    ])
+    expect(trend.map((t) => t.label)).toEqual(['1', '5'])
+  })
+
+  it('returns an empty array when there are no rows', () => {
+    expect(buildClassDailyTrend([])).toEqual([])
+  })
+})
+
+describe('mergeSubjectSummariesBySubject', () => {
+  const base: AdvSubjectSummaryRow = {
+    subject: 'Mathematics', teacherName: 'Meera Krishnan', periods: 10, marked: 10,
+    pending: 0, present: 9, absent: 1, late: 0, attendancePercentage: 90,
+  }
+
+  it('collapses multiple per-teacher rows for the same subject into one, recomputing the percentage', () => {
+    const merged = mergeSubjectSummariesBySubject([
+      { ...base, teacherName: 'Meera Krishnan', periods: 10, marked: 10, present: 9, absent: 1, late: 0 },
+      { ...base, teacherName: 'Ravi Rao', periods: 10, marked: 10, present: 5, absent: 5, late: 0 },
+    ])
+    expect(merged).toHaveLength(1)
+    expect(merged[0]).toMatchObject({
+      subject: 'Mathematics', teacherName: null, periods: 20, marked: 20,
+      present: 14, absent: 6, late: 0, attendancePercentage: 70,
+    })
+  })
+
+  it('leaves distinct subjects as separate rows', () => {
+    const merged = mergeSubjectSummariesBySubject([
+      { ...base, subject: 'Mathematics' },
+      { ...base, subject: 'Science' },
+    ])
+    expect(merged.map((r) => r.subject).sort()).toEqual(['Mathematics', 'Science'])
+  })
+
+  it('counts late marks as attended when recomputing the merged percentage', () => {
+    const merged = mergeSubjectSummariesBySubject([
+      { ...base, present: 5, late: 5, absent: 0, marked: 10 },
+      { ...base, present: 0, late: 0, absent: 10, marked: 10 },
+    ])
+    expect(merged[0]).toMatchObject({ marked: 20, attendancePercentage: 50 })
   })
 })
 

@@ -182,6 +182,7 @@ function OwnerDashboard() {
       <div className="sm-grid-2">
         <Card>
           <CardHead title="School revenue by school" sub="Student fees collected this period" icon="trend"
+            iconBg="var(--success-bg)" iconColor="var(--success)"
             action={<Btn size="sm" onClick={() => app.go('owner.revenue')}>Details</Btn>} />
           <div style={{ marginTop: 12 }}>
             {feeQ.isLoading ? (
@@ -196,6 +197,7 @@ function OwnerDashboard() {
 
         <Card>
           <CardHead title="Fee collected share" sub="Pie by school (cash this period)" icon="layers"
+            iconBg="var(--platinum-bg)" iconColor="var(--platinum)"
             action={<Btn size="sm" onClick={() => app.go('owner.revenue')}>Fee collection</Btn>} />
           <div className="row ai-center jc-between gap16 wrap" style={{ marginTop: 12 }}>
             {feeQ.isLoading ? (
@@ -226,6 +228,7 @@ function OwnerDashboard() {
       <div className="sm-grid-2">
         <Card>
           <CardHead title="Outstanding by school" sub="Open student fee invoices" icon="alert"
+            iconBg="var(--warning-bg)" iconColor="var(--warning)"
             action={<Btn size="sm" onClick={() => app.go('owner.revenue')}>Fee collection</Btn>} />
           <div style={{ marginTop: 12 }}>
             {feeQ.isLoading ? (
@@ -239,7 +242,9 @@ function OwnerDashboard() {
         </Card>
 
         <Card>
-          <CardHead title="Attention needed" sub="Low school fee collection" icon="alert" action={<Badge tone="warning">{alerts.length}</Badge>} />
+          <CardHead title="Attention needed" sub="Low school fee collection" icon="alert"
+            iconBg="var(--danger-bg)" iconColor="var(--danger)"
+            action={<Badge tone="warning">{alerts.length}</Badge>} />
           {alerts.length === 0 ? (
             <Empty icon="checkCircle" title="All healthy" body="No schools need fee-collection attention right now." />
           ) : (

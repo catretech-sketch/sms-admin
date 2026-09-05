@@ -6,7 +6,7 @@
 .sm-login-brand {
   position: relative; overflow: hidden; color: #fff; padding: 56px;
   display: flex; flex-direction: column; justify-content: space-between;
-  background: linear-gradient(150deg, var(--brand-600), var(--brand-800) 60%, #1e1b4b);
+  background: linear-gradient(150deg, var(--brand-600), var(--brand-800) 60%, var(--brand-900));
 }
 .sm-login-brand::after {
   content: ''; position: absolute; right: -120px; top: -80px; width: 420px; height: 420px;

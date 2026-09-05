@@ -25,7 +25,13 @@ function jsonResponse(body: unknown, status = 200): Response {
 beforeEach(() => {
   localStorage.clear()
   vi.restoreAllMocks()
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: seed.map(toWire), next_cursor: null })))
+  // StudentsScreen fires several concurrent queries on mount (students, classes, exams,
+  // exam marks, exam papers). mockResolvedValue would hand every one of them the SAME
+  // Response instance, whose body can only be read once — every query after the first
+  // would fail with "body already read" and silently resolve to {} (readJson swallows
+  // that TypeError). Build a fresh Response per call instead.
+  vi.stubGlobal('fetch', vi.fn().mockImplementation(() =>
+    Promise.resolve(jsonResponse({ data: seed.map(toWire), next_cursor: null }))))
 })
 
 function renderScreen() {
@@ -51,8 +57,12 @@ describe('Students Toppers view', () => {
     renderScreen()
     fireEvent.click(screen.getByText('Toppers'))
     expect(await screen.findByText(/Exam toppers|Overall toppers|No live exam marks/i)).toBeInTheDocument()
-  })
+  }, 15000)
 
+  // Does two rounds of async waiting (Toppers tab, then Attendance toppers) — under CI/parallel
+  // test-run CPU contention this can miss the default 5s test timeout despite the app itself
+  // responding correctly (confirmed: passes reliably in isolation). Give it real headroom rather
+  // than let it flake, same as the heavier cases in studentAdd.test.tsx.
   it('switches the category to Attendance toppers', async () => {
     renderScreen()
     fireEvent.click(screen.getByText('Toppers'))
@@ -61,7 +71,7 @@ describe('Students Toppers view', () => {
     // Attendance toppers now rank on real day marks only. With no live marks in
     // the test env, the empty state shows; otherwise the leaderboard renders.
     expect((await screen.findAllByText(/Attendance %|Overall toppers|No live attendance/i)).length).toBeGreaterThan(0)
-  })
+  }, 15000)
 
   it('returns to the list when All students is reselected', async () => {
     renderScreen()
@@ -69,7 +79,7 @@ describe('Students Toppers view', () => {
     await screen.findByText(/Exam toppers|Overall toppers|No live exam marks/i)
     fireEvent.click(screen.getByText('All students'))
     expect(screen.getByPlaceholderText(/Search name/i)).toBeInTheDocument()
-  })
+  }, 15000)
 
   it('renders students from the live API, not the mock seed', async () => {
     const liveStudent = {
@@ -90,10 +100,9 @@ describe('Students Toppers view', () => {
       house: 'Red',
       avatar_hue: 200,
     }
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
-      jsonResponse({ data: [liveStudent], next_cursor: null })
-    ))
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() =>
+      Promise.resolve(jsonResponse({ data: [liveStudent], next_cursor: null }))))
     renderScreen()
     expect(await screen.findByText('ZZ Live-API Only')).toBeInTheDocument()
-  })
+  }, 15000)
 })

@@ -90,3 +90,28 @@ export function validatePassword(value: string | null | undefined): string | nul
   if (isBlank(value)) return null
   return (value as string).length >= 8 ? null : 'Password must be at least 8 characters'
 }
+
+/** Digits only, for comparing phone numbers written with different spacing/punctuation. */
+export function normalizePhoneDigits(value: string | null | undefined): string {
+  return (value ?? '').replace(/\D/g, '')
+}
+
+/** Trimmed + lowercased, for case-insensitive email comparison. */
+export function normalizeEmailKey(value: string | null | undefined): string {
+  return (value ?? '').trim().toLowerCase()
+}
+
+/** True when `value` (already the raw, un-normalized field value) matches another record's
+ *  `value` in `others` under `normalize` — e.g. the same phone number on a different student.
+ *  Blank input never counts as a duplicate (required-ness is enforced separately). Pass the
+ *  record's own id as `excludeId` when editing, so a record doesn't collide with itself. */
+export function isDuplicateValue(
+  value: string | null | undefined,
+  others: { id: string; value: string | null | undefined }[],
+  normalize: (v: string | null | undefined) => string,
+  excludeId?: string,
+): boolean {
+  const key = normalize(value)
+  if (!key) return false
+  return others.some((o) => o.id !== excludeId && normalize(o.value) === key)
+}

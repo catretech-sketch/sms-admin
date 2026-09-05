@@ -15,6 +15,7 @@ import type {
   PeriodAttendanceAdvancedRow,
 } from '@/api/periodAttendanceAdvanced'
 import { formatMarkedAt } from '@/lib/dateInput'
+import { ClassAttendanceOverview } from './classAttendanceOverview'
 
 const DEFAULT_FILTERS: PeriodAttendanceAdvancedFilters = {
   preset: 'today',
@@ -53,6 +54,14 @@ function pct(value: number | null): string {
 function today(): string {
   return new Date().toISOString().slice(0, 10)
 }
+
+function daysBack(from: string, days: number): string {
+  const d = new Date(`${from}T00:00:00`)
+  d.setDate(d.getDate() - days)
+  return d.toISOString().slice(0, 10)
+}
+
+const CLASS_STUDENT_LOOKBACK_DAYS = 30
 
 const STATUS_OPTIONS = [
   { value: '', label: 'All statuses' },
@@ -117,6 +126,7 @@ export function AttendanceAdvanced() {
   const [filters, setFilters] = useState<PeriodAttendanceAdvancedFilters>(DEFAULT_FILTERS)
   const [subview, setSubview] = useState<'records' | 'class' | 'subject' | 'teacher' | 'ranges'>('records')
   const [summaryClassId, setSummaryClassId] = useState('')
+  const [summaryGrade, setSummaryGrade] = useState('')
   const [summaryDate, setSummaryDate] = useState(today())
   const [summaryPreset, setSummaryPreset] = useState('last_30_days')
   const [rangeSubject, setRangeSubject] = useState('')
@@ -178,6 +188,19 @@ export function AttendanceAdvanced() {
   const updateGrade = (grade: string) => {
     setFilters((current) => ({ ...current, grade, classId: undefined, page: 1 }))
   }
+
+  /** Class/Subject/Ranges subviews share one Class(grade) → Section cascade, mirroring Records above. */
+  const updateSummaryGrade = (grade: string) => {
+    setSummaryGrade(grade)
+    setSummaryClassId('')
+  }
+  const summarySectionOptions = (placeholder: string) => [
+    { value: '', label: placeholder },
+    ...classes.filter((item) => !summaryGrade || item.grade === summaryGrade).map((item) => ({
+      value: item.id ?? '',
+      label: item.name || `${item.grade}-${item.section}`,
+    })),
+  ]
 
   const viewRecordsFor = (extra: Partial<PeriodAttendanceAdvancedFilters>) => {
     setFilters({ ...DEFAULT_FILTERS, preset: summaryPreset, ...extra })
@@ -409,13 +432,20 @@ export function AttendanceAdvanced() {
         <div className="sm-att-adv-panel">
           <div className="sm-att-adv-filters">
             <label className="sm-att-adv-field">
+              <span>Class</span>
+              <Select
+                aria-label="Class"
+                value={summaryGrade}
+                options={[{ value: '', label: 'All classes' }, ...grades.map((grade) => ({ value: grade, label: grade }))]}
+                onChange={(event) => updateSummaryGrade(event.target.value)}
+              />
+            </label>
+            <label className="sm-att-adv-field">
               <span>Section</span>
               <Select
                 aria-label="Class for summary"
                 value={summaryClassId}
-                options={[{ value: '', label: 'Choose a section…' }, ...classes.map((item) => ({
-                  value: item.id ?? '', label: item.name || `${item.grade}-${item.section}`,
-                }))]}
+                options={summarySectionOptions('Choose a section…')}
                 onChange={(event) => setSummaryClassId(event.target.value)}
               />
             </label>
@@ -453,7 +483,21 @@ export function AttendanceAdvanced() {
             </div>
           )}
           {summaryClassId && (
-            <Btn variant="secondary" size="sm" onClick={() => viewRecordsFor({ classId: summaryClassId, from: summaryDate, to: summaryDate, preset: 'custom' })}>
+            <div style={{ marginTop: 16 }}>
+              <ClassAttendanceOverview
+                classId={summaryClassId}
+                from={daysBack(summaryDate, CLASS_STUDENT_LOOKBACK_DAYS)}
+                to={summaryDate}
+                classLabel={classes.find((c) => c.id === summaryClassId)?.name}
+                onStudentClick={(r) => viewRecordsFor({
+                  classId: summaryClassId, q: r.studentName,
+                  from: daysBack(summaryDate, CLASS_STUDENT_LOOKBACK_DAYS), to: summaryDate, preset: 'custom',
+                })}
+              />
+            </div>
+          )}
+          {summaryClassId && (
+            <Btn variant="secondary" size="sm" style={{ marginTop: 12 }} onClick={() => viewRecordsFor({ classId: summaryClassId, from: summaryDate, to: summaryDate, preset: 'custom' })}>
               View records
             </Btn>
           )}
@@ -464,13 +508,20 @@ export function AttendanceAdvanced() {
         <div className="sm-att-adv-panel">
           <div className="sm-att-adv-filters">
             <label className="sm-att-adv-field">
+              <span>Class</span>
+              <Select
+                aria-label="Class"
+                value={summaryGrade}
+                options={[{ value: '', label: 'All classes' }, ...grades.map((grade) => ({ value: grade, label: grade }))]}
+                onChange={(event) => updateSummaryGrade(event.target.value)}
+              />
+            </label>
+            <label className="sm-att-adv-field">
               <span>Section</span>
               <Select
                 aria-label="Class for subject summary"
                 value={summaryClassId}
-                options={[{ value: '', label: 'Choose a section…' }, ...classes.map((item) => ({
-                  value: item.id ?? '', label: item.name || `${item.grade}-${item.section}`,
-                }))]}
+                options={summarySectionOptions('Choose a section…')}
                 onChange={(event) => setSummaryClassId(event.target.value)}
               />
             </label>
@@ -607,13 +658,20 @@ export function AttendanceAdvanced() {
               />
             </label>
             <label className="sm-att-adv-field">
+              <span>Class</span>
+              <Select
+                aria-label="Range class filter"
+                value={summaryGrade}
+                options={[{ value: '', label: 'All classes' }, ...grades.map((grade) => ({ value: grade, label: grade }))]}
+                onChange={(event) => updateSummaryGrade(event.target.value)}
+              />
+            </label>
+            <label className="sm-att-adv-field">
               <span>Section</span>
               <Select
                 aria-label="Range section filter"
                 value={summaryClassId}
-                options={[{ value: '', label: 'All sections' }, ...classes.map((item) => ({
-                  value: item.id ?? '', label: item.name || `${item.grade}-${item.section}`,
-                }))]}
+                options={summarySectionOptions('All sections')}
                 onChange={(event) => setSummaryClassId(event.target.value)}
               />
             </label>

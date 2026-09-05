@@ -46,6 +46,9 @@ export const queryKeys = {
     all: ['classes'] as const,
     subjects: (classId: string) => ['classes', 'subjects', classId] as const,
   },
+  timetable: {
+    all: () => ['timetable', tenantScope()] as const,
+  },
   subjects: {
     all: ['subjects'] as const,
   },
@@ -64,6 +67,8 @@ export const queryKeys = {
       ['attendance', 'advancedClassDaySummary', tenantScope(), classId, date] as const,
     subjectSummaries: (classId: string, filters: { preset?: string; from?: string; to?: string } = {}) =>
       ['attendance', 'advancedSubjectSummaries', tenantScope(), classId, filters] as const,
+    classStudents: (classId: string, filters: { from?: string; to?: string } = {}) =>
+      ['attendance', 'advancedClassStudents', tenantScope(), classId, filters] as const,
     teacherSummaries: (filters: { preset?: string; from?: string; to?: string } = {}) =>
       ['attendance', 'advancedTeacherSummaries', tenantScope(), filters] as const,
     rangeSummary: (filters: import('./periodAttendanceAdvanced').PeriodAttendanceRangeFilters = {}) =>

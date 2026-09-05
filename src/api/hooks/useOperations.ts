@@ -141,6 +141,23 @@ export function useEndBusTrip(): UseMutationResult<TripSummary, Error, { busId: 
   })
 }
 
+/** Merges a live-telemetry push into the cached fleet rows: only position/speed/status/next-stop
+ *  fields come from the push — route/driver/etc. assignment fields are left as cached, since the
+ *  socket only ever carries live GPS data and a stale push must never regress a freshly-saved edit. */
+export function mergeFleetTelemetry(old: FleetBus[] | undefined, incoming: FleetBus[]): FleetBus[] {
+  if (!old) return incoming
+  const prevById = new Map(old.map((b) => [b.busId, b]))
+  return incoming.map((r) => {
+    const prev = prevById.get(r.busId)
+    if (!prev) return r
+    return {
+      ...prev,
+      lat: r.lat, lng: r.lng, speedKmh: r.speedKmh, status: r.status,
+      nextStopName: r.nextStopName, lastPingAt: r.lastPingAt,
+    }
+  })
+}
+
 /**
  * SignalR subscription for live fleet updates (TransportFleetHub).
  * Writes incoming snapshots into the transportFleet query cache.
@@ -188,7 +205,7 @@ export function useFleetWebSocket(enabled = true): { connected: boolean } {
         const rows = Array.isArray(wire)
           ? wire.map((w) => snakeToCamel<FleetBus>(w as Record<string, unknown>))
           : []
-        qc.setQueryData(queryKeys.operations.transportFleet, rows)
+        qc.setQueryData<FleetBus[]>(queryKeys.operations.transportFleet, (old) => mergeFleetTelemetry(old, rows))
       })
 
       connection.onreconnected(() => setConnected(true))

@@ -29,6 +29,8 @@ export interface TxtOpts {
   type?: string
   /** Title-case person names / place names on blur (add + edit). */
   case?: 'name' | 'place'
+  /** Locks the field against typing — for an auto-generated value the user shouldn't edit. */
+  readOnly?: boolean
 }
 
 export function useFormKit(
@@ -48,7 +50,8 @@ export function useFormKit(
         value={opts.type === 'date' ? toDateInputValue(f[key]) : f[key]}
         placeholder={opts.ph}
         error={!!errors[key]}
-        onChange={(ev) => set(key, ev.target.value)}
+        readOnly={opts.readOnly}
+        onChange={opts.readOnly ? undefined : (ev) => set(key, ev.target.value)}
         onBlur={opts.case
           ? (ev) => {
             const raw = ev.target.value

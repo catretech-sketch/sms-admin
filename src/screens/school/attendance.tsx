@@ -10,20 +10,18 @@ import { useApp, useToast } from '@/lib/hooks'
 import { can, tierIncludes } from '@/lib/gating'
 import {
   PageHead, Card, CardHead, Btn, Badge, Avatar, Search, Select, Segmented, Input,
-  Icon, Empty, DataTable, type Column, type BadgeTone,
+  Icon, Empty, DataTable, Kpi, LineChart, type Column, type BadgeTone,
 } from '@/components/ui'
 import { RestrictedScreen } from '@/components/shell/gates'
 import { useStudents } from '@/api/hooks/useStudents'
 import { useTeachers } from '@/api/hooks/useTeachers'
 import { useStaff } from '@/api/hooks/useStaff'
 import { useStaffCheckIns } from '@/api/hooks/usePrincipalAttendance'
-import { usePeriodAttendanceRangeSummary } from '@/api/hooks/usePeriodAttendanceAdvanced'
-import { classWiseDayHero } from '@/api/periodAttendanceAdvanced'
-import { studentLiveAttendance } from '@/lib/studentLiveAttendance'
+import { usePeriodAttendanceRangeSummary, useDashboardAttendanceTrend } from '@/api/hooks/usePeriodAttendanceAdvanced'
+import { fmtNum } from '@/lib/format'
 import { resolvePeoplePhoto } from '@/api/peopleExtras'
 import {
   explicitPeopleStatus,
-  countPeoplePresent, PEOPLE_ATTENDANCE_CHANGED,
   fetchRemotePeopleAttendance, savePeopleAttendanceRemote,
           listPeopleAttendanceRange, collectPeopleMarksToSave, isPeopleHalfDay,
 } from '@/api/peopleAttendance'
@@ -39,8 +37,9 @@ import {
 import type { Teacher, Staff, Role } from '@/types'
 import { GeoFencePanel } from './geoFencePanel'
 import { AttendanceAdvanced } from './attendanceAdvanced'
+import { ClassAttendanceOverview } from './classAttendanceOverview'
 
-type Group = 'students' | 'teachers' | 'staff' | 'geo' | 'advanced'
+type Group = 'students' | 'teachers' | 'staff' | 'geo' | 'advanced' | 'classAttendance'
 type AttStatus = AttendanceStatus
 
 /** Owner / Admin / Principal / VP — full school roll (students + teachers + staff). */
@@ -58,12 +57,14 @@ const GROUP_OPTS_ALL_BASE = [
   { value: 'students', label: 'Students' },
   { value: 'teachers', label: 'Teachers' },
   { value: 'staff', label: 'Staff' },
+  { value: 'classAttendance', label: 'Class Attendance' },
   { value: 'advanced', label: 'Advanced' },
   { value: 'geo', label: 'Geo-fence' },
 ] as const
 
 const GROUP_OPTS_TEACHER = [
   { value: 'students', label: 'Students' },
+  { value: 'classAttendance', label: 'Class Attendance' },
   { value: 'advanced', label: 'Advanced' },
 ]
 
@@ -131,109 +132,6 @@ function useGeoAttendance(date: string) {
     geoFence, teachersQ.data, staffQ.data, staffQ.isLoading, teachersQ.isLoading,
     punches.staff, punches.checkIn, punches.principalKnown, punches.loading,
   ])
-}
-
-/* ============================================================
-   Summary cards — live headcount + today's present count
-   ============================================================ */
-function SummaryCard({ group, tone, active, onClick }: {
-  group: 'students' | 'teachers' | 'staff'; tone: string; active: boolean; onClick: () => void
-}) {
-  const today = todayIso()
-  const geo = useGeoAttendance(today)
-  const teachersQ = useTeachers()
-  const staffQ = useStaff()
-  const periodDayQ = usePeriodAttendanceRangeSummary(
-    { preset: 'custom', from: today, to: today },
-    group === 'students',
-  )
-  const studentHero = classWiseDayHero({ range: periodDayQ.data })
-  const studentLive = studentLiveAttendance({
-    loaded: periodDayQ.isSuccess || periodDayQ.isError,
-    presentTotal: studentHero.present,
-    studentTotal: studentHero.marked,
-    overallPct: studentHero.pct,
-  })
-
-  const [marks, setMarks] = useState<Record<string, AttStatus>>({})
-  const [marksReady, setMarksReady] = useState(group === 'students')
-  useEffect(() => {
-    if (group === 'students') return
-    let cancelled = false
-    setMarks({})
-    setMarksReady(false)
-    void fetchRemotePeopleAttendance(group, today)
-      .then((remote) => { if (!cancelled) setMarks(remote) })
-      .catch(() => { if (!cancelled) setMarks({}) })
-      .finally(() => { if (!cancelled) setMarksReady(true) })
-    const bump = (ev: Event) => {
-      const detail = (ev as CustomEvent<{ group?: string }>).detail
-      if (detail?.group && detail.group !== group) return
-      void fetchRemotePeopleAttendance(group, today)
-        .then((remote) => { if (!cancelled) setMarks(remote) })
-        .catch(() => { /* keep last SQL snapshot */ })
-    }
-    window.addEventListener(PEOPLE_ATTENDANCE_CHANGED, bump)
-    window.addEventListener('focus', bump)
-    return () => {
-      cancelled = true
-      window.removeEventListener(PEOPLE_ATTENDANCE_CHANGED, bump)
-      window.removeEventListener('focus', bump)
-    }
-  }, [group, today])
-
-  const people =
-    group === 'teachers' ? (teachersQ.data ?? [])
-    : (staffQ.data ?? [])
-  /* Students: same period-day rollup as Students · class-wise (not daily AttendanceRecords). */
-  const total = group === 'students' ? studentLive.marked : people.length
-
-  const present = useMemo(() => {
-    if (group === 'students') return studentLive.present
-    const roster = (group === 'teachers' ? teachersQ.data : staffQ.data) ?? []
-    return countPeoplePresent(
-      roster.map((p) => ({ id: p.id, name: p.name })),
-      marks,
-      { checkIn: geo.checkIn, principalKnown: geo.principalKnown },
-    )
-  }, [group, teachersQ.data, staffQ.data, studentLive.present, marks, geo.checkIn, geo.geoFence, geo.principalKnown])
-
-  const studentLoading = group === 'students' && !(periodDayQ.isSuccess || periodDayQ.isError)
-  const peopleLoading = group !== 'students' && (teachersQ.isLoading || staffQ.isLoading || geo.loading || !marksReady)
-
-  const rate = group === 'students'
-    ? studentLive.pct
-    : (total ? Math.round((present / total) * 100) : 0)
-
-  const footnote = group === 'students'
-    ? studentLive.footnote
-    : peopleLoading ? 'Loading…' : `${present} of ${total} present`
-
-  return (
-    <Card hover onClick={onClick} style={active ? { borderColor: tone, boxShadow: `0 0 0 1px ${tone}` } : undefined}>
-      <div className="row ai-center jc-between">
-        <div className="row ai-center gap12">
-          <span className="sm-kpi-ic" style={{ background: `color-mix(in srgb, ${tone} 14%, transparent)`, color: tone, marginBottom: 0 }}>
-            <Icon name={GROUP_ICON[group]} size={18} />
-          </span>
-          <div>
-            <div className="sm-kpi-val" style={{ fontSize: 24 }}>
-              {studentLoading || peopleLoading || rate == null ? '—' : `${rate}%`}
-            </div>
-            <div className="sm-kpi-label">{GROUP_NAME[group]} present</div>
-          </div>
-        </div>
-        <Icon name="chevRight" size={18} style={{ color: 'var(--text-3)' }} />
-      </div>
-      <div className="t-sm muted" style={{ marginTop: 10 }}>Today · live</div>
-      <div className="row ai-center gap8" style={{ marginTop: 10 }}>
-        <div className="sm-meter" style={{ flex: 1, width: 'auto' }}>
-          <span style={{ width: `${studentLoading || peopleLoading ? 0 : (rate ?? 0)}%`, background: tone }} />
-        </div>
-        <span className="t-xs muted3" style={{ whiteSpace: 'nowrap' }}>{footnote}</span>
-      </div>
-    </Card>
-  )
 }
 
 /* ============================================================
@@ -532,6 +430,83 @@ function StaffRoster({ group, editable }: { group: 'teachers' | 'staff'; editabl
 }
 
 /* ============================================================
+   Class Attendance — simple Class + Section pick, then trend/subjects/table
+   (no other filters — a lighter-weight sibling to Advanced > Class subview)
+   ============================================================ */
+function ClassAttendanceView() {
+  const classesQ = useClasses()
+  const classes = classesQ.data ?? []
+  const grades = useMemo(
+    () => [...new Set(classes.map((item) => item.grade).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+    [classes],
+  )
+  const [grade, setGrade] = useState('')
+  const [classId, setClassId] = useState('')
+  const [from, setFrom] = useState(todayIso)
+  const [to, setTo] = useState(todayIso)
+
+  return (
+    <div>
+      <div className="sm-att-adv-filters" style={{ marginBottom: 16 }}>
+        <label className="sm-att-adv-field">
+          <span>Class</span>
+          <Select
+            aria-label="Class"
+            value={grade}
+            options={[{ value: '', label: 'All classes' }, ...grades.map((g) => ({ value: g, label: g }))]}
+            onChange={(event) => { setGrade(event.target.value); setClassId('') }}
+          />
+        </label>
+        <label className="sm-att-adv-field">
+          <span>Section</span>
+          <Select
+            aria-label="Section"
+            value={classId}
+            options={[
+              { value: '', label: 'Choose a section…' },
+              ...classes.filter((item) => !grade || item.grade === grade).map((item) => ({
+                value: item.id ?? '', label: item.name || `${item.grade}-${item.section}`,
+              })),
+            ]}
+            onChange={(event) => setClassId(event.target.value)}
+          />
+        </label>
+        <label className="sm-att-adv-field">
+          <span>From</span>
+          <Input
+            aria-label="Class attendance from date" type="date" value={from}
+            onChange={(event) => {
+              const next = event.target.value
+              setFrom(next)
+              if (to < next) setTo(next)
+            }}
+          />
+        </label>
+        <label className="sm-att-adv-field">
+          <span>To</span>
+          <Input
+            aria-label="Class attendance to date" type="date" value={to} min={from}
+            onChange={(event) => setTo(event.target.value)}
+          />
+        </label>
+      </div>
+      {!classId ? (
+        <Empty icon="calendar" title="Choose a section to see its attendance overview." />
+      ) : (
+        <ClassAttendanceOverview
+          classId={classId}
+          from={from}
+          to={to}
+          classLabel={classes.find((c) => c.id === classId)?.name}
+          fullRoster
+        />
+      )}
+    </div>
+  )
+}
+
+/* ============================================================
    Screen
    ============================================================ */
 function AttendanceScreen() {
@@ -550,6 +525,11 @@ function AttendanceScreen() {
     return geoFence ? [...base] : base.filter((o) => o.value !== 'geo')
   }, [allPeople, geoFence])
   const [group, setGroup] = useState<Group>('students')
+
+  const today = todayIso()
+  const overviewQ = usePeriodAttendanceRangeSummary({ preset: 'custom', from: today, to: today }, allPeople)
+  const trendQ = useDashboardAttendanceTrend(allPeople)
+  const attTrend = useMemo(() => (trendQ.data ?? []).filter((p) => !p.empty), [trendQ.data])
 
   useEffect(() => {
     if (!groupOpts.some((o) => o.value === group)) setGroup('students')
@@ -629,11 +609,59 @@ function AttendanceScreen() {
       />
 
       {allPeople && (
-        <div className="sm-grid-3" style={{ marginBottom: 16 }}>
-          <SummaryCard group="students" tone="var(--brand-600)" active={group === 'students'} onClick={() => setGroup('students')} />
-          <SummaryCard group="teachers" tone="#7c3aed" active={group === 'teachers'} onClick={() => setGroup('teachers')} />
-          <SummaryCard group="staff" tone="#0d9488" active={group === 'staff'} onClick={() => setGroup('staff')} />
-        </div>
+        <>
+          <div className="sm-kpi-grid" style={{ marginBottom: 16 }}>
+            <Kpi
+              icon="check" iconBg="color-mix(in srgb, #22C55E 12%, white)" iconColor="#22C55E"
+              label="Overall attendance"
+              value={overviewQ.data?.attendancePercentage == null ? '—' : `${overviewQ.data.attendancePercentage}%`}
+              foot="Today · students"
+            />
+            <Kpi
+              icon="users" iconBg="color-mix(in srgb, #4F46E5 12%, white)" iconColor="#4F46E5"
+              label="Present"
+              value={overviewQ.isLoading ? '—' : fmtNum(overviewQ.data?.present ?? 0)}
+              foot="Today · students"
+            />
+            <Kpi
+              icon="close" iconBg="color-mix(in srgb, #DC2626 12%, white)" iconColor="#DC2626"
+              label="Absent"
+              value={overviewQ.isLoading ? '—' : fmtNum(overviewQ.data?.absent ?? 0)}
+              foot="Today · students"
+            />
+            <Kpi
+              icon="clock" iconBg="color-mix(in srgb, #D97706 12%, white)" iconColor="#D97706"
+              label="Late"
+              value={overviewQ.isLoading ? '—' : fmtNum(overviewQ.data?.late ?? 0)}
+              foot="Today · students"
+            />
+          </div>
+
+          <Card style={{ marginBottom: 16 }}>
+            <CardHead title="Attendance trend" sub={
+              trendQ.isLoading
+                ? 'Loading last 8 weeks…'
+                : (attTrend.length ? 'Weekly average · last 8 weeks' : 'No period marks in the last 8 weeks')
+            } icon="trend" />
+            <div style={{ marginTop: 12 }}>
+              {trendQ.isLoading ? (
+                <Empty icon="trend" title="Loading trend…" body="Fetching weekly period attendance." />
+              ) : attTrend.length === 0 ? (
+                <Empty icon="trend" title="No attendance trend yet" body="Weekly % appears after period marks are saved." />
+              ) : attTrend.length === 1 ? (
+                <div className="t-md">
+                  {attTrend[0].label}: <strong>{attTrend[0].value}%</strong>
+                  <div className="t-xs muted3" style={{ marginTop: 6 }}>Need at least two marked weeks for a chart.</div>
+                </div>
+              ) : (
+                <LineChart
+                  series={[{ data: attTrend.map((p) => p.value), color: 'var(--brand-600)', label: 'Attendance %' }]}
+                  labels={attTrend.map((p) => p.label)} yMax={100} yFmt={(v) => `${Math.round(v)}%`}
+                />
+              )}
+            </div>
+          </Card>
+        </>
       )}
 
       <div style={{ marginBottom: 16 }}>
@@ -641,6 +669,7 @@ function AttendanceScreen() {
       </div>
 
       {group === 'students' && <ClassWiseStudents editable={editable} leadership={allPeople} />}
+      {group === 'classAttendance' && <ClassAttendanceView />}
       {group === 'advanced' && <AttendanceAdvanced />}
       {allPeople && (group === 'teachers' || group === 'staff') && <StaffRoster group={group} editable={editable} />}
       {allPeople && group === 'geo' && <GeoFencePanel />}

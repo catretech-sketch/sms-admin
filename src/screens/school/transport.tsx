@@ -440,12 +440,14 @@ function BusEditModal({
   const [busNo, setBusNo] = useState('')
   const [routeId, setRouteId] = useState('')
   const [driverStaffId, setDriverStaffId] = useState('')
+  const [conductorStaffId, setConductorStaffId] = useState('')
 
   useEffect(() => {
     if (!open) return
     setBusNo(bus?.busNo ?? '')
     setRouteId(bus?.routeId ?? '')
     setDriverStaffId(bus?.driverStaffId ?? '')
+    setConductorStaffId(bus?.conductorStaffId ?? '')
   }, [open, bus])
 
   async function save() {
@@ -459,6 +461,8 @@ function BusEditModal({
           routeId: routeId || null,
           driverStaffId: driverStaffId || null,
           clearDriver: !driverStaffId,
+          conductorStaffId: conductorStaffId || null,
+          clearConductor: !conductorStaffId,
         })
         toast.success('Bus updated')
       } else {
@@ -466,6 +470,7 @@ function BusEditModal({
           busNo: trimmed,
           routeId: routeId || null,
           driverStaffId: driverStaffId || null,
+          conductorStaffId: conductorStaffId || null,
         })
         toast.success('Bus added')
       }
@@ -481,6 +486,13 @@ function BusEditModal({
   const driverSelectOptions = [
     { value: '', label: driversQ.isLoading ? 'Loading staff…' : '— Unassigned —' },
     ...driverOpts.map((s) => ({
+      value: s.id,
+      label: `${s.name} · ${staffCategoryLabel(s.cat, s.dept, s.role)}`,
+    })),
+  ]
+  const conductorSelectOptions = [
+    { value: '', label: driversQ.isLoading ? 'Loading staff…' : '— Unassigned —' },
+    ...driverOpts.filter((s) => s.id !== driverStaffId).map((s) => ({
       value: s.id,
       label: `${s.name} · ${staffCategoryLabel(s.cat, s.dept, s.role)}`,
     })),
@@ -510,6 +522,9 @@ function BusEditModal({
         <Field label="Driver (staff)" hint={driversQ.isError ? 'Could not load staff list' : 'Pick any staff member; transport drivers are usually category Transport'}>
           <Select value={driverStaffId} onChange={(e) => setDriverStaffId(e.target.value)} options={driverSelectOptions} disabled={driversQ.isLoading} />
         </Field>
+        <Field label="Conductor / helper (staff)" hint="Optional — a second staff member assigned to this bus">
+          <Select value={conductorStaffId} onChange={(e) => setConductorStaffId(e.target.value)} options={conductorSelectOptions} disabled={driversQ.isLoading} />
+        </Field>
       </div>
     </Modal>
   )
@@ -518,6 +533,8 @@ function BusEditModal({
 function TransportBusesBody() {
   const busesQ = useTransportBuses()
   const buses = busesQ.data ?? []
+  const staffQ = useStaff()
+  const staffById = useMemo(() => new Map((staffQ.data ?? []).map((s) => [s.id, s.name])), [staffQ.data])
   const [editBus, setEditBus] = useState<TransportBus | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
 
@@ -548,7 +565,7 @@ function TransportBusesBody() {
           <table className="sm-table">
             <thead>
               <tr>
-                <th>Bus</th><th>Route</th><th>Driver</th><th>Stops</th><th>Students</th><th />
+                <th>Bus</th><th>Route</th><th>Driver</th><th>Conductor</th><th>Stops</th><th>Students</th><th />
               </tr>
             </thead>
             <tbody>
@@ -557,6 +574,7 @@ function TransportBusesBody() {
                   <td className="fw6">{b.busNo}</td>
                   <td>{b.routeName ?? '—'}</td>
                   <td>{b.driver ?? '—'}{b.driverPhone ? ` · ${b.driverPhone}` : ''}</td>
+                  <td>{b.conductorStaffId ? (staffById.get(b.conductorStaffId) ?? '—') : '—'}</td>
                   <td>{b.stopCount}</td>
                   <td>{b.studentsAssigned}</td>
                   <td><IconBtn icon="edit" title="Edit" onClick={() => setEditBus(b)} /></td>

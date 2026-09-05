@@ -80,6 +80,8 @@ const setText = (label: string, value: string) =>
   fireEvent.change(within(fieldOf(label)).getByRole('textbox'), { target: { value } })
 const setSelect = (label: string, value: string) =>
   fireEvent.change(within(fieldOf(label)).getByRole('combobox'), { target: { value } })
+const setDate = (label: string, value: string) =>
+  fireEvent.change(fieldOf(label).querySelector('input[type="date"]') as HTMLInputElement, { target: { value } })
 
 /** Wait for the Platinum session restore to land — the "First name" field
  *  is unlocked (out of TierGate's aria-hidden blur) once `plan` resolves. */
@@ -93,6 +95,7 @@ function fillRequired() {
   setText('First name', 'Suresh')
   setText('Last name', 'Naidu')
   setText('Primary contact number', '9876543210')
+  setText('Email address', 'suresh.naidu@school.edu')
   setSelect('Role', 'Driver')
   setSelect('Category', 'transport')
   setSelect('Department', 'Transport')
@@ -117,6 +120,32 @@ describe('Add Staff form', () => {
     fireEvent.click(screen.getByText('Save staff'))
     expect(view()).not.toBe('school.staff')
     expect(screen.getAllByText('This field is required').length).toBeGreaterThan(0)
+  })
+
+  it('shows the auto-generated staff ID as read-only', async () => {
+    vi.stubGlobal('fetch', withPlatinumSession(() => jsonResponse({ data: [], next_cursor: null })))
+    renderForm()
+    await waitForUnlockedForm()
+    expect(fieldOf('Staff ID').querySelector('input')).toHaveAttribute('readonly')
+  })
+
+  it('auto-increments the staff ID past the highest existing code for this school', async () => {
+    vi.stubGlobal('fetch', withPlatinumSession((url, method) => {
+      if (url.includes('/staff') && method === 'GET') {
+        return jsonResponse({
+          data: [{
+            id: 's1', name: 'Existing One', gender: 'M', department: 'Transport',
+            category: 'transport', attendance_pct: 0, employee_code: 'greenwood/STF/26/0007',
+          }],
+          next_cursor: null,
+        })
+      }
+      return jsonResponse({ data: [], next_cursor: null })
+    }))
+    renderForm()
+    await waitForUnlockedForm()
+    const input = fieldOf('Staff ID').querySelector('input') as HTMLInputElement
+    await waitFor(() => expect(input).toHaveValue('greenwood/STF/26/0008'))
   })
 
   it('rejects a malformed Aadhaar number', async () => {
@@ -149,5 +178,30 @@ describe('Add Staff form', () => {
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>
     const staffCall = fetchMock.mock.calls.find((args) => String(args[0]).includes('/staff'))
     expect(staffCall).toBeDefined()
+  })
+
+  it('persists driving license number and expiry through staff extras', async () => {
+    vi.stubGlobal('fetch', withPlatinumSession(() => jsonResponse({
+      data: {
+        id: 'srv', name: 'Suresh Naidu', gender: 'M',
+        department: 'Transport', category: 'transport', attendance_pct: 0,
+      },
+    })))
+
+    renderForm()
+    await waitForUnlockedForm()
+    fillRequired()
+    setText('Driving license number', 'KA0120230012345')
+    setDate('License expiry', '2027-01-01')
+    fireEvent.click(screen.getByText('Save staff'))
+
+    await waitFor(() => expect(view()).toBe('school.staff'))
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>
+    const extrasCall = fetchMock.mock.calls.find((args) => String(args[0]).includes('/extras') && args[1]?.method === 'PUT')
+    expect(extrasCall).toBeDefined()
+    const body = JSON.parse(String(extrasCall![1]?.body))
+    const extras = JSON.parse(body.extras_json)
+    expect(extras.transport.license).toBe('KA0120230012345')
+    expect(extras.transport.licenseExpiry).toBe('2027-01-01')
   })
 })

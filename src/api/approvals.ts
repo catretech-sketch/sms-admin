@@ -125,7 +125,7 @@ export function mapWireToApproval(raw: Record<string, unknown>): Approval {
     title: `Leave — ${requester} (${leaveType})`,
     detail: detailParts.join('. ') || 'Leave request pending review.',
     requester,
-    role: '',
+    role: String(a.requesterRole ?? ''),
     amount: null,
     priority,
     forRoles: forRoles.length > 0 ? forRoles : LEAVE_FOR_ROLES,

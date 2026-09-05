@@ -59,7 +59,20 @@ function throwIfError(res: Response, json: unknown): void {
   throw new ApiError(res.status, err?.code ?? 'internal_error', err?.message ?? res.statusText, err?.details ?? null)
 }
 
+/* Refresh tokens are single-use (rotated server-side). When several requests 401 at
+   once — e.g. every screen's queries refetching right as the 15-min access token
+   expires — each independently calling /auth/refresh would race: only the first
+   wins, the rest resubmit an already-revoked token and force a spurious logout.
+   Share one in-flight refresh across all callers instead. */
+let pendingRefresh: Promise<boolean> | null = null
+
 async function tryRefresh(): Promise<boolean> {
+  if (pendingRefresh) return pendingRefresh
+  pendingRefresh = doRefresh().finally(() => { pendingRefresh = null })
+  return pendingRefresh
+}
+
+async function doRefresh(): Promise<boolean> {
   const refresh = tokenStore.getRefresh()
   if (!refresh) return false
   const res = await rawFetch('/auth/refresh', { method: 'POST', body: { refresh_token: refresh } }, null)

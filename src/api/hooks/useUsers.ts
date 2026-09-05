@@ -42,3 +42,17 @@ export function useSchoolUserByEmail(email: string | undefined): SchoolUserDto |
     return (data ?? []).find((u) => u.email?.trim().toLowerCase() === needle)
   }, [data, needle])
 }
+
+/** Lowercased email → linked login account, for every person in this school — lets a
+ *  Teacher/Staff list row show a Suspend/Unsuspend action without a per-row lookup. */
+export function useAccountByEmail(): Map<string, SchoolUserDto> {
+  const { data } = useSchoolUsers()
+  return useMemo(() => {
+    const map = new Map<string, SchoolUserDto>()
+    for (const u of data ?? []) {
+      const email = u.email?.trim().toLowerCase()
+      if (email) map.set(email, u)
+    }
+    return map
+  }, [data])
+}

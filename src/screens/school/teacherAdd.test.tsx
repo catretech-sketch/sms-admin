@@ -46,6 +46,7 @@ function fillRequired() {
   setText('First name', 'Rajesh')
   setText('Last name', 'Kumar')
   setText('Primary contact number', '9876543210')
+  setText('Email address', 'rajesh.kumar@school.edu')
   setSelect('Department', 'Mathematics')
   setSelect('Designation', 'Teacher')
 }
@@ -58,6 +59,30 @@ describe('Add Teacher form', () => {
     expect(Number(probe().split('|')[0])).toBe(start)
     expect(view()).not.toBe('school.teachers')
     expect(screen.getAllByText('This field is required').length).toBeGreaterThan(0)
+  })
+
+  it('shows the auto-generated teacher ID as read-only', () => {
+    renderForm()
+    expect(fieldOf('Teacher ID').querySelector('input')).toHaveAttribute('readonly')
+  })
+
+  it('auto-increments the teacher ID past the highest existing code for this school', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: unknown) => {
+      if (String(url).includes('/teachers')) {
+        return Promise.resolve(jsonResponse({
+          data: [{
+            id: 't1', name: 'Existing One', gender: 'M', department: 'Science', designation: 'Teacher',
+            attendance_pct: 0, employee_code: 'sch/TCH/26/0004',
+          }],
+          next_cursor: null,
+        }))
+      }
+      return Promise.resolve(jsonResponse({ data: [], next_cursor: null }))
+    }))
+    renderForm()
+    const input = fieldOf('Teacher ID').querySelector('input') as HTMLInputElement
+    await waitFor(() => expect(input).toHaveValue('sch/TCH/26/0005'))
+    vi.unstubAllGlobals()
   })
 
   it('blocks save when passwords do not match', () => {

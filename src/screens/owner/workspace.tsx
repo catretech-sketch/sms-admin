@@ -504,7 +504,16 @@ function TeamTab({ schoolId, schools }: { schoolId: string; schools: School[] })
   const [overrides, setOverrides] = useState<Record<string, UserOverrides>>({})
   const [editing, setEditing] = useState<TeamRow | null>(null)
   const [removing, setRemoving] = useState<TeamRow | null>(null)
+  const [removeStep, setRemoveStep] = useState<1 | 2>(1)
+  const [removeConfirmText, setRemoveConfirmText] = useState('')
   const [removeBusy, setRemoveBusy] = useState(false)
+
+  const closeRemove = () => {
+    if (removeBusy) return
+    setRemoving(null)
+    setRemoveStep(1)
+    setRemoveConfirmText('')
+  }
   const [roleChange, setRoleChange] = useState<{ user: TeamRow; role: Role } | null>(null)
   const [roleChangeBusy, setRoleChangeBusy] = useState(false)
 
@@ -565,6 +574,8 @@ function TeamTab({ schoolId, schools }: { schoolId: string; schools: School[] })
       setRows((list) => list.filter((x) => x.id !== removing.id))
       toast.danger('Access removed', `${removing.name} can no longer sign in to this school.`)
       setRemoving(null)
+      setRemoveStep(1)
+      setRemoveConfirmText('')
     } catch (e) {
       toast.danger('Could not remove access', e instanceof ApiError ? e.message : 'Try again.')
     } finally {
@@ -773,19 +784,46 @@ function TeamTab({ schoolId, schools }: { schoolId: string; schools: School[] })
       )}
       {removing && (
         <Modal
-          open icon="alert" title="Remove access"
-          sub={`${removing.name} will no longer be able to sign in to this school. This doesn't affect any of their other schools.`}
-          onClose={() => { if (!removeBusy) setRemoving(null) }}
+          open icon="alert" title={removeStep === 1 ? 'Remove access' : 'Confirm removal'}
+          sub={`${removing.name} · step ${removeStep} of 2`}
+          onClose={closeRemove}
           footer={
             <div className="row gap8 jc-end">
-              <Btn variant="ghost" onClick={() => setRemoving(null)} disabled={removeBusy}>Cancel</Btn>
-              <Btn variant="danger" icon="trash" onClick={() => { void confirmRemove() }} disabled={removeBusy}>
-                {removeBusy ? 'Removing…' : 'Remove access'}
-              </Btn>
+              <Btn variant="ghost" onClick={closeRemove} disabled={removeBusy}>Cancel</Btn>
+              {removeStep === 1 ? (
+                <Btn variant="danger" icon="trash" onClick={() => setRemoveStep(2)}>Continue</Btn>
+              ) : (
+                <Btn
+                  variant="danger" icon="trash" onClick={() => { void confirmRemove() }}
+                  disabled={removeBusy || removeConfirmText.trim().toLowerCase() !== removing.name.trim().toLowerCase()}
+                >
+                  {removeBusy ? 'Removing…' : 'Remove access'}
+                </Btn>
+              )}
             </div>
           }
         >
-          <div className="t-sm muted">{removing.email}</div>
+          {removeStep === 1 ? (
+            <div className="t-sm muted">
+              {removing.name} ({removing.email}) will no longer be able to sign in to this school.
+              This doesn't affect any of their other schools. Click Continue to confirm in the next step.
+            </div>
+          ) : (
+            <div className="col gap12">
+              <p className="t-sm muted">
+                Type <span className="fw7" style={{ color: 'var(--text)' }}>{removing.name}</span> to confirm removing their access. This cannot be undone.
+              </p>
+              <Field label={`Type "${removing.name}" to confirm`} required>
+                <Input
+                  icon="trash"
+                  value={removeConfirmText}
+                  placeholder={removing.name}
+                  autoFocus
+                  onChange={(e) => setRemoveConfirmText(e.target.value)}
+                />
+              </Field>
+            </div>
+          )}
         </Modal>
       )}
       {roleChange && (

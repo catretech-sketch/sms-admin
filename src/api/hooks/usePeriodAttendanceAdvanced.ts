@@ -1,11 +1,14 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query'
 import {
   listPeriodAttendanceAdvanced,
+  listAllPeriodAttendanceRecords,
   getPeriodAttendanceClassDaySummary,
   listPeriodAttendanceSubjectSummaries,
   listPeriodAttendanceTeacherSummaries,
   getPeriodAttendanceRangeSummary,
   getPeriodAttendanceAudit,
+  buildClassStudentSummaries,
+  buildClassDailyTrend,
   type PeriodAttendanceAdvancedFilters,
   type PeriodAttendanceAdvancedPage,
   type AdvClassDaySummary,
@@ -14,10 +17,16 @@ import {
   type AdvRangeRollup,
   type PeriodAttendanceRangeFilters,
   type PeriodAttendanceAuditRow,
+  type ClassStudentSummaryRow,
 } from '../periodAttendanceAdvanced'
 import { queryKeys } from '../queryKeys'
 import { dashboardWeekWindows, loadRangeTrend, RANGE_TREND_CONCURRENCY } from '@/lib/dashboardLive'
 import type { TrendPoint } from '@/lib/attendanceTrend'
+
+export interface ClassStudentAttendanceData {
+  students: ClassStudentSummaryRow[]
+  dailyTrend: TrendPoint[]
+}
 
 /** Server-filtered period attendance list for the Advanced CRM tab. */
 export function usePeriodAttendanceAdvanced(
@@ -56,6 +65,23 @@ export function usePeriodAttendanceSubjectSummaries(
   return useQuery({
     queryKey: queryKeys.attendance.subjectSummaries(classId, filters),
     queryFn: () => listPeriodAttendanceSubjectSummaries(classId, filters),
+    enabled: enabled && Boolean(classId),
+    staleTime: 15_000,
+  })
+}
+
+/** Per-student present/absent/late + recent period-status sequence, plus a day-by-day % trend, for a class over a date range. */
+export function usePeriodAttendanceClassStudents(
+  classId: string,
+  filters: { from?: string; to?: string } = {},
+  enabled = true,
+): UseQueryResult<ClassStudentAttendanceData> {
+  return useQuery({
+    queryKey: queryKeys.attendance.classStudents(classId, filters),
+    queryFn: async () => {
+      const rows = await listAllPeriodAttendanceRecords({ ...filters, classId, preset: 'custom' })
+      return { students: buildClassStudentSummaries(rows), dailyTrend: buildClassDailyTrend(rows) }
+    },
     enabled: enabled && Boolean(classId),
     staleTime: 15_000,
   })

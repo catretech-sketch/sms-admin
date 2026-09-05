@@ -44,6 +44,7 @@ import {
 } from '@/lib/dashboardLive'
 import type { Student } from '@/types'
 import { subjStyle } from '@/lib/subjectStyle'
+import { classLabel, classCode, studentMatchesClass } from '@/lib/classMatch'
 
 type AttStatus = AttendanceStatus
 
@@ -87,22 +88,6 @@ async function loadStudentAttendanceFromSql(
   return out
 }
 
-function classLabel(c: SchoolClass): string {
-  return (c.name || `${c.grade}-${c.section}`).trim() || '—'
-}
-
-/** Short class code e.g. 10-A / N-A for colour chip on attendance. */
-function classCode(c: SchoolClass): string {
-  const grade = (c.grade || '').trim()
-  const section = (c.section || '').trim()
-  if (grade && section) {
-    const g = grade.length > 4 ? grade.slice(0, 3) : grade
-    return `${g}-${section}`.toUpperCase()
-  }
-  const name = classLabel(c)
-  return name.length > 8 ? name.slice(0, 8).toUpperCase() : name.toUpperCase()
-}
-
 /** Stable hue from class id/name so each class keeps its colour code. */
 function classHue(c: SchoolClass): number {
   return hashHue(c.id || classLabel(c))
@@ -120,20 +105,6 @@ function gradeCode(grade: string): string {
   const g = grade.trim()
   if (!g) return '—'
   return (g.length > 4 ? g.slice(0, 3) : g).toUpperCase()
-}
-
-function studentMatchesClass(s: Student, c: SchoolClass): boolean {
-  const label = classLabel(c)
-  const code = classCode(c)
-  const cls = (s.cls || '').trim()
-  if (cls && label && cls.toLowerCase() === label.toLowerCase()) return true
-  if (cls && code && cls.toLowerCase() === code.toLowerCase()) return true
-  if (s.grade && c.grade && s.section && c.section) {
-    const sameGrade = gradeRank(s.grade) === gradeRank(c.grade)
-    const sameSec = s.section.trim().toLowerCase() === c.section.trim().toLowerCase()
-    if (sameGrade && sameSec) return true
-  }
-  return false
 }
 
 function daysInMonth(month: string): string[] {

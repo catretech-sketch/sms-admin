@@ -257,7 +257,13 @@ export async function downloadReportXlsx(spec: ReportSpec, meta: ReportMeta): Pr
         cell.value = v as string
         cell.alignment = { horizontal: spec.align?.[i] === 'r' ? 'right' : 'left' }
       }
-      if (ri % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF7F8FA' } }
+      const cc = spec.cellColor?.[ri]?.[i]
+      if (cc) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argb(cc.bg) } }
+        cell.font = { ...cell.font, bold: true, color: { argb: argb(cc.text) } }
+      } else if (ri % 2 === 1) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF7F8FA' } }
+      }
       cell.border = { bottom: { style: 'hair', color: { argb: 'FFE2E8F0' } } }
     })
   })

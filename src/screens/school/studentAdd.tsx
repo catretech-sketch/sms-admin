@@ -18,7 +18,10 @@ import { PageHead, Card, CardHead, Btn, Badge, Icon, useFormKit, Spinner, Empty,
 import { useClasses, useClassNames } from '@/api/hooks/useClasses'
 import type { SchoolClass } from '@/api/classes'
 import { listSchoolHouses } from '@/api/schoolHouses'
-import { required, validateAadhaar, validateEmail, validatePhone, validateFile } from '@/lib/validation'
+import {
+  required, validateAadhaar, validateEmail, validatePhone, validateFile,
+  isDuplicateValue, normalizePhoneDigits, normalizeEmailKey,
+} from '@/lib/validation'
 import { properName, properPlace } from '@/lib/properCase'
 import { toDateInputValue } from '@/lib/dateInput'
 import { predictStudentRoll } from '@/lib/studentRoll'
@@ -53,7 +56,7 @@ const CATEGORIES = ['', 'General', 'OBC', 'SC', 'ST', 'EWS']
 const GENDERS = [{ value: '', label: 'Select…' }, { value: 'M', label: 'Male' }, { value: 'F', label: 'Female' }]
 const STATUSES = [{ value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }]
 
-const REQUIRED_FIELDS = ['firstName', 'lastName', 'cls', 'dob', 'gender', 'phone'] as const
+const REQUIRED_FIELDS = ['firstName', 'lastName', 'cls', 'dob', 'gender', 'phone', 'email'] as const
 
 type Form = Record<string, string>
 type Files = Record<string, File | null>
@@ -264,8 +267,12 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
   ])
 
   useEffect(() => {
+    // Always sync (never guard on "already set") — the field is read-only, so nothing the user
+    // typed could ever be here to protect. Guarding used to stick the ID at its first guess
+    // (computed before the roster query resolves) even after the real roster loaded and the
+    // correct next number became known.
     if (mode !== 'add') return
-    setForm((prev) => (prev.adm.trim() ? prev : { ...prev, adm: suggestedAdm }))
+    setForm((prev) => (prev.adm === suggestedAdm ? prev : { ...prev, adm: suggestedAdm }))
   }, [mode, suggestedAdm])
 
   useEffect(() => {
@@ -350,13 +357,18 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
     if (!f.fatherName.trim() && !f.motherName.trim()) {
       e.fatherName = 'Enter father or mother name'
     }
+    const roster = rosterQ.data ?? []
     const checks: [string, string | null][] = [
       ['aadhaar', validateAadhaar(f.aadhaar)],
       ['fatherAadhaar', validateAadhaar(f.fatherAadhaar)],
-      ['email', validateEmail(f.email)],
+      ['email', e.email ? null : validateEmail(f.email)
+        || (isDuplicateValue(f.email, roster.map((s) => ({ id: s.id, value: s.email })), normalizeEmailKey, existing?.id)
+          ? 'Another student already uses this email' : null)],
       ['fatherEmail', validateEmail(f.fatherEmail)],
       ['motherEmail', validateEmail(f.motherEmail)],
-      ['phone', e.phone ? null : validatePhone(f.phone)],
+      ['phone', e.phone ? null : validatePhone(f.phone)
+        || (isDuplicateValue(f.phone, roster.map((s) => ({ id: s.id, value: s.phone })), normalizePhoneDigits, existing?.id)
+          ? 'Another student already uses this phone number' : null)],
       ['fatherPhone', validatePhone(f.fatherPhone)],
       ['motherPhone', validatePhone(f.motherPhone)],
     ]
@@ -450,7 +462,7 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
           <CardHead title="Student details" icon="user" />
           <div style={{ marginTop: 12 }}>
             {fieldGrid(<>
-              {txt('adm', 'Admission number', { ph: suggestedAdm || 'scc/STU/26/0001' })}
+              {txt('adm', 'Admission number', { ph: suggestedAdm || 'scc/STU/26/0001', readOnly: true })}
               {txt('admissionDate', 'Admission date', { type: 'date' })}
               {txt('firstName', 'First name', { required: true, icon: 'user', ph: 'Aarav', case: 'name' })}
               {txt('lastName', 'Last name', { required: true, ph: 'Sharma', case: 'name' })}
@@ -472,7 +484,7 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
               {sel('religion', 'Religion', RELIGIONS)}
               {sel('category', 'Category', CATEGORIES)}
               {txt('phone', 'Primary contact number', { required: true, icon: 'phone', ph: '+91 9XXXXXXXXX' })}
-              {txt('email', 'Email address', { ph: 'student@example.com' })}
+              {txt('email', 'Email address', { required: true, ph: 'student@example.com' })}
               {txt('caste', 'Caste')}
               {txt('motherTongue', 'Mother tongue', { ph: 'e.g. Hindi' })}
               {txt('languages', 'Languages known', { ph: 'e.g. Hindi, English' })}
@@ -481,8 +493,8 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
             </>)}
             <div className="t-xs muted" style={{ marginTop: 10 }}>
               {mode === 'edit'
-                ? 'Admission number is fixed after create.'
-                : 'Class & house come from Academics · roll updates A–Z as you type name/class.'}
+                ? 'Admission number is auto-generated and fixed.'
+                : 'Admission number is auto-generated · Class & house come from Academics · roll updates A–Z as you type name/class.'}
             </div>
           </div>
         </Card>

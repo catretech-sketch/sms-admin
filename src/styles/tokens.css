@@ -15,8 +15,11 @@
   --brand-600: #4f46e5;
   --brand-700: #4338ca;
   --brand-800: #3730a3;
-  --brand-900: #312e81;
+  --brand-900: #1d1a49; /* Deep Navy Purple — the dark end shared by brand gradients (sidebar, login hero, KPI shadows) */
   --ring: rgba(79, 70, 229, 0.22);
+
+  /* ---- Sidebar (fixed navy blue, independent of theme) ---- */
+  --sidebar-bg: #0b2447;
 
   /* ---- Text + ink ---- */
   --text:   #0f172a;
@@ -41,6 +44,7 @@
   --warning: #d97706; --warning-bg: #fef3c7;
   --danger:  #dc2626; --danger-bg:  #fee2e2;
   --info:    #0ea5e9; --info-bg:    #e0f2fe;
+  --teal:    #0f766e; --teal-bg:    #ccfbf1;
 
   /* ---- Tiers ---- */
   --silver:   #64748b; --silver-bg:   #f1f5f9;
@@ -105,6 +109,7 @@ html[data-theme="dark"] {
   --warning-bg: #3a2a06;
   --danger-bg:  #3a0f12;
   --info-bg:    #082f49;
+  --teal-bg:    #042f2e;
 
   --silver-bg:   #1e293b;
   --gold-bg:     #2c2410;

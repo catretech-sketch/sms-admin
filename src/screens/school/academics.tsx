@@ -939,6 +939,7 @@ function TimetableTab({ editable }: { editable: boolean }) {
         const next = await publishSnapshot('timetable', snap)
         setPubMeta(next)
         void qc.invalidateQueries({ queryKey: queryKeys.subjects.all })
+        void qc.invalidateQueries({ queryKey: queryKeys.timetable.all() })
         toast.success(
           'Timetable published',
           `${slotCount} periods saved with bell times` +

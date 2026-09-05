@@ -7,6 +7,7 @@ import { tokenStore } from '@/api/auth/tokenStore'
 import { peopleScreens } from './people'
 
 const TeachersScreen = peopleScreens['school.teachers']
+const StaffScreen = peopleScreens['school.staff']
 const TENANT_ID = 'school-1'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -17,6 +18,12 @@ const TEACHER = {
   id: 'T1', name: 'Meera Rao', department: 'Science', designation: 'HOD', attendance_pct: 97,
   avatar_hue: 1, subjects: [], class_teacher: null, phone: '', email: 'meera@greenwood.edu',
   exp: 5, rating: 4.5, result: 80, load: 10, status: 'active', gender: 'F', top: false,
+}
+
+const STAFF = {
+  id: 'S1', name: 'Suresh Raina', role: 'Driver', category: 'transport', department: 'Transport',
+  phone: '', shift: 'Day', route: null, attendance_pct: 90, avatar_hue: 1, status: 'active',
+  gender: 'M', email: 'suresh@greenwood.edu',
 }
 
 type UserRow = { id: string; email: string; status: string; roles: string[] }
@@ -51,6 +58,9 @@ function stubFetch(role: string, usersRows: UserRow[]) {
     if (url.includes('/teachers') && method === 'GET') {
       return Promise.resolve(jsonResponse({ data: [TEACHER], next_cursor: null }))
     }
+    if (url.includes('/staff') && method === 'GET') {
+      return Promise.resolve(jsonResponse({ data: [STAFF], next_cursor: null }))
+    }
     if (url.includes('/users') && method === 'GET') {
       return Promise.resolve(jsonResponse({
         data: usersRows.map((r) => ({ id: r.id, email: r.email, phone: null, status: r.status, created_at: '2026-01-01', roles: r.roles })),
@@ -76,6 +86,19 @@ function renderTeachers() {
       <AppProvider>
         <ToastProvider>
           <TeachersScreen />
+        </ToastProvider>
+      </AppProvider>
+    </QueryClientProvider>,
+  )
+}
+
+function renderStaff() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+  return render(
+    <QueryClientProvider client={qc}>
+      <AppProvider>
+        <ToastProvider>
+          <StaffScreen />
         </ToastProvider>
       </AppProvider>
     </QueryClientProvider>,
@@ -127,6 +150,12 @@ describe('Teacher profile — App access card', () => {
     renderTeachers()
     await openTeacherProfile()
     fireEvent.click(within(accessCard()).getByText('Suspend'))
+    // Suspend confirms in a modal before it takes effect — the modal is nested inside
+    // the drawer's own dialog, so scope to its title rather than role="dialog".
+    const modalTitle = await screen.findByText('Suspend app access')
+    const modal = modalTitle.closest('.sm-modal')
+    if (!modal) throw new Error('confirm modal not found')
+    fireEvent.click(within(modal as HTMLElement).getByText('Suspend'))
     await waitFor(() => expect(within(accessCard()).getByText('Unsuspend')).toBeInTheDocument())
     expect(within(accessCard()).getByText('Suspended')).toBeInTheDocument()
   })
@@ -158,5 +187,36 @@ describe('Teacher profile — App access card', () => {
     renderTeachers()
     await openTeacherProfile()
     expect(within(accessCard()).getByText('Suspend')).toBeInTheDocument()
+  })
+})
+
+describe('Teacher roster row — Suspend action', () => {
+  it('shows Suspend directly in the roster row for an active linked account', async () => {
+    stubFetch('school.admin', [{ id: 'U1', email: TEACHER.email, status: 'active', roles: ['school.teacher'] }])
+    renderTeachers()
+    await waitFor(() => expect(screen.getAllByText('Meera Rao').length).toBeGreaterThan(0))
+    const row = screen.getAllByText('Meera Rao')[1].closest('tr')
+    if (!row) throw new Error('roster row not found')
+    expect(within(row).getByText('Suspend')).toBeInTheDocument()
+  })
+
+  it('does not show Suspend in the roster row when there is no linked account', async () => {
+    stubFetch('school.admin', [])
+    renderTeachers()
+    await waitFor(() => expect(screen.getAllByText('Meera Rao').length).toBeGreaterThan(0))
+    const row = screen.getAllByText('Meera Rao')[1].closest('tr')
+    if (!row) throw new Error('roster row not found')
+    expect(within(row).queryByText('Suspend')).not.toBeInTheDocument()
+  })
+})
+
+describe('Staff roster row — Suspend action', () => {
+  it('shows Suspend for a non-leadership role like "driver" (matches real prod data)', async () => {
+    stubFetch('school.admin', [{ id: 'U1', email: STAFF.email, status: 'active', roles: ['driver'] }])
+    renderStaff()
+    await waitFor(() => expect(screen.getAllByText('Suresh Raina').length).toBeGreaterThan(0))
+    const row = screen.getAllByText('Suresh Raina')[0].closest('tr')
+    if (!row) throw new Error('roster row not found')
+    expect(within(row).getByText('Suspend')).toBeInTheDocument()
   })
 })

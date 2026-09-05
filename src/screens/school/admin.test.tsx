@@ -3,7 +3,9 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import * as invitationsApi from '@/api/invitations'
-import { InvitationsTab } from './admin'
+import * as usersApi from '@/api/users'
+import { InvitationsTab, UsersTab } from './admin'
+import { AppProvider } from '@/context/AppProvider'
 import { ToastProvider } from '@/context/ToastProvider'
 
 function renderTab() {
@@ -94,5 +96,66 @@ describe('InvitationsTab', () => {
     renderTab()
     await waitFor(() => expect(screen.getByText(/expired/i)).toBeInTheDocument())
     expect(screen.getByRole('button', { name: /resend/i })).toBeInTheDocument()
+  })
+})
+
+function renderUsersTab() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={qc}>
+      <AppProvider>
+        <ToastProvider>
+          <UsersTab />
+        </ToastProvider>
+      </AppProvider>
+    </QueryClientProvider>,
+  )
+}
+
+const ONE_USER: usersApi.SchoolUserDto[] = [
+  { id: 'u1', email: 'neha.joshi@school.edu', phone: null, status: 'active', created_at: '2026-01-01T00:00:00Z', roles: ['school.teacher'] },
+]
+
+describe('UsersTab — remove access (2-step confirmation)', () => {
+  it('requires a Continue click before the confirm step, and blocks Remove access until the name is typed correctly', async () => {
+    vi.spyOn(usersApi, 'listSchoolUsers').mockResolvedValue(ONE_USER)
+    const removeSpy = vi.spyOn(usersApi, 'removeUserAccess').mockResolvedValue(undefined)
+    renderUsersTab()
+
+    await waitFor(() => screen.getByText('neha.joshi@school.edu'))
+    await userEvent.click(screen.getByRole('button', { name: /remove/i }))
+
+    // Step 1: no typing yet — Continue, not an immediate delete.
+    expect(screen.getByText('Remove access')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /remove access/i })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    // Step 2: the destructive button exists but is disabled until the name matches.
+    const confirmBtn = screen.getByRole('button', { name: /remove access/i })
+    expect(confirmBtn).toBeDisabled()
+    await userEvent.type(screen.getByPlaceholderText('neha.joshi'), 'wrong-name')
+    expect(confirmBtn).toBeDisabled()
+    expect(removeSpy).not.toHaveBeenCalled()
+
+    await userEvent.clear(screen.getByPlaceholderText('neha.joshi'))
+    await userEvent.type(screen.getByPlaceholderText('neha.joshi'), 'neha.joshi')
+    expect(confirmBtn).toBeEnabled()
+    await userEvent.click(confirmBtn)
+    await waitFor(() => expect(removeSpy).toHaveBeenCalledWith('u1'))
+  })
+
+  it('resets both steps and the typed text on Cancel', async () => {
+    vi.spyOn(usersApi, 'listSchoolUsers').mockResolvedValue(ONE_USER)
+    renderUsersTab()
+
+    await waitFor(() => screen.getByText('neha.joshi@school.edu'))
+    await userEvent.click(screen.getByRole('button', { name: /remove/i }))
+    await userEvent.click(screen.getByRole('button', { name: /continue/i }))
+    await userEvent.type(screen.getByPlaceholderText('neha.joshi'), 'neha.joshi')
+    await userEvent.click(screen.getByRole('button', { name: /cancel/i }))
+
+    expect(screen.queryByText('Confirm removal')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /remove/i }))
+    expect(screen.getByText('Remove access')).toBeInTheDocument()
   })
 })

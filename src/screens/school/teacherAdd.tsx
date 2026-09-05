@@ -18,6 +18,7 @@ import { useSubjectNames } from '@/api/hooks/useSubjects'
 import {
   required, validateAadhaar, validatePAN, validateIFSC, validateURL,
   validateEmail, validatePhone, validateFile, passwordsMatch,
+  isDuplicateValue, normalizePhoneDigits, normalizeEmailKey,
 } from '@/lib/validation'
 import { properName, properPlace } from '@/lib/properCase'
 import { toDateInputValue } from '@/lib/dateInput'
@@ -38,7 +39,7 @@ const CONTRACT_TYPES = SEL('Permanent', 'Temporary', 'Probation', 'Fixed-term')
 const SHIFTS = SEL('Morning', 'Day', 'Evening', 'Rotational')
 const STATUS_OPTS = [{ value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }]
 
-const REQUIRED_FIELDS = ['firstName', 'lastName', 'phone', 'department', 'designation'] as const
+const REQUIRED_FIELDS = ['firstName', 'lastName', 'phone', 'email', 'department', 'designation'] as const
 
 type Form = Record<string, string>
 type Files = Record<string, File | null>
@@ -236,8 +237,12 @@ function TeacherFormScreen({ mode }: { mode: 'add' | 'edit' }) {
   }, [app.school.slug, rosterQ.data])
 
   useEffect(() => {
+    // Always sync (never guard on "already set") — the field is read-only, so nothing the user
+    // typed could ever be here to protect. Guarding used to stick the ID at its first guess
+    // (computed before the roster query resolves) even after the real roster loaded and the
+    // correct next number became known.
     if (mode !== 'add') return
-    setForm((prev) => (prev.teacherId.trim() ? prev : { ...prev, teacherId: suggestedId }))
+    setForm((prev) => (prev.teacherId === suggestedId ? prev : { ...prev, teacherId: suggestedId }))
   }, [mode, suggestedId])
 
   useEffect(() => {
@@ -336,10 +341,15 @@ function TeacherFormScreen({ mode }: { mode: 'add' | 'edit' }) {
       const msg = required(f[key])
       if (msg) e[key] = msg
     }
+    const roster = rosterQ.data ?? []
     const checks: [string, string | null][] = [
-      ['phone', e.phone ? null : validatePhone(f.phone)],
+      ['phone', e.phone ? null : validatePhone(f.phone)
+        || (isDuplicateValue(f.phone, roster.map((t) => ({ id: t.id, value: t.phone })), normalizePhoneDigits, existing?.id)
+          ? 'Another teacher already uses this phone number' : null)],
       ['altPhone', validatePhone(f.altPhone)],
-      ['email', validateEmail(f.email)],
+      ['email', e.email ? null : validateEmail(f.email)
+        || (isDuplicateValue(f.email, roster.map((t) => ({ id: t.id, value: t.email })), normalizeEmailKey, existing?.id)
+          ? 'Another teacher already uses this email' : null)],
       ['aadhaar', validateAadhaar(f.aadhaar)],
       ['pan', validatePAN(f.pan)],
       ['prevSchoolPhone', validatePhone(f.prevSchoolPhone)],
@@ -587,7 +597,7 @@ function TeacherFormScreen({ mode }: { mode: 'add' | 'edit' }) {
                 <Input value={f.teacherId} readOnly disabled aria-label="Teacher ID" />
               </Field>
             ) : (
-              txt('teacherId', 'Teacher ID', { ph: suggestedId || 'scc/TCH/26/0001' })
+              txt('teacherId', 'Teacher ID', { ph: suggestedId || 'scc/TCH/26/0001', readOnly: true })
             )}
             {txt('firstName', 'First name', { required: true, icon: 'user', ph: 'Rajesh', case: 'name' })}
             {txt('lastName', 'Last name', { required: true, ph: 'Kumar', case: 'name' })}
@@ -597,7 +607,7 @@ function TeacherFormScreen({ mode }: { mode: 'add' | 'edit' }) {
             {sel('maritalStatus', 'Marital status', MARITAL)}
             {txt('phone', 'Primary contact number', { required: true, icon: 'phone', ph: '+91 9XXXXXXXXX' })}
             {txt('altPhone', 'Alternate contact number', { icon: 'phone' })}
-            {txt('email', 'Email address', { ph: 'teacher@school.edu' })}
+            {txt('email', 'Email address', { required: true, ph: 'teacher@school.edu' })}
             {txt('fatherName', "Father's name", { case: 'name' })}
             {txt('motherName', "Mother's name", { case: 'name' })}
             {txt('pan', 'PAN number', { ph: 'ABCDE1234F' })}

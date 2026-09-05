@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { PeriodAttendanceAdvancedFilters } from '@/api/periodAttendanceAdvanced'
 
 const advancedFilters = vi.fn<(filters: PeriodAttendanceAdvancedFilters) => unknown>()
@@ -98,6 +98,39 @@ vi.mock('@/api/hooks/usePeriodAttendanceAdvanced', () => ({
     error: null,
     refetch: vi.fn(),
   }),
+  useDashboardAttendanceTrend: () => ({
+    data: [],
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+  usePeriodAttendanceClassStudents: () => ({
+    data: {
+      students: [{
+        studentId: 'student-1', studentName: 'Aarav Shah', present: 5, absent: 1, late: 0,
+        attendancePercentage: 83,
+        recentPeriods: [
+          { status: 'present', subject: 'Mathematics', date: '2026-08-31', period: 1 },
+          { status: 'present', subject: 'Science', date: '2026-09-01', period: 2 },
+          { status: 'absent', subject: 'English', date: '2026-09-02', period: 3 },
+          { status: 'present', subject: 'Hindi', date: '2026-09-03', period: 1 },
+          { status: 'present', subject: 'Mathematics', date: '2026-09-04', period: 1 },
+          { status: 'present', subject: 'Science', date: '2026-09-04', period: 2 },
+        ],
+        tier: 'watch',
+      }],
+      dailyTrend: [{ label: '1', value: 90 }, { label: '2', value: 95 }],
+    },
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+}))
+
+vi.mock('@/api/hooks/useTimetable', () => ({
+  useTimetable: () => ({ data: [], isLoading: false, isError: false, error: null, refetch: vi.fn() }),
 }))
 
 vi.mock('@/api/hooks/useClasses', () => ({
@@ -129,7 +162,10 @@ vi.mock('@/api/hooks/usePrincipalAttendance', () => ({
   }),
 }))
 vi.mock('@/lib/hooks', () => ({
-  useApp: () => ({ role: 'admin', plan: 'platinum' }),
+  useApp: () => ({
+    role: 'admin', plan: 'platinum',
+    school: { name: 'Greenwood International', city: 'Mumbai', logoUrl: null, logo: 'GW', color: '#4f46e5', currency: 'INR' },
+  }),
   useToast: () => ({ success: vi.fn(), danger: vi.fn() }),
 }))
 vi.mock('./attendanceClassWise', () => ({
@@ -245,6 +281,38 @@ describe('AttendanceAdvanced subviews', () => {
 
     fireEvent.change(screen.getByLabelText('Class for summary'), { target: { value: 'class-1' } })
     expect(screen.getByText('87%')).toBeInTheDocument()
+  })
+
+  it('shows a per-student attendance table once a section is chosen, and drills into Records on row click', async () => {
+    render(<AttendanceAdvanced />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Class' }))
+    fireEvent.change(screen.getByLabelText('Class for summary'), { target: { value: 'class-1' } })
+
+    expect(screen.getByText('Aarav Shah')).toBeInTheDocument()
+    expect(screen.getByText('Watch')).toBeInTheDocument()
+    expect(screen.getByText('83%')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('Aarav Shah'))
+    await waitFor(() => expect(screen.getByText('Advanced period attendance')).toBeInTheDocument())
+    expect(advancedFilters).toHaveBeenLastCalledWith(expect.objectContaining({
+      classId: 'class-1', q: 'Aarav Shah',
+    }))
+  })
+
+  it('narrows the Class subview\'s Section options to the chosen Class (grade)', async () => {
+    render(<AttendanceAdvanced />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Class' }))
+    const sectionSelect = screen.getByLabelText('Class for summary')
+    expect(within(sectionSelect).getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'Choose a section…', 'IX-A', 'X-B',
+    ])
+
+    fireEvent.change(screen.getByLabelText('Class'), { target: { value: 'IX' } })
+    expect(within(sectionSelect).getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'Choose a section…', 'IX-A',
+    ])
   })
 
   it('shows Subject summary rows and drills into Records on click', async () => {

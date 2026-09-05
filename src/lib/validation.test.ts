@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   required, validateAadhaar, validateFile, validateEmail, validatePhone, MAX_FILE_MB,
   validatePAN, validateIFSC, validateURL, passwordsMatch, validatePassword,
+  normalizePhoneDigits, normalizeEmailKey, isDuplicateValue,
 } from './validation'
 
 describe('required', () => {
@@ -152,5 +153,45 @@ describe('validatePassword', () => {
   it('treats empty as valid (required enforced separately)', () => {
     expect(validatePassword('')).toBeNull()
     expect(validatePassword(undefined)).toBeNull()
+  })
+})
+
+describe('normalizePhoneDigits', () => {
+  it('strips everything but digits', () => {
+    expect(normalizePhoneDigits('+91 98100-10001')).toBe('919810010001')
+  })
+  it('handles blank/undefined', () => {
+    expect(normalizePhoneDigits('')).toBe('')
+    expect(normalizePhoneDigits(undefined)).toBe('')
+  })
+})
+
+describe('normalizeEmailKey', () => {
+  it('trims and lowercases', () => {
+    expect(normalizeEmailKey('  Ravi@School.EDU  ')).toBe('ravi@school.edu')
+  })
+})
+
+describe('isDuplicateValue', () => {
+  const others = [
+    { id: 'a', value: '9810010001' },
+    { id: 'b', value: '9810010002' },
+  ]
+  it('flags a value already used by another record', () => {
+    expect(isDuplicateValue('98100 10001', others, normalizePhoneDigits)).toBe(true)
+  })
+  it('does not flag a genuinely new value', () => {
+    expect(isDuplicateValue('9810099999', others, normalizePhoneDigits)).toBe(false)
+  })
+  it('excludes the record\'s own id (editing)', () => {
+    expect(isDuplicateValue('9810010001', others, normalizePhoneDigits, 'a')).toBe(false)
+  })
+  it('never treats a blank value as a duplicate', () => {
+    expect(isDuplicateValue('', others, normalizePhoneDigits)).toBe(false)
+    expect(isDuplicateValue(undefined, others, normalizePhoneDigits)).toBe(false)
+  })
+  it('matches emails case-insensitively', () => {
+    const emails = [{ id: 'a', value: 'ravi@school.edu' }]
+    expect(isDuplicateValue('Ravi@School.EDU', emails, normalizeEmailKey)).toBe(true)
   })
 })

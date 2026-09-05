@@ -1,5 +1,6 @@
 import { request } from './client'
 import { snakeToCamel } from './mapper'
+import { attendanceCalendarDate } from './attendance'
 
 export interface TimetableSlot {
   id: string
@@ -30,6 +31,46 @@ export interface CreateTimetableSlotInput {
 export async function listTimetable(): Promise<TimetableSlot[]> {
   const wire = await request<Record<string, unknown>[] | null>('/timetable')
   return Array.isArray(wire) ? wire.map((s) => snakeToCamel<TimetableSlot>(s)) : []
+}
+
+const WEEKDAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+function isoWeekday(isoDate: string): string | null {
+  // Period-attendance rows may carry a full UTC datetime (not a bare date) — normalize to the
+  // browser-local calendar day first, same as every other attendance date comparison in this app.
+  const day = attendanceCalendarDate(isoDate)
+  return WEEKDAY_ABBR[new Date(`${day}T00:00:00`).getDay()] ?? null
+}
+
+/** Every published timetable slot for this class on this date's weekday, in period order. */
+export function timetableSlotsForClassDate(
+  slots: TimetableSlot[], classId: string, isoDate: string,
+): TimetableSlot[] {
+  const weekday = isoWeekday(isoDate)
+  if (!weekday) return []
+  return slots
+    .filter((s) =>
+      s.classId === classId
+      && typeof s.day === 'string'
+      && s.day.slice(0, 3).toLowerCase() === weekday.toLowerCase(),
+    )
+    .sort((a, b) => a.period - b.period)
+}
+
+/** The *current* published timetable slot for this class/period on this date's weekday
+ *  (e.g. "2026-09-04" -> Friday -> whatever slot.day matches "Fri"). Returns null if unscheduled
+ *  or the timetable hasn't been published for that slot. */
+export function findTimetableSlot(
+  slots: TimetableSlot[], classId: string, isoDate: string, period: number,
+): TimetableSlot | null {
+  return timetableSlotsForClassDate(slots, classId, isoDate).find((s) => s.period === period) ?? null
+}
+
+/** Just the subject from findTimetableSlot — null if unscheduled/not published. */
+export function getTimetableSubject(
+  slots: TimetableSlot[], classId: string, isoDate: string, period: number,
+): string | null {
+  return findTimetableSlot(slots, classId, isoDate, period)?.subject?.trim() || null
 }
 
 export async function createTimetableSlot(input: CreateTimetableSlotInput): Promise<TimetableSlot> {

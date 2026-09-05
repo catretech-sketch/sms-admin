@@ -231,7 +231,10 @@ export interface Student {
 /* ---- Teacher enrolment sub-records (optional, mock) ---- */
 export interface BankInfo { holder?: string; account?: string; bank?: string; ifsc?: string; branch?: string }
 export interface EmergencyInfo { person?: string; relationship?: string; phone?: string }
-export interface TransportInfo { route?: string; vehicle?: string; pickup?: string }
+export interface TransportInfo {
+  route?: string; vehicle?: string; pickup?: string
+  license?: string; licenseExpiry?: string
+}
 export interface HostelInfo { hostel?: string; room?: string }
 export interface SocialInfo { facebook?: string; instagram?: string; linkedin?: string; youtube?: string; twitter?: string }
 export interface LeaveInfo { medical?: number; casual?: number; sick?: number; maternity?: number }
@@ -311,6 +314,7 @@ export interface Teacher {
 export interface StaffDocs {
   resume?: string; joiningLetter?: string; aadhaar?: string; pan?: string
   experienceCert?: string; educationCert?: string; other?: string
+  license?: string; medicalCert?: string
 }
 
 export interface Staff {

@@ -65,6 +65,33 @@ describe('request', () => {
     expect(retryHeaders.Authorization).toBe('Bearer new')
   })
 
+  it('shares a single in-flight refresh across concurrent 401s (avoids a spurious logout)', async () => {
+    tokenStore.set({ access_token: 'old', refresh_token: 'r1' })
+    let refreshCalls = 0
+    const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes('/auth/refresh')) {
+        refreshCalls++
+        return jsonResponse({ data: { access_token: 'new', refresh_token: 'r2' } })
+      }
+      const headers = (init?.headers ?? {}) as Record<string, string>
+      if (headers.Authorization === 'Bearer new') return jsonResponse({ data: { ok: true } })
+      return jsonResponse({ error: { code: 'invalid_token', message: 'exp' } }, 401)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const [a, b] = await Promise.all([
+      request<{ ok: boolean }>('/secure-a'),
+      request<{ ok: boolean }>('/secure-b'),
+    ])
+
+    expect(a).toEqual({ ok: true })
+    expect(b).toEqual({ ok: true })
+    // A single-use rotated refresh token means a second concurrent /auth/refresh
+    // call would fail and force a spurious logout — assert it never happens.
+    expect(refreshCalls).toBe(1)
+    expect(tokenStore.getAccess()).toBe('new')
+  })
+
   it('clears tokens and fires onAuthFailure when refresh fails', async () => {
     tokenStore.set({ access_token: 'old', refresh_token: 'r1' })
     const onFail = vi.fn()

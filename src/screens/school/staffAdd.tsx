@@ -18,6 +18,7 @@ import { normalizeStaffCategory } from '@/lib/staffCategory'
 import {
   required, validateAadhaar, validatePAN, validateIFSC, validateURL,
   validateEmail, validatePhone, validateFile, passwordsMatch,
+  isDuplicateValue, normalizePhoneDigits, normalizeEmailKey,
 } from '@/lib/validation'
 import { properName, properPlace } from '@/lib/properCase'
 import { toDateInputValue } from '@/lib/dateInput'
@@ -46,7 +47,7 @@ const CONTRACT_TYPES = SEL('Permanent', 'Temporary', 'Probation', 'Fixed-term')
 const SHIFTS = SEL('Morning', 'Day', 'Evening', 'Night', 'Rotational')
 const STATUS_OPTS = [{ value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }]
 
-const REQUIRED_FIELDS = ['firstName', 'lastName', 'phone', 'role', 'category', 'department'] as const
+const REQUIRED_FIELDS = ['firstName', 'lastName', 'phone', 'email', 'role', 'category', 'department'] as const
 
 type Form = Record<string, string>
 type Files = Record<string, File | null>
@@ -65,7 +66,7 @@ const INITIAL_FORM: Form = {
   // emergency
   emPerson: '', emRelationship: '', emPhone: '',
   // transport
-  route: '', vehicle: '', pickup: '',
+  route: '', vehicle: '', pickup: '', license: '', licenseExpiry: '',
   // social
   facebook: '', instagram: '', linkedin: '', youtube: '', twitter: '',
   // login
@@ -77,6 +78,7 @@ const INITIAL_FORM: Form = {
 const INITIAL_FILES: Files = {
   staffPhoto: null, resume: null, joiningLetter: null, aadhaarDoc: null, panDoc: null,
   experienceCert: null, educationCert: null, otherDoc: null, signature: null,
+  licenseDoc: null, medicalCertDoc: null,
 }
 
 const STAFF_FILE_PICKS: Array<{ formKey: keyof typeof INITIAL_FILES; key: string; label: string }> = [
@@ -89,6 +91,8 @@ const STAFF_FILE_PICKS: Array<{ formKey: keyof typeof INITIAL_FILES; key: string
   { formKey: 'educationCert', key: 'educationCert', label: 'Education certificate' },
   { formKey: 'otherDoc', key: 'other', label: 'Other documents' },
   { formKey: 'signature', key: 'signature', label: 'Digital signature' },
+  { formKey: 'licenseDoc', key: 'license', label: 'Driving license' },
+  { formKey: 'medicalCertDoc', key: 'medicalCert', label: 'Medical certificate' },
 ]
 
 function splitName(full: string): { first: string; last: string } {
@@ -148,6 +152,8 @@ export function staffToForm(s: Staff): Form {
     route: s.transport?.route ?? s.route ?? '',
     vehicle: s.transport?.vehicle ?? '',
     pickup: s.transport?.pickup ?? '',
+    license: s.transport?.license ?? '',
+    licenseExpiry: toDateInputValue(s.transport?.licenseExpiry),
     facebook: s.social?.facebook ?? '',
     instagram: s.social?.instagram ?? '',
     linkedin: s.social?.linkedin ?? '',
@@ -224,8 +230,12 @@ function StaffFormScreen({ mode }: { mode: 'add' | 'edit' }) {
   }, [app.school.slug, rosterQ.data])
 
   useEffect(() => {
+    // Always sync (never guard on "already set") — the field is read-only, so nothing the user
+    // typed could ever be here to protect. Guarding used to stick the ID at its first guess
+    // (computed before the roster query resolves) even after the real roster loaded and the
+    // correct next number became known.
     if (mode !== 'add') return
-    setForm((prev) => (prev.staffId.trim() ? prev : { ...prev, staffId: suggestedId }))
+    setForm((prev) => (prev.staffId === suggestedId ? prev : { ...prev, staffId: suggestedId }))
   }, [mode, suggestedId])
 
   useEffect(() => {
@@ -289,10 +299,15 @@ function StaffFormScreen({ mode }: { mode: 'add' | 'edit' }) {
       const msg = required(f[key])
       if (msg) e[key] = msg
     }
+    const roster = rosterQ.data ?? []
     const checks: [string, string | null][] = [
-      ['phone', e.phone ? null : validatePhone(f.phone)],
+      ['phone', e.phone ? null : validatePhone(f.phone)
+        || (isDuplicateValue(f.phone, roster.map((s) => ({ id: s.id, value: s.phone })), normalizePhoneDigits, existing?.id)
+          ? 'Another staff member already uses this phone number' : null)],
       ['altPhone', validatePhone(f.altPhone)],
-      ['email', validateEmail(f.email)],
+      ['email', e.email ? null : validateEmail(f.email)
+        || (isDuplicateValue(f.email, roster.map((s) => ({ id: s.id, value: s.email })), normalizeEmailKey, existing?.id)
+          ? 'Another staff member already uses this email' : null)],
       ['aadhaar', validateAadhaar(f.aadhaar)],
       ['pan', validatePAN(f.pan)],
       ['ifsc', validateIFSC(f.ifsc)],
@@ -360,7 +375,10 @@ function StaffFormScreen({ mode }: { mode: 'add' | 'edit' }) {
         relationship: orU(f.emRelationship),
         phone: orU(f.emPhone),
       },
-      transport: { route: orU(f.route), vehicle: orU(f.vehicle), pickup: orU(f.pickup) },
+      transport: {
+        route: orU(f.route), vehicle: orU(f.vehicle), pickup: orU(f.pickup),
+        license: orU(f.license), licenseExpiry: orU(f.licenseExpiry),
+      },
       social: { facebook: orU(f.facebook), instagram: orU(f.instagram), linkedin: orU(f.linkedin), youtube: orU(f.youtube), twitter: orU(f.twitter) },
       documents: {
         resume: files.resume?.name || base?.documents?.resume,
@@ -370,6 +388,8 @@ function StaffFormScreen({ mode }: { mode: 'add' | 'edit' }) {
         experienceCert: files.experienceCert?.name || base?.documents?.experienceCert,
         educationCert: files.educationCert?.name || base?.documents?.educationCert,
         other: files.otherDoc?.name || base?.documents?.other,
+        license: files.licenseDoc?.name || base?.documents?.license,
+        medicalCert: files.medicalCertDoc?.name || base?.documents?.medicalCert,
       },
     }
   }
@@ -498,7 +518,7 @@ function StaffFormScreen({ mode }: { mode: 'add' | 'edit' }) {
                 <Input value={f.staffId} readOnly disabled aria-label="Staff ID" />
               </Field>
             ) : (
-              txt('staffId', 'Staff ID', { ph: suggestedId || 'scc/STF/26/0001' })
+              txt('staffId', 'Staff ID', { ph: suggestedId || 'scc/STF/26/0001', readOnly: true })
             )}
             {txt('firstName', 'First name', { required: true, icon: 'user', ph: 'Suresh', case: 'name' })}
             {txt('lastName', 'Last name', { required: true, ph: 'Naidu', case: 'name' })}
@@ -508,7 +528,7 @@ function StaffFormScreen({ mode }: { mode: 'add' | 'edit' }) {
             {sel('maritalStatus', 'Marital status', MARITAL)}
             {txt('phone', 'Primary contact number', { required: true, icon: 'phone', ph: '+91 9XXXXXXXXX' })}
             {txt('altPhone', 'Alternate contact number', { icon: 'phone' })}
-            {txt('email', 'Email address', { ph: 'staff@school.edu' })}
+            {txt('email', 'Email address', { required: true, ph: 'staff@school.edu' })}
             {txt('fatherName', "Father's name", { case: 'name' })}
             {txt('motherName', "Mother's name", { case: 'name' })}
             {txt('pan', 'PAN number', { ph: 'ABCDE1234F' })}
@@ -612,7 +632,13 @@ function StaffFormScreen({ mode }: { mode: 'add' | 'edit' }) {
             {txt('route', 'Route')}
             {txt('vehicle', 'Vehicle number')}
             {txt('pickup', 'Pickup point')}
+            {txt('license', 'Driving license number')}
+            {txt('licenseExpiry', 'License expiry', { type: 'date' })}
           </>)}</div>
+          <div className="sm-doc-grid" style={{ marginTop: 12 }}>
+            {fileUpload('licenseDoc', 'Driving license')}
+            {fileUpload('medicalCertDoc', 'Medical certificate')}
+          </div>
         </Card>
 
         {/* ---- Social ---- */}

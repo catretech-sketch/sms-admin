@@ -266,33 +266,33 @@ function SchoolDashboard() {
       {/* ---- KPI row ---- */}
       <div className="sm-kpi-grid">
         <Kpi
-          icon="users" iconBg="var(--brand-50)" iconColor="var(--brand-600)"
+          icon="users" iconBg="color-mix(in srgb, #635BFF 12%, white)" iconColor="#635BFF"
           label="Total enrollment" value={countsLoading ? '—' : fmtNum(liveStudents)}
           foot={countsLoading
             ? 'Loading roster…'
             : `${fmtNum(liveGrades)} grade${liveGrades === 1 ? '' : 's'} · ${fmtNum(peopleTotal)} staff`}
         />
         <Kpi
-          icon="check" iconBg="var(--success-bg)" iconColor="var(--success)"
+          icon="check" iconBg="color-mix(in srgb, #22C55E 12%, white)" iconColor="#22C55E"
           label="Today's attendance" value={attendancePct == null ? '—' : `${attendancePct}%`}
           delta={attLiveLabel} deltaDir="up"
           foot={studentAtt.footnote}
-          spark={attSpark.length >= 2 ? attSpark : undefined} sparkColor="var(--success)"
+          spark={attSpark.length >= 2 ? attSpark : undefined} sparkColor="#22C55E"
         />
         <Kpi
-          icon="rupee" iconBg="var(--info-bg)" iconColor="var(--info)"
+          icon="rupee" iconBg="color-mix(in srgb, #0EA5E9 12%, white)" iconColor="#0EA5E9"
           label="Fees collected today" value={feeLoading ? '—' : fmtMoney(feesToday, cur)}
           foot={feeLoading
             ? 'Loading…'
             : `Term ${fmtMoney(collectedTerm, cur)} · ${collectedPct}% of ${fmtMoney(billedTerm, cur)} billed`}
         />
         <Kpi
-          icon="wallet" iconBg="var(--warning-bg)" iconColor="var(--warning)"
+          icon="wallet" iconBg="color-mix(in srgb, #F93016 12%, white)" iconColor="#F93016"
           label="Outstanding dues" value={feeLoading ? '—' : fmtMoney(outstanding, cur)}
           foot={feeLoading ? 'Loading…' : `${fmtNum(defaulters)} student invoice(s) due / partial`}
         />
         <Kpi
-          icon="briefcase" iconBg="var(--brand-50)" iconColor="var(--brand-600)"
+          icon="briefcase" iconBg="color-mix(in srgb, #A855F7 12%, white)" iconColor="#A855F7"
           label="Teachers & staff" value={rosterLoading || !peopleMarksReady ? '—' : `${fmtNum(peoplePresent)}/${fmtNum(peopleTotal)}`}
           delta={peopleTotal ? `${peopleRate}%` : undefined} deltaDir="up"
           foot={rosterLoading || !peopleMarksReady
@@ -363,7 +363,7 @@ function SchoolDashboard() {
           <CardHead
             title="Fee collection"
             sub={feeLoading ? 'Loading…' : `Term billed ${fmtMoney(billedTerm, cur)}`}
-            icon="rupee"
+            icon="rupee" iconBg="var(--success-bg)" iconColor="var(--success)"
             action={<Btn size="sm" variant="ghost" icon="rupee" onClick={() => app.go('school.fees')}>Open fees</Btn>}
           />
           <div className="row ai-center jc-between gap16 wrap" style={{ marginTop: 12 }}>
@@ -419,7 +419,7 @@ function SchoolDashboard() {
       {/* ---- Composition: stages · gender · results ---- */}
       <div className="sm-grid-3">
         <Card>
-          <CardHead title="Enrolment by stage" icon="layers" />
+          <CardHead title="Enrolment by stage" icon="layers" iconBg="var(--info-bg)" iconColor="var(--info)" />
           {countsLoading ? (
             <Empty icon="layers" title="Loading enrolment…" body="Counting students by grade." />
           ) : liveStudents === 0 || stageSlices.every((st) => st.value === 0) ? (
@@ -445,7 +445,7 @@ function SchoolDashboard() {
         </Card>
 
         <Card>
-          <CardHead title="Gender ratio" icon="users" />
+          <CardHead title="Gender ratio" icon="users" iconBg="var(--platinum-bg)" iconColor="var(--platinum)" />
           {countsLoading ? (
             <Empty icon="users" title="Loading gender…" body="Counting recorded student gender." />
           ) : liveStudents === 0 ? (
@@ -481,7 +481,7 @@ function SchoolDashboard() {
           <CardHead
             title="Result distribution"
             sub={examBandsQ.data?.examName ? examBandsQ.data.examName : 'Latest exam · saved grades'}
-            icon="cap"
+            icon="cap" iconBg="var(--gold-bg)" iconColor="var(--gold)"
           />
           <div style={{ marginTop: 12 }}>
             {examBandsQ.isLoading ? (
@@ -509,7 +509,7 @@ function SchoolDashboard() {
           <CardHead
             title="Live activity"
             sub="Fees · attendance · staff"
-            icon="zap"
+            icon="zap" iconBg="var(--warning-bg)" iconColor="var(--warning)"
             action={<Badge tone="success" dot>Live</Badge>}
           />
           <div className="col gap12" style={{ marginTop: 12 }}>
@@ -529,7 +529,7 @@ function SchoolDashboard() {
           <CardHead
             title="Announcements"
             sub="School-wide notices"
-            icon="bell"
+            icon="bell" iconBg="var(--danger-bg)" iconColor="var(--danger)"
             action={<Btn size="sm" variant="ghost" onClick={() => app.go('school.comm')}>View all</Btn>}
           />
           <div className="col gap12" style={{ marginTop: 12 }}>
@@ -557,25 +557,30 @@ function PeopleCard({ icon, tone, label, count, sub, rate, present, total, foot,
   rate: number; present: number; total: number; foot?: string; loading?: boolean; onClick: () => void
 }) {
   return (
-    <Card hover onClick={onClick}>
+    <Card hover onClick={onClick} style={{
+      border: `1px solid color-mix(in srgb, ${tone} 90%, var(--border))`,
+      borderLeft: '3px solid rgba(255,255,255,.55)',
+      background: `color-mix(in srgb, ${tone} 90%, var(--surface))`,
+      color: '#fff',
+    }}>
       <div className="row ai-center jc-between">
         <div className="row ai-center gap12">
-          <span className="sm-kpi-ic" style={{ background: 'color-mix(in srgb, ' + tone + ' 14%, transparent)', color: tone, marginBottom: 0 }}>
+          <span className="sm-kpi-ic" style={{ background: 'rgba(255,255,255,.22)', color: '#fff', marginBottom: 0, boxShadow: 'none' }}>
             <Icon name={icon} size={18} />
           </span>
           <div>
-            <div className="sm-kpi-val" style={{ fontSize: 24 }}>{fmtNum(count)}</div>
-            <div className="sm-kpi-label">{label}</div>
+            <div className="sm-kpi-val" style={{ fontSize: 24, color: '#fff' }}>{fmtNum(count)}</div>
+            <div className="sm-kpi-label" style={{ color: '#fff' }}>{label}</div>
           </div>
         </div>
-        <Icon name="chevRight" size={18} style={{ color: 'var(--text-3)' }} />
+        <Icon name="chevRight" size={18} style={{ color: 'rgba(255,255,255,.7)' }} />
       </div>
-      <div className="t-sm muted" style={{ marginTop: 10 }}>{sub}</div>
+      <div className="t-sm" style={{ marginTop: 10, color: 'rgba(255,255,255,.85)' }}>{sub}</div>
       <div className="row ai-center gap8" style={{ marginTop: 10 }}>
-        <div className="sm-meter" style={{ flex: 1, width: 'auto' }}>
-          <span style={{ width: `${loading ? 0 : rate}%`, background: tone }} />
+        <div className="sm-meter" style={{ flex: 1, width: 'auto', background: 'rgba(255,255,255,.28)' }}>
+          <span style={{ width: `${loading ? 0 : rate}%`, background: '#fff' }} />
         </div>
-        <span className="t-xs muted3" style={{ whiteSpace: 'nowrap' }}>
+        <span className="t-xs" style={{ whiteSpace: 'nowrap', color: 'rgba(255,255,255,.78)' }}>
           {loading ? 'Loading…' : (foot ?? `${fmtNum(present)} of ${fmtNum(total)} present`)}
         </span>
       </div>
@@ -717,10 +722,24 @@ function ApprovalCard({
   )
 }
 
+type RequesterCategory = 'all' | 'student' | 'teacher' | 'staff' | 'admin'
+
+/** Buckets an approval's free-text requester role into Student / Teacher / Staff / Admin.
+ *  A parent submitting on a student's behalf counts as "student". Principal and vice
+ *  principal count as "admin" (school management), not plain "staff". */
+function requesterCategory(role: string): Exclude<RequesterCategory, 'all'> {
+  const r = role.toLowerCase()
+  if (r.includes('student') || r.includes('parent')) return 'student'
+  if (r.includes('teacher')) return 'teacher'
+  if (r.includes('admin') || r.includes('principal')) return 'admin'
+  return 'staff'
+}
+
 function ApprovalsInbox() {
   const app = useApp()
   const toast = useToast()
   const [tab, setTab] = useState<ApprovalFilter>('pending')
+  const [category, setCategory] = useState<RequesterCategory>('all')
   const [acted, setActed] = useState<Set<string>>(new Set())
   const [rejecting, setRejecting] = useState<Approval | null>(null)
   const [rejectNote, setRejectNote] = useState('')
@@ -728,7 +747,10 @@ function ApprovalsInbox() {
   const actOn = useActOnApproval()
 
   const { data: approvalsData, isLoading } = useApprovals({ status: tab })
-  const list = inboxApprovals(approvalsData ?? [], app.role, tab, acted)
+  const scopedList = inboxApprovals(approvalsData ?? [], app.role, tab, acted)
+  const list = category === 'all'
+    ? scopedList
+    : scopedList.filter((a) => requesterCategory(a.role) === category)
   const meta = TAB_META[tab]
 
   const approve = (a: Approval) => {
@@ -794,8 +816,22 @@ function ApprovalsInbox() {
         ]}
       />
 
+      <Segmented
+        value={category}
+        onChange={(v) => setCategory(v as RequesterCategory)}
+        options={[
+          { value: 'all', label: 'All requesters' },
+          { value: 'student', label: 'Student' },
+          { value: 'teacher', label: 'Teacher' },
+          { value: 'staff', label: 'Staff' },
+          { value: 'admin', label: 'Admin' },
+        ]}
+      />
+
       {isLoading ? (
         <Empty icon="inbox" title="Loading…" body="Fetching approval records." />
+      ) : list.length === 0 && category !== 'all' && scopedList.length > 0 ? (
+        <Empty icon="checkCircle" title="No matching requests" body={`No ${category} requests in this list.`} />
       ) : list.length === 0 ? (
         <Empty icon="checkCircle" title={meta.emptyTitle} body={meta.emptyBody} />
       ) : (

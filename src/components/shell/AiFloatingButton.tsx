@@ -76,8 +76,8 @@ export function AiFloatingButton() {
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
-  if (app.consoleKind !== 'school') return null
-  if (app.school.status !== 'active' && !app.isPlatform) return null
+  if (app.consoleKind !== 'school' && app.consoleKind !== 'owner') return null
+  if (app.consoleKind === 'school' && app.school.status !== 'active' && !app.isPlatform) return null
 
   const handlePointerDown = (e: ReactPointerEvent<HTMLButtonElement>) => {
     if (!position) return
@@ -142,7 +142,7 @@ export function AiFloatingButton() {
   return (
     <>
       <button
-        className={['sm-ai-fab', dragging && 'is-dragging'].filter(Boolean).join(' ')}
+        className={['sm-ai-fab', dragging && 'is-dragging', open && 'is-open'].filter(Boolean).join(' ')}
         style={fabStyle}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -155,7 +155,9 @@ export function AiFloatingButton() {
       </button>
       {open && (
         <div className="sm-ai-panel" style={panelStyle}>
-          {tierIncludes(app.plan, 'ai_search') ? (
+          {/* Owner console isn't scoped to one school's plan — the owner always gets
+              live AI. Inside a school, access is bound to that school's own plan. */}
+          {app.consoleKind === 'owner' || tierIncludes(app.plan, 'ai_search') ? (
             <AiSearchScreen role={app.role} userName={app.user?.name} />
           ) : (
             // TierGate mounts its children inside an aria-hidden blur div (never omits them), so

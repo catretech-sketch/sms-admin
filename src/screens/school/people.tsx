@@ -10,7 +10,7 @@ import { can } from '@/lib/gating'
 import { TierGate } from '@/components/shell/gates'
 import {
   PageHead, Card, CardHead, Btn, Badge, Avatar, Search, Select,
-  Drawer, Icon, Empty, Progress, DataTable, Spinner,
+  Drawer, Icon, Empty, Progress, DataTable, Spinner, Modal,
   type Column, type BadgeTone,
 } from '@/components/ui'
 import { depts } from '@/data/mockDb'
@@ -20,6 +20,7 @@ import type { Teacher, Staff, Role } from '@/types'
 import { useTeachers } from '@/api/hooks/useTeachers'
 import { normalizeSubjects } from '@/api/teachers'
 import { useStaff } from '@/api/hooks/useStaff'
+import { useTransportBuses } from '@/api/hooks/useOperations'
 import { useStudents } from '@/api/hooks/useStudents'
 import { studentParentLabel, parentMailFromStudent } from '@/api/students'
 import {
@@ -28,7 +29,8 @@ import {
 import { fetchTeacherExtras } from '@/api/teacherExtras'
 import { fetchStaffExtras } from '@/api/staffExtras'
 import { openMailCompose } from '@/lib/composeMail'
-import { useLeadershipRoleByEmail, useSchoolUserByEmail } from '@/api/hooks/useUsers'
+import { useLeadershipRoleByEmail, useSchoolUserByEmail, useAccountByEmail } from '@/api/hooks/useUsers'
+import { fromApiRole, type SchoolUserDto } from '@/api/users'
 import { useSetUserActive } from '@/api/hooks/useUserMutations'
 
 /* ---------- shared helpers ---------- */
@@ -129,11 +131,45 @@ function PeopleDocsList({
 
 const CAN_MANAGE_ACCESS: Role[] = ['owner', 'admin', 'principal', 'vice_principal']
 
+/** True when the linked account itself holds CRM/leadership access (Owner, Admin or
+ *  Principal — e.g. the same email was also separately invited via Identity & access).
+ *  That access is a different, separately-managed thing from a Teacher/Staff row's app
+ *  login, so Suspend from People never touches it — it stays out of scope here and is
+ *  only ever paused/removed from Identity & access → Users. */
+function hasCrmAccess(account: SchoolUserDto): boolean {
+  return account.roles.some((r) => {
+    const role = fromApiRole(r)
+    return role === 'owner' || role === 'admin' || role === 'principal'
+  })
+}
+
+/** Second step for Suspend — signing someone out of the app is disruptive enough that a
+ *  stray click shouldn't do it, so Suspend always confirms first. Unsuspend restores
+ *  access and stays a single click. */
+function SuspendConfirmModal({ name, busy, onCancel, onConfirm }: { name: string; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <Modal
+      open
+      icon="lock"
+      title="Suspend app access"
+      sub={`${name} won't be able to sign in until you unsuspend them. This doesn't remove their profile.`}
+      onClose={() => { if (!busy) onCancel() }}
+      footer={
+        <div className="row gap8 jc-end">
+          <Btn variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Btn>
+          <Btn variant="danger" icon="lock" onClick={onConfirm} disabled={busy}>{busy ? 'Suspending…' : 'Suspend'}</Btn>
+        </div>
+      }
+    />
+  )
+}
+
 function AccessCard({ email, name }: { email: string | undefined; name: string }) {
   const app = useApp()
   const toast = useToast()
   const account = useSchoolUserByEmail(email)
   const setActive = useSetUserActive()
+  const [confirming, setConfirming] = useState(false)
 
   if (!CAN_MANAGE_ACCESS.includes(app.role)) return null
 
@@ -147,14 +183,17 @@ function AccessCard({ email, name }: { email: string | undefined; name: string }
   }
 
   const pending = account.status !== 'active' && account.status !== 'inactive'
-  const isOwnerAccount = account.roles.includes('school.owner')
+  const crmAccess = hasCrmAccess(account)
   const suspended = account.status === 'inactive'
-  const toggle = () => {
+  const apply = () => {
     setActive.mutate({ userId: account.id, active: suspended }, {
-      onSuccess: () => toast.success(
-        suspended ? 'Access restored' : 'Account suspended',
-        `${name} ${suspended ? 'can sign in again' : 'can no longer sign in'}.`,
-      ),
+      onSuccess: () => {
+        toast.success(
+          suspended ? 'Access restored' : 'Account suspended',
+          `${name} ${suspended ? 'can sign in again' : 'can no longer sign in'}.`,
+        )
+        setConfirming(false)
+      },
       onError: (err) => toast.danger('Could not update access', err instanceof Error ? err.message : 'Try again.'),
     })
   }
@@ -168,19 +207,70 @@ function AccessCard({ email, name }: { email: string | undefined; name: string }
         ) : (
           <Badge tone={suspended ? 'danger' : 'success'}>{suspended ? 'Suspended' : 'Active'}</Badge>
         )}
-        {!pending && !isOwnerAccount && (
+        {!pending && !crmAccess && (
           <Btn
             variant="secondary"
             size="sm"
             icon={suspended ? 'checkCircle' : 'lock'}
-            onClick={toggle}
+            onClick={() => (suspended ? apply() : setConfirming(true))}
             disabled={setActive.isPending}
           >
             {setActive.isPending ? 'Saving…' : suspended ? 'Unsuspend' : 'Suspend'}
           </Btn>
         )}
       </div>
+      {!pending && crmAccess && (
+        <div className="t-xs muted" style={{ marginTop: 8 }}>Also has CRM access — manage that in Identity & access → Users.</div>
+      )}
+      {confirming && (
+        <SuspendConfirmModal name={name} busy={setActive.isPending} onCancel={() => setConfirming(false)} onConfirm={apply} />
+      )}
     </Card>
+  )
+}
+
+/** Suspend/Unsuspend action for a list row — mirrors AccessCard's logic but takes the
+ *  account directly (looked up once per screen via useAccountByEmail) so DataTable rows
+ *  don't each run their own useSchoolUserByEmail query. Suspend still confirms first. */
+function SuspendAction({ account, name, canManage }: { account: SchoolUserDto | undefined; name: string; canManage: boolean }) {
+  const toast = useToast()
+  const setActive = useSetUserActive()
+  const [confirming, setConfirming] = useState(false)
+  if (!canManage || !account) return null
+  const pending = account.status !== 'active' && account.status !== 'inactive'
+  if (pending || hasCrmAccess(account)) return null
+  const suspended = account.status === 'inactive'
+  const apply = () => {
+    setActive.mutate({ userId: account.id, active: suspended }, {
+      onSuccess: () => {
+        toast.success(
+          suspended ? 'Access restored' : 'Account suspended',
+          `${name} ${suspended ? 'can sign in again' : 'can no longer sign in'}.`,
+        )
+        setConfirming(false)
+      },
+      onError: (err) => toast.danger('Could not update access', err instanceof Error ? err.message : 'Try again.'),
+    })
+  }
+  return (
+    <>
+      <Btn
+        variant="secondary"
+        size="sm"
+        icon={suspended ? 'checkCircle' : 'lock'}
+        disabled={setActive.isPending}
+        onClick={(e) => {
+          e.stopPropagation()
+          if (suspended) apply()
+          else setConfirming(true)
+        }}
+      >
+        {setActive.isPending ? 'Saving…' : suspended ? 'Unsuspend' : 'Suspend'}
+      </Btn>
+      {confirming && (
+        <SuspendConfirmModal name={name} busy={setActive.isPending} onCancel={() => setConfirming(false)} onConfirm={apply} />
+      )}
+    </>
   )
 }
 
@@ -263,6 +353,58 @@ function TeacherProfile({ teacher, onClose, onMessage }: { teacher: Teacher | nu
   )
 }
 
+function licenseExpiryTone(expiry?: string): BadgeTone | null {
+  if (!expiry) return null
+  const days = (new Date(expiry).getTime() - Date.now()) / 86_400_000
+  if (Number.isNaN(days)) return null
+  if (days < 0) return 'danger'
+  if (days <= 30) return 'warning'
+  return null
+}
+
+function DriverSection({ staff }: { staff: Staff }) {
+  const [transport, setTransport] = useState(staff.transport)
+  const busesQ = useTransportBuses()
+
+  useEffect(() => {
+    let cancelled = false
+    void fetchStaffExtras(staff.id)
+      .then((ex) => { if (!cancelled && ex?.transport) setTransport(ex.transport) })
+      .catch(() => { /* keep whatever roster already had */ })
+    return () => { cancelled = true }
+  }, [staff.id])
+
+  const buses = busesQ.data ?? []
+  const drivingBus = buses.find((b) => b.driverStaffId === staff.id)
+  const conductingBus = buses.find((b) => b.conductorStaffId === staff.id)
+  const expiryTone = licenseExpiryTone(transport?.licenseExpiry)
+
+  if (!transport?.license && !drivingBus && !conductingBus) return null
+
+  return (
+    <Card>
+      <CardHead title="Driver" icon="bus" />
+      <div className="col gap12" style={{ marginTop: 4 }}>
+        {transport?.license && <StatRow label="License number" value={transport.license} />}
+        {transport?.licenseExpiry && (
+          <StatRow
+            label="License expiry"
+            value={
+              <span className="row ai-center gap6">
+                {new Date(transport.licenseExpiry).toLocaleDateString('en-IN')}
+                {expiryTone && <Badge tone={expiryTone} soft>{expiryTone === 'danger' ? 'Expired' : 'Expiring soon'}</Badge>}
+              </span>
+            }
+          />
+        )}
+        <StatRow label="Assigned bus" value={drivingBus ? drivingBus.busNo : '—'} />
+        <StatRow label="Assigned route" value={drivingBus?.routeName ?? '—'} />
+        <StatRow label="Conductor on" value={conductingBus ? conductingBus.busNo : '—'} />
+      </div>
+    </Card>
+  )
+}
+
 function StaffProfile({ staff, onClose, onMessage }: { staff: Staff | null; onClose: () => void; onMessage: (s: Staff) => void }) {
   const app = useApp()
   const toast = useToast()
@@ -297,6 +439,7 @@ function StaffProfile({ staff, onClose, onMessage }: { staff: Staff | null; onCl
             <StatRow label="Status" value={<Badge tone={statusTone(staff.status)}>{statusLabel(staff.status)}</Badge>} />
           </div>
         </Card>
+        <DriverSection staff={staff} />
         <AccessCard email={staff.email} name={staff.name} />
         <Card>
           <CardHead title="Photo & documents" sub="Stored on this device" icon="doc" />
@@ -324,6 +467,8 @@ function TeachersScreen() {
   const teachersQ = useTeachers()
   const teachers = teachersQ.data ?? []
   const leadershipByEmail = useLeadershipRoleByEmail()
+  const accountByEmail = useAccountByEmail()
+  const canManageAccess = CAN_MANAGE_ACCESS.includes(app.role)
 
   const message = (t: Teacher) => {
     const email = (t.email || '').trim()
@@ -431,7 +576,10 @@ function TeachersScreen() {
     {
       key: 'actions', label: '', align: 'right',
       render: (t) => (
-        <Btn variant="secondary" size="sm" icon="message" onClick={(e) => { e.stopPropagation(); message(t) }}>Message</Btn>
+        <div className="row ai-center gap6 jc-end">
+          <SuspendAction account={accountByEmail.get(t.email.trim().toLowerCase())} name={t.name} canManage={canManageAccess} />
+          <Btn variant="secondary" size="sm" icon="message" onClick={(e) => { e.stopPropagation(); message(t) }}>Message</Btn>
+        </div>
       ),
     },
   ]
@@ -524,6 +672,8 @@ function StaffRoster() {
   const staffQ = useStaff()
   const roster = staffQ.data ?? []
   const leadershipByEmail = useLeadershipRoleByEmail()
+  const accountByEmail = useAccountByEmail()
+  const canManageAccess = CAN_MANAGE_ACCESS.includes(app.role)
 
   const message = (s: Staff) => {
     const email = (s.email || '').trim()
@@ -618,7 +768,10 @@ function StaffRoster() {
     {
       key: 'actions', label: '', align: 'right',
       render: (s) => (
-        <Btn variant="secondary" size="sm" icon="message" onClick={(e) => { e.stopPropagation(); message(s) }}>Message</Btn>
+        <div className="row ai-center gap6 jc-end">
+          <SuspendAction account={accountByEmail.get((s.email ?? '').trim().toLowerCase())} name={s.name} canManage={canManageAccess} />
+          <Btn variant="secondary" size="sm" icon="message" onClick={(e) => { e.stopPropagation(); message(s) }}>Message</Btn>
+        </div>
       ),
     },
   ]

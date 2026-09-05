@@ -83,14 +83,14 @@ describe('AiFloatingButton', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /AI Mode/i })).toBeInTheDocument())
   })
 
-  it('does not render in the owner console', async () => {
-    const fetchMock = renderButton({ tier: 'platinum', isPlatform: true })
-    // Confirm session restore actually progressed (the owner console never fetches /me/schools,
-    // so /auth/me completing is the real signal that consoleKind has settled) before asserting absence.
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining('/auth/me'), expect.anything(),
-    ))
-    expect(screen.queryByRole('button', { name: /AI Mode/i })).not.toBeInTheDocument()
+  it('renders in the owner console with live AI access, regardless of any school plan', async () => {
+    // Owner console isn't tied to one school's plan — pass a non-Platinum tier to prove
+    // the owner still gets the live assistant, not the upgrade veil.
+    renderButton({ tier: 'gold', isPlatform: true })
+    await waitFor(() => expect(screen.getByRole('button', { name: /AI Mode/i })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /AI Mode/i }))
+    await waitFor(() => expect(screen.getByText(/Ask a question about your school/i)).toBeInTheDocument())
+    expect(screen.queryByText(/Upgrade to Platinum/i)).not.toBeInTheDocument()
   })
 
   it('does not render when the school is pending activation', async () => {

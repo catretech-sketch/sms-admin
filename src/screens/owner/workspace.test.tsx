@@ -30,6 +30,7 @@ vi.mock('@/api/users', async (importOriginal) => {
     ]),
     setUserRoles: vi.fn().mockResolvedValue({ id: 'U-1', email: 'neha@school.edu', phone: null, status: 'active', created_at: '2026-07-01T00:00:00Z', roles: ['school.admin'] }),
     getUserPermissions: vi.fn().mockResolvedValue([]),
+    removeUserAccess: vi.fn().mockResolvedValue(undefined),
   }
 })
 
@@ -132,6 +133,29 @@ describe('TeamTab — real data', () => {
     // it read-only (Badge), never a <select> that would default to a CRM role like Admin.
     expect(rowScope.queryByRole('combobox')).toBeNull()
     expect(rowScope.getAllByText('Teacher').length).toBeGreaterThan(0)
+  })
+
+  it('remove access requires 2 steps: Continue, then typing the exact name', async () => {
+    const { removeUserAccess } = await import('@/api/users')
+    const { container } = renderScreen()
+    const picker = await waitFor(() => within(container).getByLabelText(/select school/i))
+    fireEvent.change(picker, { target: { value: '11111111-1111-1111-1111-111111111111' } })
+    await waitFor(() => within(container).getByText('neha@school.edu'))
+    fireEvent.click(within(container).getByRole('button', { name: /remove/i }))
+
+    // Step 1: Continue, no destructive action yet.
+    expect(within(container).getByText('Remove access')).toBeInTheDocument()
+    expect(within(container).queryByRole('button', { name: /remove access/i })).not.toBeInTheDocument()
+    fireEvent.click(within(container).getByRole('button', { name: /continue/i }))
+
+    // Step 2: disabled until the exact name is typed.
+    const confirmBtn = within(container).getByRole('button', { name: /remove access/i })
+    expect(confirmBtn).toBeDisabled()
+    const input = within(container).getByPlaceholderText('neha') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'neha' } })
+    expect(confirmBtn).toBeEnabled()
+    fireEvent.click(confirmBtn)
+    await waitFor(() => expect(removeUserAccess).toHaveBeenCalledWith('U-1'))
   })
 })
 

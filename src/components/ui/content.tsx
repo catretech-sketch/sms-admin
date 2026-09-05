@@ -16,11 +16,13 @@ export function Card({ pad = true, hover, className, style, children, onClick }:
   )
 }
 
-export function CardHead({ title, sub, icon, action }: { title: ReactNode; sub?: ReactNode; icon?: string; action?: ReactNode }) {
+export function CardHead({ title, sub, icon, iconBg, iconColor, action }: {
+  title: ReactNode; sub?: ReactNode; icon?: string; iconBg?: string; iconColor?: string; action?: ReactNode
+}) {
   return (
     <div className="sm-card-head">
       <div className="row ai-center gap12">
-        {icon && <span className="sm-card-ic"><Icon name={icon} size={16} /></span>}
+        {icon && <span className="sm-card-ic" style={{ background: iconBg, color: iconColor }}><Icon name={icon} size={16} /></span>}
         <div>
           <div className="sm-card-title">{title}</div>
           {sub && <div className="sm-card-sub">{sub}</div>}
@@ -47,7 +49,7 @@ export function Kpi({ icon, iconBg, iconColor, label, value, delta, deltaDir, fo
   delta?: ReactNode; deltaDir?: 'up' | 'down'; foot?: ReactNode; spark?: number[]; sparkColor?: string
 }) {
   return (
-    <div className="sm-kpi">
+    <div className="sm-kpi" style={iconColor ? ({ '--kpi-accent': iconColor } as CSSProperties) : undefined}>
       <div className="row ai-center jc-between">
         <span className="sm-kpi-ic" style={{ background: iconBg, color: iconColor }}><Icon name={icon} size={18} /></span>
         {delta != null && (

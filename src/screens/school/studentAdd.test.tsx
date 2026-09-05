@@ -68,10 +68,13 @@ const probe = () => screen.getByTestId('probe').textContent ?? ''
 /* Fill everything except Class (a live-data picker selected separately once its
    options have loaded). Class + Section are now one combined "Class" selector. */
 function fillRequired() {
-  fireEvent.change(within(screen.getByText('Admission number').closest('.sm-field') as HTMLElement).getByRole('textbox'), { target: { value: 'ADM2026999' } })
+  // Admission number is auto-generated and read-only — not set here (see the dedicated test below).
   fireEvent.change(within(screen.getByText('First name').closest('.sm-field') as HTMLElement).getByRole('textbox'), { target: { value: 'Test' } })
   fireEvent.change(within(screen.getByText('Last name').closest('.sm-field') as HTMLElement).getByRole('textbox'), { target: { value: 'Student' } })
-  fireEvent.change(within(screen.getByText('Primary contact number').closest('.sm-field') as HTMLElement).getByRole('textbox'), { target: { value: '9876543210' } })
+  // Deliberately different from STUDENT_ROW's guardian_phone (an existing roster row in these
+  // tests) — phone numbers must now be unique across students, so reusing it would be rejected.
+  fireEvent.change(within(screen.getByText('Primary contact number').closest('.sm-field') as HTMLElement).getByRole('textbox'), { target: { value: '9998887770' } })
+  fireEvent.change(within(screen.getByText('Email address').closest('.sm-field') as HTMLElement).getByRole('textbox'), { target: { value: 'test.student@school.edu' } })
   fireEvent.change(within(screen.getByText('Father name').closest('.sm-field') as HTMLElement).getByRole('textbox'), { target: { value: 'Test Father' } })
   fireEvent.change(within(screen.getByText('Gender').closest('.sm-field') as HTMLElement).getByRole('combobox'), { target: { value: 'M' } })
   const dob = (screen.getByText('Date of birth').closest('.sm-field') as HTMLElement).querySelector('input') as HTMLInputElement
@@ -99,6 +102,12 @@ describe('Add Student form', () => {
     expect(screen.getAllByText('This field is required').length).toBeGreaterThan(0)
   })
 
+  it('shows the auto-generated admission number as read-only', () => {
+    renderForm()
+    const input = within(screen.getByText('Admission number').closest('.sm-field') as HTMLElement).getByRole('textbox')
+    expect(input).toHaveAttribute('readonly')
+  })
+
   it('rejects a malformed Aadhaar number', () => {
     vi.stubGlobal('fetch', makeFetch())
     renderForm()
@@ -106,6 +115,30 @@ describe('Add Student form', () => {
     fireEvent.change(within(screen.getByText('Aadhaar number').closest('.sm-field') as HTMLElement).getByRole('textbox'), { target: { value: '123' } })
     fireEvent.click(screen.getByText('Save student'))
     expect(screen.getByText('Aadhaar must be exactly 12 digits')).toBeInTheDocument()
+    vi.unstubAllGlobals()
+  })
+
+  it('auto-increments the admission number past the highest existing code for this school', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: unknown, init?: { method?: string }) => {
+      const u = String(url)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (u.includes('/classes')) {
+        return Promise.resolve(jsonResponse({
+          data: [{ id: 'c1', name: 'VIII-A', grade: 'VIII', section: 'A', room: null, class_teacher_id: null, student_count: 0 }],
+          next_cursor: null,
+        }))
+      }
+      if (u.includes('/students') && method === 'GET') {
+        return Promise.resolve(jsonResponse({
+          data: [{ ...STUDENT_ROW, admission_no: 'sch/STU/26/0006' }],
+          next_cursor: null,
+        }))
+      }
+      return Promise.resolve(jsonResponse({ data: STUDENT_ROW }))
+    }))
+    renderForm()
+    const input = within(screen.getByText('Admission number').closest('.sm-field') as HTMLElement).getByRole('textbox')
+    await waitFor(() => expect(input).toHaveValue('sch/STU/26/0007'))
     vi.unstubAllGlobals()
   })
 
