@@ -49,8 +49,11 @@ export function Breadcrumb({ items }: { items: Crumb[] }) {
   )
 }
 
-/* Popover — click trigger to toggle a floating panel, closes on outside click */
-export function Popover({ trigger, children, align = 'right' }: { trigger: (open: boolean, toggle: () => void) => ReactNode; children: ReactNode; align?: 'left' | 'right' }) {
+/* Popover — click trigger to toggle a floating panel, closes on outside click.
+   `role` is opt-in (e.g. "menu") for consumers whose panel content is a list of
+   actionable MenuItems; omit it for panels holding non-interactive content
+   (e.g. a notifications list) where an ARIA menu role would be incorrect. */
+export function Popover({ trigger, children, align = 'right', role }: { trigger: (open: boolean, toggle: () => void) => ReactNode; children: ReactNode; align?: 'left' | 'right'; role?: string }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -62,7 +65,7 @@ export function Popover({ trigger, children, align = 'right' }: { trigger: (open
   return (
     <div className="sm-pop-wrap" ref={ref}>
       {trigger(open, () => setOpen((o) => !o))}
-      {open && <div className={`sm-pop sm-pop-${align}`} onClick={() => setOpen(false)}>{children}</div>}
+      {open && <div className={`sm-pop sm-pop-${align}`} role={role} onClick={() => setOpen(false)}>{children}</div>}
     </div>
   )
 }

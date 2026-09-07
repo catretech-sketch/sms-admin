@@ -452,14 +452,13 @@ function StudentsScreen() {
         actions={editable ? (
           <>
             <Popover
+              role="menu"
               trigger={(_open, toggle) => (
                 <Btn variant="primary" icon="plus" onClick={toggle}>Add student</Btn>
               )}
             >
-              <div role="menu">
-                <MenuItem icon="user" onClick={() => app.go('school.sis.add')}>Add Single Student</MenuItem>
-                <MenuItem icon="upload" onClick={() => setImportOpen(true)}>Bulk Add Students</MenuItem>
-              </div>
+              <MenuItem icon="user" onClick={() => app.go('school.sis.add')}>Add Single Student</MenuItem>
+              <MenuItem icon="upload" onClick={() => setImportOpen(true)}>Bulk Add Students</MenuItem>
             </Popover>
             <Btn variant="secondary" icon="arrowRight" onClick={() => toast.info('Promote class', 'Open the year-end promotion wizard to advance students.')}>Promote class</Btn>
           </>

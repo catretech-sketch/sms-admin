@@ -34,7 +34,7 @@ export function Topbar() {
       )}
 
       {!isOwner && (
-        <Popover align="left" trigger={(_open, toggle) => (
+        <Popover align="left" role="menu" trigger={(_open, toggle) => (
           <button className="sm-school-switch" onClick={toggle}>
             <SchoolMark school={app.school} size={28} />
             <span className="fw6 t-sm" style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{app.school.name}</span>
@@ -63,7 +63,7 @@ export function Topbar() {
 
       <div className="sm-topbar-spacer" />
 
-      <Popover trigger={(open, toggle) => <IconBtn icon="globe" active={open} onClick={toggle} aria-label="Language" />}>
+      <Popover role="menu" trigger={(open, toggle) => <IconBtn icon="globe" active={open} onClick={toggle} aria-label="Language" />}>
         <MenuLabel>Language</MenuLabel>
         {LANGS.map((l) => <MenuItem key={l.v} icon={app.lang === l.v ? 'check' : undefined} onClick={() => app.setLang(l.v)}>{l.l}</MenuItem>)}
       </Popover>
@@ -104,7 +104,7 @@ export function Topbar() {
         </div>
       </Popover>
 
-      <Popover trigger={(_open, toggle) => (
+      <Popover role="menu" trigger={(_open, toggle) => (
         <button className="row ai-center gap8" style={{ border: 'none', background: 'none', cursor: 'pointer' }} onClick={toggle}>
           <Avatar name={app.user?.name} hue={app.user?.hue} size={32} />
           <div style={{ textAlign: 'left' }} className="only-desktop">
