@@ -60,3 +60,28 @@ describe('createFeeHead errors', () => {
     await expect(createFeeHead({ name: 'X' })).rejects.toBeInstanceOf(ApiError)
   })
 })
+
+describe('isTransportFeeHead field', () => {
+  it('sends isTransportFeeHead on create and reads it back on list', async () => {
+    const fetchMock = vi.fn()
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/fees/heads') && (!init?.method || init.method === 'GET')) {
+        return jsonResponse({
+          data: [{ id: '1', name: 'Transport', code: null, active: true, is_system: false, is_transport_fee_head: true }],
+          next_cursor: null,
+        })
+      }
+      return jsonResponse({
+        data: { id: '1', name: 'Transport', code: null, active: true, is_system: false, is_transport_fee_head: true },
+      }, 201)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const created = await createFeeHead({ name: 'Transport', isTransportFeeHead: true })
+    expect(created.isTransportFeeHead).toBe(true)
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toMatchObject({ is_transport_fee_head: true })
+
+    const list = await listFeeHeads()
+    expect(list[0].isTransportFeeHead).toBe(true)
+  })
+})

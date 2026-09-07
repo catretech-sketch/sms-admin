@@ -7,15 +7,15 @@ export function useFeeHeads(): UseQueryResult<FeeHead[]> {
   return useQuery({ queryKey: queryKeys.feeHeads.all, queryFn: () => listFeeHeads() })
 }
 
-export function useCreateFeeHead(): UseMutationResult<FeeHead, Error, { name: string; code?: string }> {
+export function useCreateFeeHead(): UseMutationResult<FeeHead, Error, { name: string; code?: string; isTransportFeeHead?: boolean }> {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (input: { name: string; code?: string }) => createFeeHead(input),
+    mutationFn: (input: { name: string; code?: string; isTransportFeeHead?: boolean }) => createFeeHead(input),
     onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.feeHeads.all }) },
   })
 }
 
-export function useUpdateFeeHead(): UseMutationResult<FeeHead, Error, { id: string; patch: Partial<Pick<FeeHead, 'name' | 'code' | 'active'>> }> {
+export function useUpdateFeeHead(): UseMutationResult<FeeHead, Error, { id: string; patch: Partial<Pick<FeeHead, 'name' | 'code' | 'active' | 'isTransportFeeHead'>> }> {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ id, patch }) => updateFeeHead(id, patch),

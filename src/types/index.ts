@@ -27,6 +27,7 @@ export interface FeeHead {
   code?: string
   active: boolean
   isSystem?: boolean
+  isTransportFeeHead?: boolean
 }
 
 export interface FeeInvoiceLine {
