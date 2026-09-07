@@ -40,10 +40,12 @@ export {
   listRouteStops, listBusStudents, assignStudentToBus, unassignStudentFromBus,
   updateBusLocation, sendBusNotification, startBusTrip, pingBusTrip, endBusTrip,
   createRouteStop, updateRouteStop, deleteRouteStop, reorderRouteStops,
+  getStudentTransport, setStudentTransport, listTransportStudents,
   type TransportSummary, type FleetBus, type TransportBus, type StudentBusAssignment,
   type CreateBusInput, type UpdateBusInput, type TransportRoute, type CreateRouteInput, type RouteStop,
   type BusLocationInput, type SendBusNotificationInput, type TripPingInput, type TripSummary,
   type CreateRouteStopInput,
+  type StudentTransportStatus, type SetStudentTransportInput, type TransportMappedStudent, type TransportStudentsFilter,
 } from './transport'
 
 /* ---------- Hostel ---------- */

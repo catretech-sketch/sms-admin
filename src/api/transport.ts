@@ -76,6 +76,54 @@ export interface RouteStop {
   lng?: number | null
 }
 
+export interface StudentTransportStatus {
+  optedIn: boolean
+  assigned: boolean
+  status: 'assigned' | 'pending' | 'opted_out' | 'not_mapped'
+  busId?: string | null
+  routeId?: string | null
+  stopId?: string | null
+  feeHeadId?: string | null
+  pendingReason?: { code: string; message: string } | null
+}
+
+export interface SetStudentTransportInput {
+  optedIn: boolean
+  routeId?: string | null
+  stopId?: string | null
+  feeHeadId?: string | null
+}
+
+export interface TransportMappedStudent {
+  studentId: string
+  studentName: string
+  admissionNo: string
+  grade?: string | null
+  section?: string | null
+  feeHeadId?: string | null
+  feeHeadName?: string | null
+  routeId?: string | null
+  routeName?: string | null
+  stopId?: string | null
+  stopName?: string | null
+  busId?: string | null
+  busNo?: string | null
+  driver?: string | null
+  conductorName?: string | null
+  capacity?: number | null
+  busOccupied: number
+  mappingStatus: 'mapped' | 'pending'
+}
+
+export interface TransportStudentsFilter {
+  routeId?: string
+  stopId?: string
+  busId?: string
+  grade?: string
+  feeHeadId?: string
+  status?: 'mapped' | 'pending'
+}
+
 export interface BusLocationInput {
   lat?: number
   lng?: number
@@ -260,4 +308,36 @@ export async function reorderRouteStops(routeId: string, stopIds: string[]): Pro
     method: 'PUT',
     body: camelToSnake({ stopIds }),
   })
+}
+
+export async function getStudentTransport(studentId: string): Promise<StudentTransportStatus> {
+  if (!studentId) throw new Error('Student ID required')
+  return asObj<StudentTransportStatus>(await request<Record<string, unknown>>(`/students/${studentId}/transport`))
+}
+
+export async function setStudentTransport(studentId: string, input: SetStudentTransportInput): Promise<StudentTransportStatus> {
+  if (!studentId) throw new Error('Student ID required')
+  const body = camelToSnake({
+    optedIn: input.optedIn,
+    routeId: input.optedIn ? (input.routeId || null) : null,
+    stopId: input.optedIn ? (input.stopId || null) : null,
+    feeHeadId: input.optedIn ? (input.feeHeadId || null) : null,
+  })
+  return asObj<StudentTransportStatus>(
+    await request<Record<string, unknown>>(`/students/${studentId}/transport`, { method: 'PUT', body }),
+  )
+}
+
+export async function listTransportStudents(filter: TransportStudentsFilter = {}): Promise<TransportMappedStudent[]> {
+  const query: Record<string, string> = {}
+  if (filter.routeId) query.route_id = filter.routeId
+  if (filter.stopId) query.stop_id = filter.stopId
+  if (filter.busId) query.bus_id = filter.busId
+  if (filter.grade) query.grade = filter.grade
+  if (filter.feeHeadId) query.fee_head_id = filter.feeHeadId
+  if (filter.status) query.status = filter.status
+  const qs = new URLSearchParams(query).toString()
+  return asList<TransportMappedStudent>(
+    await request<Record<string, unknown>[]>(`/transport/students${qs ? `?${qs}` : ''}`),
+  )
 }

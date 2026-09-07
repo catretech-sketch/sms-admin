@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { startBusTrip, pingBusTrip, endBusTrip, listTransportBuses, createBus, updateBus } from './transport'
+import {
+  startBusTrip, pingBusTrip, endBusTrip, listTransportBuses, createBus, updateBus,
+  getStudentTransport, setStudentTransport, listTransportStudents,
+} from './transport'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -67,5 +70,50 @@ describe('bus trip GPS', () => {
     const summary = await endBusTrip('B1')
     expect(summary.tripId).toBe('T1')
     expect(summary.distanceKm).toBe(5.2)
+  })
+})
+
+describe('student transport mapping API', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('setStudentTransport sends snake_case body and maps a pending response', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), init })
+      return jsonResponse({
+        data: {
+          opted_in: true, assigned: false, status: 'pending', bus_id: null,
+          route_id: 'r1', stop_id: 's1', fee_head_id: 'f1',
+          pending_reason: { code: 'no_capacity', message: 'No bus currently has available capacity on this route.' },
+        },
+      })
+    }))
+
+    const result = await setStudentTransport('stu1', { optedIn: true, routeId: 'r1', stopId: 's1', feeHeadId: 'f1' })
+
+    expect(calls[0].url).toContain('/students/stu1/transport')
+    expect(calls[0].init?.method).toBe('PUT')
+    expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({ opted_in: true, route_id: 'r1', stop_id: 's1', fee_head_id: 'f1' })
+    expect(result.status).toBe('pending')
+    expect(result.pendingReason?.code).toBe('no_capacity')
+  })
+
+  it('getStudentTransport GETs the current status', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      data: { opted_in: false, assigned: false, status: 'not_mapped', bus_id: null, route_id: null, stop_id: null, fee_head_id: null, pending_reason: null },
+    })))
+    const result = await getStudentTransport('stu2')
+    expect(result.status).toBe('not_mapped')
+  })
+
+  it('listTransportStudents applies filters as query params', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calls.push(String(url))
+      return jsonResponse({ data: [], next_cursor: null })
+    }))
+    await listTransportStudents({ status: 'pending', routeId: 'r1' })
+    expect(calls[0]).toContain('status=pending')
+    expect(calls[0]).toContain('route_id=r1')
   })
 })
