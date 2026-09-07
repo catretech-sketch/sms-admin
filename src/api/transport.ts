@@ -330,11 +330,11 @@ export async function setStudentTransport(studentId: string, input: SetStudentTr
 
 export async function listTransportStudents(filter: TransportStudentsFilter = {}): Promise<TransportMappedStudent[]> {
   const query: Record<string, string> = {}
-  if (filter.routeId) query.route_id = filter.routeId
-  if (filter.stopId) query.stop_id = filter.stopId
-  if (filter.busId) query.bus_id = filter.busId
+  if (filter.routeId) query.routeId = filter.routeId
+  if (filter.stopId) query.stopId = filter.stopId
+  if (filter.busId) query.busId = filter.busId
   if (filter.grade) query.grade = filter.grade
-  if (filter.feeHeadId) query.fee_head_id = filter.feeHeadId
+  if (filter.feeHeadId) query.feeHeadId = filter.feeHeadId
   if (filter.status) query.status = filter.status
   const qs = new URLSearchParams(query).toString()
   return asList<TransportMappedStudent>(

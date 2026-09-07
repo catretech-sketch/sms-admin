@@ -114,6 +114,6 @@ describe('student transport mapping API', () => {
     }))
     await listTransportStudents({ status: 'pending', routeId: 'r1' })
     expect(calls[0]).toContain('status=pending')
-    expect(calls[0]).toContain('route_id=r1')
+    expect(calls[0]).toContain('routeId=r1')
   })
 })
