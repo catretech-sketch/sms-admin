@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, within, waitFor } from '@testing-library/react'
+import { render, screen, within, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AppProvider } from '@/context/AppProvider'
 import { ToastProvider } from '@/context/ToastProvider'
@@ -49,17 +49,35 @@ function authAndSchoolResponse(url: string, method: string): Response | null {
   return null
 }
 
-function renderScreen(rows: unknown[] = [MAPPED, PENDING]) {
-  vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL, init?: { method?: string }) => {
+const ROUTES = [{ id: 'r1', name: 'Route 5', stops: 1 }]
+const STOPS_R1 = [{ id: 'st1', route_id: 'r1', name: 'Shastri Nagar', sequence: 1 }]
+/* Two buses on different routes — used to verify the manual-assign picker is scoped
+ * to the pending student's own route (r1), not the full fleet. */
+const BUSES = [
+  { bus_id: 'b1', bus_no: 'Bus 01', route_id: 'r1', stop_count: 1, students_assigned: 1 },
+  { bus_id: 'b2', bus_no: 'Bus 02', route_id: 'r2', stop_count: 1, students_assigned: 0 },
+]
+
+function makeFetch(rows: unknown[]) {
+  return vi.fn().mockImplementation((input: RequestInfo | URL, init?: { method?: string }) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
     const method = (init?.method ?? 'GET').toUpperCase()
     const auth = authAndSchoolResponse(url, method)
     if (auth) return Promise.resolve(auth)
+    if (url.includes('/transport/routes/r1/stops')) return Promise.resolve(jsonResponse({ data: STOPS_R1 }))
+    if (url.includes('/transport/routes')) return Promise.resolve(jsonResponse({ data: ROUTES }))
+    if (url.includes('/transport/buses/') && method === 'PUT') return Promise.resolve(jsonResponse({ data: null }))
+    if (url.includes('/transport/buses')) return Promise.resolve(jsonResponse({ data: BUSES }))
     if (url.includes('/transport/students')) return Promise.resolve(jsonResponse({ data: rows, next_cursor: null }))
     return Promise.resolve(jsonResponse({ data: [], next_cursor: null }))
-  }))
+  })
+}
+
+function renderScreen(rows: unknown[] = [MAPPED, PENDING]) {
+  const fetchMock = makeFetch(rows)
+  vi.stubGlobal('fetch', fetchMock)
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
-  return render(
+  const utils = render(
     <QueryClientProvider client={qc}>
       <AppProvider>
         <ToastProvider>
@@ -68,6 +86,7 @@ function renderScreen(rows: unknown[] = [MAPPED, PENDING]) {
       </AppProvider>
     </QueryClientProvider>,
   )
+  return { ...utils, fetchMock }
 }
 
 describe('Transport Students list', () => {
@@ -96,5 +115,54 @@ describe('Transport Students list', () => {
     const row = screen.getByText('Priya Singh').closest('tr')!
     expect(within(row).getByRole('button', { name: /retry auto-assignment/i })).toBeInTheDocument()
     expect(within(row).getByRole('button', { name: /select bus manually/i })).toBeInTheDocument()
+  })
+
+  it('populates the Stop filter from the selected route and gates it until a route is chosen', async () => {
+    renderScreen()
+    await waitFor(() => expect(screen.getByText('Rahul Sharma')).toBeInTheDocument())
+    // "Route"/"Stop" also appear as table column headers, so pick the <label> version (inside .sm-field).
+    const fieldByLabel = (label: string) =>
+      screen.getAllByText(label).find((el) => el.closest('.sm-field'))!.closest('.sm-field') as HTMLElement
+    const stopSelect = within(fieldByLabel('Stop')).getByRole('combobox') as HTMLSelectElement
+    expect(stopSelect).toBeDisabled()
+    const routeSelect = within(fieldByLabel('Route')).getByRole('combobox') as HTMLSelectElement
+    fireEvent.change(routeSelect, { target: { value: 'r1' } })
+    await waitFor(() => expect(stopSelect).not.toBeDisabled())
+    await waitFor(() =>
+      expect(Array.from(stopSelect.querySelectorAll('option')).some((o) => (o as HTMLOptionElement).value === 'st1')).toBe(true),
+    )
+  })
+
+  it('scopes the manual-assign bus picker to the pending student route and refreshes the list on confirm', async () => {
+    const { fetchMock } = renderScreen()
+    await waitFor(() => expect(screen.getByText('Priya Singh')).toBeInTheDocument())
+    const row = screen.getByText('Priya Singh').closest('tr')!
+    fireEvent.click(within(row).getByRole('button', { name: /select bus manually/i }))
+
+    const busSelect = await waitFor(() => within(row).getByRole('combobox') as HTMLSelectElement)
+    const optionValues = Array.from(busSelect.querySelectorAll('option')).map((o) => (o as HTMLOptionElement).value)
+    expect(optionValues).toContain('b1')
+    expect(optionValues).not.toContain('b2') // Bus 02 serves a different route than the pending student
+
+    const studentsCallsBefore = fetchMock.mock.calls.filter((c) => String(c[0]).includes('/transport/students')).length
+
+    fireEvent.change(busSelect, { target: { value: 'b1' } })
+    fireEvent.click(within(row).getByRole('button', { name: /confirm/i }))
+
+    await waitFor(() => {
+      const assign = fetchMock.mock.calls.find((c) => {
+        const url = String(c[0])
+        const method = ((c[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase()
+        return url.includes('/transport/buses/b1/students/s2') && method === 'PUT'
+      })
+      expect(assign).toBeTruthy()
+    })
+
+    // The manual-assign success handler must invalidate the students list so it refetches
+    // with the newly-assigned bus, rather than leaving the row showing stale "pending" data.
+    await waitFor(() => {
+      const studentsCallsAfter = fetchMock.mock.calls.filter((c) => String(c[0]).includes('/transport/students')).length
+      expect(studentsCallsAfter).toBeGreaterThan(studentsCallsBefore)
+    })
   })
 })

@@ -2,20 +2,24 @@
    Transport Students — mapping status across all opted-in students
    ============================================================ */
 import { useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useToast } from '@/lib/hooks'
 import {
   PageHead, Card, Badge, Field, Select, Btn, Empty, Spinner,
 } from '@/components/ui'
 import {
-  useTransportStudentsList, useTransportRoutes, useTransportBuses,
+  useTransportStudentsList, useTransportRoutes, useRouteStops, useTransportBuses,
   useSetStudentTransport, useAssignStudentToBus,
 } from '@/api/hooks/useOperations'
 import { useFeeHeads } from '@/api/hooks/useFeeHeads'
+import { queryKeys } from '@/api/queryKeys'
 import type { TransportMappedStudent } from '@/api/transport'
 
 export function TransportStudentsScreen() {
   const toast = useToast()
+  const qc = useQueryClient()
   const [routeFilter, setRouteFilter] = useState('')
+  const [stopFilter, setStopFilter] = useState('')
   const [busFilter, setBusFilter] = useState('')
   const [gradeFilter, setGradeFilter] = useState('')
   const [feeHeadFilter, setFeeHeadFilter] = useState('')
@@ -24,10 +28,12 @@ export function TransportStudentsScreen() {
   const [manualBusId, setManualBusId] = useState('')
 
   const routesQ = useTransportRoutes()
+  const stopsQ = useRouteStops(routeFilter || null)
   const busesQ = useTransportBuses()
   const feeHeadsQ = useFeeHeads()
   const listQ = useTransportStudentsList({
     routeId: routeFilter || undefined,
+    stopId: stopFilter || undefined,
     busId: busFilter || undefined,
     grade: gradeFilter || undefined,
     feeHeadId: feeHeadFilter || undefined,
@@ -42,6 +48,10 @@ export function TransportStudentsScreen() {
     { value: '', label: 'All routes' },
     ...(routesQ.data ?? []).map((r) => ({ value: r.id, label: r.name })),
   ], [routesQ.data])
+  const stopOptions = useMemo(() => [
+    { value: '', label: routeFilter ? 'All stops' : 'Select route first' },
+    ...(stopsQ.data ?? []).map((s) => ({ value: s.id, label: s.name })),
+  ], [stopsQ.data, routeFilter])
   const busOptions = useMemo(() => [
     { value: '', label: 'All buses' },
     ...(busesQ.data ?? []).map((b) => ({ value: b.busId, label: b.busNo })),
@@ -69,7 +79,12 @@ export function TransportStudentsScreen() {
     assignToBus.mutate(
       { busId: manualBusId, studentId: row.studentId, stopId: row.stopId ?? undefined },
       {
-        onSuccess: () => { toast.success('Bus assigned', `${row.studentName} assigned manually.`); setManualAssignFor(null); setManualBusId('') },
+        onSuccess: () => {
+          toast.success('Bus assigned', `${row.studentName} assigned manually.`)
+          void qc.invalidateQueries({ queryKey: queryKeys.operations.transportStudentsList() })
+          setManualAssignFor(null)
+          setManualBusId('')
+        },
         onError: (err) => toast.danger('Could not assign', err instanceof Error ? err.message : 'Please try again.'),
       },
     )
@@ -80,7 +95,16 @@ export function TransportStudentsScreen() {
       <PageHead title="Transport Students" sub="Route/stop/fee-head mapping and bus assignment status" />
       <Card>
         <div className="row gap12 wrap">
-          <Field label="Route"><Select options={routeOptions} value={routeFilter} onChange={(e) => setRouteFilter(e.target.value)} /></Field>
+          <Field label="Route">
+            <Select
+              options={routeOptions}
+              value={routeFilter}
+              onChange={(e) => { setRouteFilter(e.target.value); setStopFilter('') }}
+            />
+          </Field>
+          <Field label="Stop">
+            <Select options={stopOptions} value={stopFilter} onChange={(e) => setStopFilter(e.target.value)} disabled={!routeFilter} />
+          </Field>
           <Field label="Bus"><Select options={busOptions} value={busFilter} onChange={(e) => setBusFilter(e.target.value)} /></Field>
           <Field label="Grade"><input className="sm-input" value={gradeFilter} onChange={(e) => setGradeFilter(e.target.value)} placeholder="e.g. 5" /></Field>
           <Field label="Fee head"><Select options={feeHeadOptions} value={feeHeadFilter} onChange={(e) => setFeeHeadFilter(e.target.value)} /></Field>
@@ -126,7 +150,12 @@ export function TransportStudentsScreen() {
                         {manualAssignFor === row.studentId && (
                           <>
                             <Select
-                              options={[{ value: '', label: 'Pick a bus…' }, ...(busesQ.data ?? []).map((b) => ({ value: b.busId, label: b.busNo }))]}
+                              options={[
+                                { value: '', label: 'Pick a bus…' },
+                                ...(busesQ.data ?? [])
+                                  .filter((b) => b.routeId === row.routeId)
+                                  .map((b) => ({ value: b.busId, label: b.busNo })),
+                              ]}
                               value={manualBusId}
                               onChange={(e) => setManualBusId(e.target.value)}
                             />
