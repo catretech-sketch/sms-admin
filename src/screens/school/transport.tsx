@@ -18,6 +18,7 @@ import type { TransportRoute, RouteStop, TransportBus } from '@/api/operations'
 import { RouteBuilderMap } from '@/components/maps/RouteBuilderMap'
 import { normalizeStaffCategory, staffCategoryLabel } from '@/lib/staffCategory'
 import { routeMetrics } from '@/lib/routeMetrics'
+import { TransportStudentsScreen } from './transportStudents'
 
 const OPEN_ROUTE_KEY = 'sm.transport.openRouteId'
 const OPEN_BUS_KEY = 'sm.transport.openBusId'
@@ -155,6 +156,7 @@ function TransportDashboardBody() {
             <div className="row gap10 wrap" style={{ marginTop: 12 }}>
               <Btn variant="secondary" icon="pin" onClick={() => app.go('school.transport.routes')}>Route builder</Btn>
               <Btn variant="secondary" icon="bus" onClick={() => app.go('school.transport.buses')}>Fleet list</Btn>
+              <Btn variant="secondary" icon="users" onClick={() => app.go('school.transport.students')}>Students</Btn>
               {tierIncludes(app.plan, 'transport.gps') && (
                 <Btn variant="secondary" icon="zap" onClick={() => app.go('school.gps')}>Live tracking</Btn>
               )}
@@ -598,8 +600,17 @@ function TransportBuses() {
   )
 }
 
+function TransportStudents() {
+  return (
+    <TierGate feature="operations" title="Transport students" blurb="Student mapping status requires the Platinum Operations module.">
+      <TransportStudentsScreen />
+    </TierGate>
+  )
+}
+
 export const transportScreens: Record<string, ComponentType> = {
   'school.transport': TransportDashboard,
   'school.transport.routes': TransportRoutes,
   'school.transport.buses': TransportBuses,
+  'school.transport.students': TransportStudents,
 }
