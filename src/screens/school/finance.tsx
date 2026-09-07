@@ -9,7 +9,7 @@ import { useApp, useToast } from '@/lib/hooks'
 import { useFeePayments, usePayInvoice, useCreateFeeRazorpayOrder, useVerifyFeeRazorpayPayment } from '@/api/hooks/useFeePayments'
 import { useSchoolIntegrations } from '@/api/hooks/useSchoolIntegrations'
 import { loadRazorpayScript } from '@/api/upgradeRequests'
-import { useFeeHeads, useCreateFeeHead, useDeleteFeeHead } from '@/api/hooks/useFeeHeads'
+import { useFeeHeads, useCreateFeeHead, useDeleteFeeHead, useUpdateFeeHead } from '@/api/hooks/useFeeHeads'
 import { useFeeStructure, useSaveFeeStructure } from '@/api/hooks/useFeeStructure'
 import type { FeeStructureDocument, FeeStructureStatus } from '@/api/feeStructure'
 import { useFeeInvoices, useGenerateFeeInvoices } from '@/api/hooks/useFeeInvoices'
@@ -512,6 +512,7 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
   const classesQ = useClasses()
   const studentsQ = useStudents()
   const createHead = useCreateFeeHead()
+  const updateHead = useUpdateFeeHead()
   const deleteHead = useDeleteFeeHead()
   const saveStructure = useSaveFeeStructure()
   const generateInvoices = useGenerateFeeInvoices()
@@ -550,6 +551,7 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
     description: '',
   })
   const [newHead, setNewHead] = useState('')
+  const [newHeadIsTransport, setNewHeadIsTransport] = useState(false)
   const [draft, setDraft] = useState<Record<string, Record<string, number>>>({})
   const [hydrated, setHydrated] = useState(false)
   const [viewGrade, setViewGrade] = useState('') /* '' = all grades */
@@ -667,9 +669,20 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
     const name = properName(newHead.trim())
     if (!name) { toast.danger('Name required', 'Enter a fee type name.'); return }
     if (heads.some((h) => h.name.toLowerCase() === name.toLowerCase())) { toast.danger('Already exists', `${name} is already a fee type.`); return }
-    createHead.mutate({ name }, {
-      onSuccess: () => { setNewHead('') },
+    createHead.mutate({ name, isTransportFeeHead: newHeadIsTransport }, {
+      onSuccess: () => { setNewHead(''); setNewHeadIsTransport(false) },
       onError: (err) => { toast.danger('Could not add fee type', err instanceof Error ? err.message : 'Please try again.') },
+    })
+  }
+  const toggleHeadTransport = (head: FeeHead) => {
+    updateHead.mutate({ id: head.id, patch: { isTransportFeeHead: !head.isTransportFeeHead } }, {
+      onSuccess: () => toast.success(
+        head.isTransportFeeHead ? 'Unmarked as transport fee' : 'Marked as transport fee',
+        head.isTransportFeeHead
+          ? `${head.name} will no longer appear when mapping students to transport.`
+          : `${head.name} is now selectable when mapping students to transport.`,
+      ),
+      onError: (err) => toast.danger('Could not update fee type', err instanceof Error ? err.message : 'Please try again.'),
     })
   }
   const removeHead = (head: FeeHead) => {
@@ -863,7 +876,7 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
     try {
       for (const name of STARTER_FEE_HEADS) {
         if (heads.some((h) => h.name.toLowerCase() === name.toLowerCase())) continue
-        await createHead.mutateAsync({ name })
+        await createHead.mutateAsync({ name, isTransportFeeHead: name === 'Transport' })
         added += 1
       }
       toast.success(
@@ -1051,6 +1064,8 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
                     Add fee type
                   </Btn>
                 </div>
+                <Checkbox checked={newHeadIsTransport} onChange={setNewHeadIsTransport}
+                  label="This is the transport fee (selectable when mapping students to transport)" />
               </div>
             ) : undefined}
           />
@@ -1063,26 +1078,41 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
               </div>
               <div className="col gap16" style={{ padding: 16 }}>
                 {editable && (
-                  <div className="row ai-end gap12 wrap">
-                    <div style={{ flex: '1 1 200px' }}>
-                      <Field label="Fee type" required hint="e.g. Academic, Transport, Exam">
-                        <Input
-                          value={newHead}
-                          placeholder="Type fee name…"
-                          onChange={(e) => setNewHead(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addHead() } }}
-                        />
-                      </Field>
+                  <div className="col gap8">
+                    <div className="row ai-end gap12 wrap">
+                      <div style={{ flex: '1 1 200px' }}>
+                        <Field label="Fee type" required hint="e.g. Academic, Transport, Exam">
+                          <Input
+                            value={newHead}
+                            placeholder="Type fee name…"
+                            onChange={(e) => setNewHead(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addHead() } }}
+                          />
+                        </Field>
+                      </div>
+                      <Btn variant="secondary" icon="plus" disabled={createHead.isPending || !newHead.trim()} onClick={addHead}>
+                        Add fee type
+                      </Btn>
                     </div>
-                    <Btn variant="secondary" icon="plus" disabled={createHead.isPending || !newHead.trim()} onClick={addHead}>
-                      Add fee type
-                    </Btn>
+                    <Checkbox checked={newHeadIsTransport} onChange={setNewHeadIsTransport}
+                      label="This is the transport fee (selectable when mapping students to transport)" />
                   </div>
                 )}
                 <div className="row gap6 wrap">
                   {heads.map((h) => (
                     <Badge key={h.id} tone="brand">
                       {h.name}
+                      {editable && (
+                        <button
+                          type="button"
+                          onClick={() => toggleHeadTransport(h)}
+                          aria-label={h.isTransportFeeHead ? `Unmark ${h.name} as transport fee` : `Mark ${h.name} as transport fee`}
+                          title={h.isTransportFeeHead ? 'Transport fee — click to unmark' : 'Mark as the transport fee'}
+                          style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'inherit', display: 'inline-flex', marginLeft: 6, padding: 0, opacity: h.isTransportFeeHead ? 1 : 0.4 }}
+                        >
+                          <Icon name="bus" size={12} />
+                        </button>
+                      )}
                       {editable && (
                         <button
                           type="button"
