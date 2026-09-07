@@ -16,6 +16,7 @@ import {
   updateBusLocation, sendBusNotification, startBusTrip, pingBusTrip, endBusTrip,
   createRouteStop, updateRouteStop, deleteRouteStop, reorderRouteStops,
   createBus, updateBus, listTransportRoutes, createRoute, listRouteStops,
+  getStudentTransport, setStudentTransport, listTransportStudents,
   getHostelSummary, listHostelBlocks, createHostelBlock, listHostelRooms, createHostelRoom,
   listHostelResidents, createHostelResident,
   getSportsSummary, listSportsTeams, createSportsTeam, listSportsEvents, createSportsEvent,
@@ -24,6 +25,7 @@ import {
   type TransportRoute, type CreateBusInput, type UpdateBusInput, type CreateRouteInput, type RouteStop,
   type BusLocationInput, type SendBusNotificationInput, type TripPingInput, type TripSummary,
   type CreateRouteStopInput,
+  type StudentTransportStatus, type SetStudentTransportInput, type TransportMappedStudent, type TransportStudentsFilter,
   type HostelSummary, type SportsSummary,
   type HostelBlock, type HostelRoom, type HostelResident,
   type SportsTeam, type SportsEvent, type SportsMedal,
@@ -312,6 +314,35 @@ export function useRouteStops(routeId: string | null): UseQueryResult<RouteStop[
     enabled: ops && !!routeId,
   })
 }
+export function useStudentTransport(studentId: string | null): UseQueryResult<StudentTransportStatus> {
+  const ops = useOperationsTier()
+  return useQuery({
+    queryKey: queryKeys.operations.studentTransport(studentId ?? ''),
+    queryFn: () => getStudentTransport(studentId as string),
+    enabled: ops && !!studentId,
+  })
+}
+
+export function useSetStudentTransport(): UseMutationResult<StudentTransportStatus, Error, { studentId: string; input: SetStudentTransportInput }> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ studentId, input }) => setStudentTransport(studentId, input),
+    onSuccess: (_data, { studentId }) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.studentTransport(studentId) })
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportStudentsList() })
+    },
+  })
+}
+
+export function useTransportStudentsList(filter: TransportStudentsFilter = {}): UseQueryResult<TransportMappedStudent[]> {
+  const ops = useOperationsTier()
+  return useQuery({
+    queryKey: queryKeys.operations.transportStudentsList(filter),
+    queryFn: () => listTransportStudents(filter),
+    enabled: ops,
+  })
+}
+
 export function useCreateRoute(): UseMutationResult<TransportRoute, Error, CreateRouteInput> {
   const qc = useQueryClient()
   return useMutation({
