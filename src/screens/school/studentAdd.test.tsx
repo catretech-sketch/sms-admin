@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { useEffect } from 'react'
 import { render, screen, fireEvent, within, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AppProvider, useApp } from '@/context/AppProvider'
 import { ToastProvider } from '@/context/ToastProvider'
 import { clearPersonExtrasMemory } from '@/api/personExtrasApi'
+import { tokenStore } from '@/api/auth/tokenStore'
 import { studentAddScreens, studentToForm } from './studentAdd'
 import type { Student } from '@/types'
 
@@ -269,4 +270,159 @@ describe('Edit student form', () => {
 
     vi.unstubAllGlobals()
   })
+})
+
+/* The new Transport section's route/stop pickers only load once the school's plan
+   resolves to Platinum (useTransportRoutes/useRouteStops/useStudentTransport are all
+   gated behind the 'operations' tier, which requires Platinum — see useOperationsTier
+   in useOperations.ts). AppProvider resolves `plan` from the live tenant fetched via
+   /me/schools on session restore (real production code path, mirroring staffAdd's own
+   Platinum-gated test setup) — seed a resumable session and answer
+   /auth/refresh + /auth/me + /me/schools with a Platinum-tier school so those hooks
+   actually fetch, then let each test's own handler cover the rest. */
+describe('Transport section', () => {
+  const TENANT_ID = 'school-1'
+
+  function authAndSchoolResponse(url: string, method: string): Response | null {
+    if (url.includes('/auth/refresh')) {
+      return jsonResponse({ data: { access_token: 'a', refresh_token: 'r' } })
+    }
+    if (url.includes('/auth/me')) {
+      return jsonResponse({ data: { id: 'u1', tenant_id: TENANT_ID, roles: ['school.admin'], is_platform: false } })
+    }
+    if (url.includes('/me/schools') && method === 'GET') {
+      return jsonResponse({
+        data: [{
+          id: TENANT_ID, name: 'Greenwood High', slug: 'greenwood', country: 'IN', status: 'active',
+          plan_id: null, plan_name: 'Platinum', tier: 'platinum', mrr: 0, students_count: 0,
+          staff_count: 0, storage_gb: 0, created: '2026-01-01', contact_name: null,
+          contact_email: null, contact_phone: null, address: null, health_score: 100,
+        }],
+        next_cursor: null,
+      })
+    }
+    return null
+  }
+
+  function makeFetchWithTransport(opts: { assigned?: boolean } = {}) {
+    return vi.fn().mockImplementation((input: RequestInfo | URL, init?: { method?: string; body?: string }) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
+      const method = (init?.method ?? 'GET').toUpperCase()
+      const auth = authAndSchoolResponse(url, method)
+      if (auth) return Promise.resolve(auth)
+      if (url.includes('/classes')) {
+        return Promise.resolve(jsonResponse({
+          data: [{ id: 'c1', name: 'VIII-A', grade: 'VIII', section: 'A', room: null, class_teacher_id: null, student_count: 0 }],
+          next_cursor: null,
+        }))
+      }
+      if (url.includes('/fees/heads')) {
+        return Promise.resolve(jsonResponse({
+          data: [{ id: 'fh1', name: 'Transport', code: null, active: true, is_system: false, is_transport_fee_head: true }],
+          next_cursor: null,
+        }))
+      }
+      // Note: `request()` (used by listTransportRoutes/listRouteStops) unwraps a `.data`
+      // envelope like every other endpoint — these are NOT bare arrays.
+      if (url.includes('/transport/routes/r1/stops')) {
+        return Promise.resolve(jsonResponse({ data: [{ id: 'st1', route_id: 'r1', name: 'Shastri Nagar', sequence: 1 }] }))
+      }
+      if (url.includes('/transport/routes')) {
+        return Promise.resolve(jsonResponse({ data: [{ id: 'r1', name: 'Route 5', stops: 3 }] }))
+      }
+      if (url.includes('/students/srv/transport') && method === 'PUT') {
+        return Promise.resolve(jsonResponse({
+          data: opts.assigned === false
+            ? { opted_in: true, assigned: false, status: 'pending', bus_id: null, route_id: 'r1', stop_id: 'st1', fee_head_id: 'fh1', pending_reason: { code: 'no_capacity', message: 'No bus currently has available capacity on this route.' } }
+            : { opted_in: true, assigned: true, status: 'assigned', bus_id: 'b1', route_id: 'r1', stop_id: 'st1', fee_head_id: 'fh1', pending_reason: null },
+        }))
+      }
+      if (url.includes('/students') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ data: [STUDENT_ROW], next_cursor: null }))
+      }
+      return Promise.resolve(jsonResponse({ data: STUDENT_ROW }))
+    })
+  }
+
+  beforeEach(() => {
+    localStorage.clear()
+    sessionStorage.clear()
+    tokenStore.set({ access_token: 'a', refresh_token: 'r' })
+    tokenStore.setEmail('admin@greenwood.edu')
+  })
+
+  afterEach(() => {
+    tokenStore.clear()
+    vi.unstubAllGlobals()
+  })
+
+  const transportField = (label: string) => screen.getByText(label).closest('.sm-field') as HTMLElement
+  const usesTransportCheckbox = () => within(transportField('Uses School Transport')).getByRole('checkbox')
+  const routeSelect = () => within(transportField('Route')).getByRole('combobox')
+  const stopSelect = () => within(transportField('Pickup Stop')).getByRole('combobox')
+
+  it('hides Route/Stop until "Uses School Transport" is Yes', async () => {
+    vi.stubGlobal('fetch', makeFetchWithTransport())
+    renderForm()
+    expect(screen.queryByText('Route')).not.toBeInTheDocument()
+    fireEvent.click(usesTransportCheckbox())
+    await waitFor(() => expect(screen.getByText('Route')).toBeInTheDocument())
+  })
+
+  it('saves student then calls transport endpoint and shows pending toast when no capacity', async () => {
+    vi.stubGlobal('fetch', makeFetchWithTransport({ assigned: false }))
+    renderForm()
+    await waitFor(() =>
+      expect(Array.from(classCombo().querySelectorAll('option')).some(
+        (o) => (o as HTMLOptionElement).value === 'VIII-A',
+      )).toBe(true),
+    )
+    fillRequired()
+    fireEvent.change(classCombo(), { target: { value: 'VIII-A' } })
+    fireEvent.click(usesTransportCheckbox())
+    await waitFor(() => expect(routeSelect()).toBeInTheDocument())
+    await waitFor(() =>
+      expect(Array.from(routeSelect().querySelectorAll('option')).some(
+        (o) => (o as HTMLOptionElement).value === 'r1',
+      )).toBe(true),
+    )
+    fireEvent.change(routeSelect(), { target: { value: 'r1' } })
+    await waitFor(() =>
+      expect(Array.from(stopSelect().querySelectorAll('option')).some(
+        (o) => (o as HTMLOptionElement).value === 'st1',
+      )).toBe(true),
+    )
+    fireEvent.change(stopSelect(), { target: { value: 'st1' } })
+    fireEvent.click(screen.getByText('Save student'))
+    await waitFor(() => expect(screen.getByText(/bus assignment is pending/i)).toBeInTheDocument(), { timeout: 10000 })
+  }, 20000)
+
+  it('saves with optedIn:false and does not block the save flow when "Uses School Transport" stays No', async () => {
+    const fetchMock = makeFetchWithTransport()
+    vi.stubGlobal('fetch', fetchMock)
+    renderForm()
+    await waitFor(() =>
+      expect(Array.from(classCombo().querySelectorAll('option')).some(
+        (o) => (o as HTMLOptionElement).value === 'VIII-A',
+      )).toBe(true),
+    )
+    fillRequired()
+    fireEvent.change(classCombo(), { target: { value: 'VIII-A' } })
+    fireEvent.click(screen.getByText('Save student'))
+
+    await waitFor(() => expect(probe().split('|')[1]).toBe('school.student'), { timeout: 10000 })
+    // Best-effort transport call still fires (matching persistExtras' pattern) but
+    // reports optedIn:false with no route/stop/fee-head — it must never block the save.
+    const transportCall = fetchMock.mock.calls.find((c) => {
+      const url = String(c[0])
+      const method = ((c[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase()
+      return url.includes('/transport') && method === 'PUT'
+    })
+    expect(transportCall).toBeTruthy()
+    const body = JSON.parse((transportCall![1] as RequestInit).body as string)
+    expect(body.opted_in).toBe(false)
+    expect(body.route_id).toBeNull()
+    expect(body.stop_id).toBeNull()
+    expect(body.fee_head_id).toBeNull()
+  }, 20000)
 })

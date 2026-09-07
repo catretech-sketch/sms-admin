@@ -14,10 +14,12 @@ import {
   type StoredDoc,
 } from '@/api/studentExtras'
 import { parentMailFromStudent } from '@/api/students'
-import { PageHead, Card, CardHead, Btn, Badge, Icon, useFormKit, Spinner, Empty, Field, Input } from '@/components/ui'
+import { PageHead, Card, CardHead, Btn, Badge, Icon, useFormKit, Spinner, Empty, Field, Input, Select } from '@/components/ui'
 import { useClasses, useClassNames } from '@/api/hooks/useClasses'
 import type { SchoolClass } from '@/api/classes'
 import { listSchoolHouses } from '@/api/schoolHouses'
+import { useTransportRoutes, useRouteStops, useStudentTransport, useSetStudentTransport } from '@/api/hooks/useOperations'
+import { useFeeHeads } from '@/api/hooks/useFeeHeads'
 import {
   required, validateAadhaar, validateEmail, validatePhone, validateFile,
   isDuplicateValue, normalizePhoneDigits, normalizeEmailKey,
@@ -68,6 +70,7 @@ const INITIAL_FORM: Form = {
   caste: '', motherTongue: '', languages: '', lastSchool: '', address: '', aadhaar: '',
   fatherName: '', fatherEmail: '', fatherPhone: '', fatherOccupation: '', fatherAadhaar: '',
   motherName: '', motherEmail: '', motherPhone: '', motherOccupation: '',
+  transportOptedIn: '', transportRouteId: '', transportStopId: '', transportFeeHeadId: '',
 }
 
 const INITIAL_FILES: Files = {
@@ -228,6 +231,41 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
   const liveClasses = classesQ.data ?? []
   const classNames = useClassNames()
   const [houses, setHouses] = useState<string[]>([])
+
+  const transportQ = useStudentTransport(mode === 'edit' && existing ? existing.id : null)
+  const feeHeadsQ = useFeeHeads()
+  const routesQ = useTransportRoutes()
+  const stopsQ = useRouteStops(f.transportRouteId || null)
+  const setTransport = useSetStudentTransport()
+
+  useEffect(() => {
+    if (!transportQ.data) return
+    setForm((prev) => ({
+      ...prev,
+      transportOptedIn: transportQ.data.optedIn ? 'yes' : 'no',
+      transportRouteId: transportQ.data.routeId ?? '',
+      transportStopId: transportQ.data.stopId ?? '',
+      transportFeeHeadId: transportQ.data.feeHeadId ?? '',
+    }))
+  }, [transportQ.data])
+
+  const transportFeeHeadOptions = useMemo(() => {
+    const heads = (feeHeadsQ.data ?? []).filter((h) => h.isTransportFeeHead)
+    return [
+      { value: '', label: heads.length ? 'Select fee head…' : 'No transport fee head configured' },
+      ...heads.map((h) => ({ value: h.id, label: h.name })),
+    ]
+  }, [feeHeadsQ.data])
+
+  const transportRouteOptions = useMemo(() => [
+    { value: '', label: 'Select route…' },
+    ...(routesQ.data ?? []).map((r) => ({ value: r.id, label: r.name })),
+  ], [routesQ.data])
+
+  const transportStopOptions = useMemo(() => [
+    { value: '', label: 'Select stop…' },
+    ...(stopsQ.data ?? []).map((s) => ({ value: s.id, label: s.name })),
+  ], [stopsQ.data])
 
   useEffect(() => {
     let cancelled = false
@@ -402,6 +440,33 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
         app.go('school.student', { focus: saved.id })
         return
       }
+
+      try {
+        const optedIn = f.transportOptedIn === 'yes'
+        const result = await setTransport.mutateAsync({
+          studentId: saved.id,
+          input: {
+            optedIn,
+            routeId: optedIn ? f.transportRouteId || null : null,
+            stopId: optedIn ? f.transportStopId || null : null,
+            feeHeadId: optedIn ? f.transportFeeHeadId || null : null,
+          },
+        })
+        if (optedIn && !result.assigned) {
+          toast.info(
+            'Student added. Bus assignment is pending.',
+            result.pendingReason?.message ?? 'No bus currently has available capacity on this route.',
+          )
+        }
+      } catch (err) {
+        toast.danger(
+          'Student saved, transport failed',
+          err instanceof Error ? err.message : 'Transport mapping could not be saved to the server.',
+        )
+        app.go('school.student', { focus: saved.id })
+        return
+      }
+
       toast.success(
         mode === 'edit' ? 'Student updated' : 'Student added',
         saved.roll > 0
@@ -564,6 +629,48 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
           <div className="row ai-center gap8 t-xs muted" style={{ marginTop: 12 }}>
             <Icon name="check" size={13} />
             Files are kept on this device for View / Download on the student profile.
+          </div>
+        </Card>
+
+        <Card>
+          <CardHead title="Transport" />
+          <div className="col gap12">
+            <Field label="Uses School Transport">
+              <label className="row ai-center gap8">
+                <input
+                  type="checkbox"
+                  checked={f.transportOptedIn === 'yes'}
+                  onChange={(e) => setForm((prev) => ({ ...prev, transportOptedIn: e.target.checked ? 'yes' : 'no' }))}
+                />
+                {f.transportOptedIn === 'yes' ? 'Yes' : 'No'}
+              </label>
+            </Field>
+            {f.transportOptedIn === 'yes' && (
+              <>
+                <Field label="Transport Fee Head">
+                  <Select
+                    options={transportFeeHeadOptions}
+                    value={f.transportFeeHeadId}
+                    onChange={(e) => setForm((prev) => ({ ...prev, transportFeeHeadId: e.target.value }))}
+                  />
+                </Field>
+                <Field label="Route">
+                  <Select
+                    options={transportRouteOptions}
+                    value={f.transportRouteId}
+                    onChange={(e) => setForm((prev) => ({ ...prev, transportRouteId: e.target.value, transportStopId: '' }))}
+                  />
+                </Field>
+                <Field label="Pickup Stop">
+                  <Select
+                    options={transportStopOptions}
+                    value={f.transportStopId}
+                    onChange={(e) => setForm((prev) => ({ ...prev, transportStopId: e.target.value }))}
+                    disabled={!f.transportRouteId}
+                  />
+                </Field>
+              </>
+            )}
           </div>
         </Card>
       </div>
