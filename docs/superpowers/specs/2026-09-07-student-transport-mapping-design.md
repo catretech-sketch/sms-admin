@@ -53,13 +53,16 @@ All changes are additive (new migration in `sms-backend`).
 | Column | Change |
 |---|---|
 | `BusId` | Make **nullable** (was `NOT NULL`). `NULL` = opted in, route/stop chosen, no bus assigned yet ("Pending Bus Assignment"). |
-| `RouteId` | **New column, `uuid NOT NULL`.** The route is chosen before a bus exists, so it must always be present once a row exists at all. |
+| `RouteId` | **New column, `uuid NULL` at the DB level.** Kept nullable so the existing legacy direct bus-assign flow (`PUT /transport/buses/{busId}/students/{studentId}`, used by `BusRidersModal`) keeps working unchanged — that endpoint doesn't collect a route today, and buses themselves can have a `NULL` `RouteId`. **Required at the application level** by the new opt-in endpoint below — `PUT /v1/students/{id}/transport` validates `routeId` is present and rejects with 400 if missing. Only the new endpoint enforces the rule; the legacy endpoint is untouched and continues to leave `RouteId` unset. |
 | `FeeHeadId` | **New column, `uuid NULL`.** Nullable — a school may not have configured a transport fee head yet; don't force selection. |
 | `StopId` | Unchanged (already nullable). |
 
 The existing unique constraint `(TenantId, StudentId)` is unchanged —
 a student has exactly one transport-mapping row (whether or not a bus
 is assigned), matching the current "opted in ⇒ at most one row" model.
+The legacy per-bus assign endpoint and the new opt-in endpoint write
+to the same row; only the new endpoint's application-level validation
+requires `RouteId`.
 
 ### `FeeHeads`
 
@@ -82,8 +85,10 @@ Body: `{ optedIn: bool, routeId?: guid, stopId?: guid, feeHeadId?: guid }`
   handles "remove assignment + opt-out state" together, per the
   existing proc's behavior). Return `{ optedIn: false }`.
 - `optedIn: true`:
-  1. Validate `routeId` is required (400 if missing — route is
-     mandatory for opt-in, per the `NOT NULL` schema decision above).
+  1. Validate `routeId` is required (400 `validation_error` if
+     missing — route is mandatory for opt-in, enforced in application
+     code since the column itself stays nullable; see Data model
+     above).
   2. If `feeHeadId` is provided, validate server-side that it
      references a `FeeHeads` row for this tenant with
      `IsTransportFeeHead = 1`. Reject with 400
