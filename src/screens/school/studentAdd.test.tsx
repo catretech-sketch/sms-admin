@@ -280,6 +280,36 @@ describe('Edit student form', () => {
    Platinum-gated test setup) — seed a resumable session and answer
    /auth/refresh + /auth/me + /me/schools with a Platinum-tier school so those hooks
    actually fetch, then let each test's own handler cover the rest. */
+/* C2: Transport is Platinum-only. `renderForm`'s default session (no /me/schools live tenant
+ * seeded) resolves to AppProvider's 'gold' placeholder plan — the same "no Platinum session"
+ * shape every other test in the "Add Student form" describe above already runs under. That
+ * confirms the Transport section/save-call gating below is exercised by ordinary (non-seeded)
+ * test setup, not a special case. */
+describe('Transport section — non-Platinum tenant', () => {
+  it('hides the Transport section and never calls the transport endpoint on save', async () => {
+    const fetchMock = makeFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    renderForm()
+    await waitFor(() =>
+      expect(Array.from(classCombo().querySelectorAll('option')).some(
+        (o) => (o as HTMLOptionElement).value === 'VIII-A',
+      )).toBe(true),
+    )
+    expect(screen.queryByText('Uses School Transport')).not.toBeInTheDocument()
+    expect(screen.queryByText('Transport')).not.toBeInTheDocument()
+
+    fillRequired()
+    fireEvent.change(classCombo(), { target: { value: 'VIII-A' } })
+    fireEvent.click(screen.getByText('Save student'))
+
+    await waitFor(() => expect(probe().split('|')[1]).toBe('school.student'), { timeout: 10000 })
+    const transportCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('/transport'))
+    expect(transportCall).toBeUndefined()
+
+    vi.unstubAllGlobals()
+  }, 20000)
+})
+
 describe('Transport section', () => {
   const TENANT_ID = 'school-1'
 
@@ -364,9 +394,37 @@ describe('Transport section', () => {
   it('hides Route/Stop until "Uses School Transport" is Yes', async () => {
     vi.stubGlobal('fetch', makeFetchWithTransport())
     renderForm()
+    await waitFor(() => expect(screen.getByText('Uses School Transport')).toBeInTheDocument())
     expect(screen.queryByText('Route')).not.toBeInTheDocument()
     fireEvent.click(usesTransportCheckbox())
     await waitFor(() => expect(screen.getByText('Route')).toBeInTheDocument())
+  })
+
+  it('blocks save with a validation error when opted in without choosing a Route (I1)', async () => {
+    // Covers both new-input (admin forgets Route) and legacy-row (routeId: null from
+    // BusRidersModal) cases: either way, an opted-in student with no route must be blocked
+    // by a clear inline error rather than reaching the backend and 400ing.
+    const fetchMock = makeFetchWithTransport()
+    vi.stubGlobal('fetch', fetchMock)
+    renderForm()
+    await waitFor(() =>
+      expect(Array.from(classCombo().querySelectorAll('option')).some(
+        (o) => (o as HTMLOptionElement).value === 'VIII-A',
+      )).toBe(true),
+    )
+    fillRequired()
+    fireEvent.change(classCombo(), { target: { value: 'VIII-A' } })
+    fireEvent.click(usesTransportCheckbox())
+    await waitFor(() => expect(routeSelect()).toBeInTheDocument())
+    // Deliberately leave Route unselected.
+    fireEvent.click(screen.getByText('Save student'))
+
+    expect(screen.getByText('Select a route before saving')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some((c) => {
+      const url = String(c[0])
+      const method = ((c[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase()
+      return url.includes('/students/srv/transport') && method === 'PUT'
+    })).toBe(false)
   })
 
   it('saves student then calls transport endpoint and shows pending toast when no capacity', async () => {
@@ -701,6 +759,118 @@ describe('Transport section', () => {
       expect(body.opted_in).toBe(true)
       expect(body.route_id).toBe('r1')
       expect(body.stop_id).toBe('st1')
+    }, { timeout: 10000 })
+  }, 20000)
+
+  it('C1: disables Save until an existing transport-assigned student\'s status has resolved, and never sends a stale opted-out value', async () => {
+    function FocusEditTransport({ id }: { id: string }) {
+      const app = useApp()
+      useEffect(() => { app.go('school.sis.edit', { focus: id }) }, [id])
+      if (app.focus !== id) return null
+      return <EditStudentScreen />
+    }
+
+    const EDIT_STUDENT = {
+      id: 'rahul-1', admission_no: 'sccrdtb/STU/26/0001', class_label: 'IV-B',
+      name: 'Rahul Sharma', gender: 'M', grade: 'IV', section: 'B', roll: 0,
+      guardian_name: 'Vaibhav Dubey', guardian_phone: '7080080089', guardian_email: null,
+      email: 'rahul@yopmail.com', dob: '2014-05-01',
+      attendance_pct: 60, fee_status: 'due', fee_due: 0,
+      status: 'active', house: 'Ruby', avatar_hue: 1,
+    }
+
+    // The real prior state: this student IS transport-assigned. We deliberately delay the
+    // GET /students/rahul-1/transport response with a manually-resolved promise to create a
+    // deterministic race window — Save must be inert until it resolves.
+    let resolveTransportGet: (r: Response) => void = () => {}
+    const transportGetPromise = new Promise<Response>((resolve) => { resolveTransportGet = resolve })
+
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: { method?: string; body?: string }) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
+      const method = (init?.method ?? 'GET').toUpperCase()
+      const auth = authAndSchoolResponse(url, method)
+      if (auth) return Promise.resolve(auth)
+      if (url.includes('/classes')) {
+        return Promise.resolve(jsonResponse({
+          data: [{ id: 'c-ivb', name: 'IV-B', grade: 'IV', section: 'B', room: null, class_teacher_id: null, student_count: 2 }],
+          next_cursor: null,
+        }))
+      }
+      if (url.includes('/fees/heads')) {
+        return Promise.resolve(jsonResponse({
+          data: [{ id: 'fh1', name: 'Transport', code: null, active: true, is_system: false, is_transport_fee_head: true }],
+          next_cursor: null,
+        }))
+      }
+      if (url.includes('/transport/routes/r1/stops')) {
+        return Promise.resolve(jsonResponse({ data: [{ id: 'st1', route_id: 'r1', name: 'Shastri Nagar', sequence: 1 }] }))
+      }
+      if (url.includes('/transport/routes')) {
+        return Promise.resolve(jsonResponse({ data: [{ id: 'r1', name: 'Route 5', stops: 3 }] }))
+      }
+      if (url.includes('/students/rahul-1/transport') && method === 'GET') {
+        return transportGetPromise
+      }
+      if (url.includes('/students/rahul-1/transport') && method === 'PUT') {
+        return Promise.resolve(jsonResponse({
+          data: { opted_in: true, assigned: true, status: 'assigned', bus_id: 'b1', route_id: 'r1', stop_id: 'st1', fee_head_id: 'fh1', pending_reason: null },
+        }))
+      }
+      if (url.includes('/extras') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ data: { extras_json: '{}' } }))
+      }
+      if (url.includes('/students/rahul-1') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ data: EDIT_STUDENT }))
+      }
+      if (url.includes('/students') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ data: [EDIT_STUDENT], next_cursor: null }))
+      }
+      return Promise.resolve(jsonResponse({ data: EDIT_STUDENT }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <AppProvider>
+          <ToastProvider>
+            <FocusEditTransport id="rahul-1" />
+          </ToastProvider>
+        </AppProvider>
+      </QueryClientProvider>,
+    )
+
+    // Save is disabled while the transport GET is still in flight — the whole point of the
+    // fix is that this race window can never reach the backend with a wrong value.
+    const disabledSaveBtn = await waitFor(() => screen.getByText('Loading transport status…').closest('button') as HTMLButtonElement)
+    expect(disabledSaveBtn).toBeDisabled()
+    fireEvent.click(disabledSaveBtn)
+    expect(fetchMock.mock.calls.some((c) => {
+      const u = String(c[0])
+      const m = ((c[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase()
+      return u.includes('/students/rahul-1/transport') && m === 'PUT'
+    })).toBe(false)
+
+    // Now let the real prior state (opted_in: true, assigned to b1/r1/st1) arrive.
+    resolveTransportGet(jsonResponse({
+      data: { opted_in: true, assigned: true, status: 'assigned', bus_id: 'b1', route_id: 'r1', stop_id: 'st1', fee_head_id: 'fh1', pending_reason: null },
+    }))
+
+    await waitFor(() => expect(screen.getByText('Save changes')).not.toBeDisabled(), { timeout: 10000 })
+    fireEvent.click(screen.getByText('Save changes'))
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find((c) => {
+        const u = String(c[0])
+        const m = ((c[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase()
+        return u.includes('/students/rahul-1/transport') && m === 'PUT'
+      })
+      expect(call).toBeTruthy()
+      // The real prior state (opted in) must be sent — never a stale/false value from before
+      // the GET resolved.
+      const body = JSON.parse((call![1] as RequestInit).body as string)
+      expect(body.opted_in).toBe(true)
+      expect(body.route_id).toBe('r1')
     }, { timeout: 10000 })
   }, 20000)
 })

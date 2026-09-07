@@ -146,7 +146,18 @@ export function TransportStudentsScreen() {
                     {row.mappingStatus === 'pending' && (
                       <div className="row gap8">
                         <Btn size="sm" onClick={() => retryAssignment(row)}>Retry auto-assignment</Btn>
-                        <Btn size="sm" variant="ghost" onClick={() => setManualAssignFor(row.studentId)}>Select bus manually</Btn>
+                        <Btn
+                          size="sm" variant="ghost"
+                          onClick={() => {
+                            // Reset the picked bus whenever a DIFFERENT row's picker opens —
+                            // otherwise student A's bus id lingers in state and Confirm on
+                            // student B (a different route) could assign B to A's bus.
+                            if (manualAssignFor !== row.studentId) setManualBusId('')
+                            setManualAssignFor(row.studentId)
+                          }}
+                        >
+                          Select bus manually
+                        </Btn>
                         {manualAssignFor === row.studentId && (
                           <>
                             <Select

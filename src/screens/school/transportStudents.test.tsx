@@ -165,4 +165,27 @@ describe('Transport Students list', () => {
       expect(studentsCallsAfter).toBeGreaterThan(studentsCallsBefore)
     })
   })
+
+  it('resets the selected bus when opening the manual picker for a different pending student', async () => {
+    // Two pending students on different routes so their bus option lists differ visibly.
+    const PENDING_A = { ...PENDING, student_id: 's2', student_name: 'Priya Singh', route_id: 'r1' }
+    const PENDING_B = {
+      ...PENDING, student_id: 's3', student_name: 'Amit Kumar', route_id: 'r2', route_name: 'Route 9',
+    }
+    renderScreen([MAPPED, PENDING_A, PENDING_B])
+    await waitFor(() => expect(screen.getByText('Priya Singh')).toBeInTheDocument())
+    expect(screen.getByText('Amit Kumar')).toBeInTheDocument()
+
+    const rowA = screen.getByText('Priya Singh').closest('tr')!
+    fireEvent.click(within(rowA).getByRole('button', { name: /select bus manually/i }))
+    const busSelectA = await waitFor(() => within(rowA).getByRole('combobox') as HTMLSelectElement)
+    fireEvent.change(busSelectA, { target: { value: 'b1' } })
+    expect(busSelectA.value).toBe('b1')
+
+    const rowB = screen.getByText('Amit Kumar').closest('tr')!
+    fireEvent.click(within(rowB).getByRole('button', { name: /select bus manually/i }))
+    const busSelectB = await waitFor(() => within(rowB).getByRole('combobox') as HTMLSelectElement)
+    // Stale state from student A must not carry over — B's picker starts unset.
+    expect(busSelectB.value).toBe('')
+  })
 })
