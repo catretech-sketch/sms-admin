@@ -7,6 +7,7 @@ import { useApp, useToast } from '@/lib/hooks'
 import {
   PageHead, Card, CardHead, Btn, Badge, Avatar, Search, Select,
   Drawer, Tabs, Icon, Empty, Progress, Spark, Bars, DataTable,
+  Popover, MenuItem,
   type Column, type BadgeTone,
 } from '@/components/ui'
 import { gateRole } from '@/lib/gating'
@@ -450,8 +451,16 @@ function StudentsScreen() {
         sub={sub}
         actions={editable ? (
           <>
-            <Btn variant="primary" icon="plus" onClick={() => app.go('school.sis.add')}>Add student</Btn>
-            <Btn variant="secondary" icon="upload" onClick={() => setImportOpen(true)}>Import</Btn>
+            <Popover
+              trigger={(_open, toggle) => (
+                <Btn variant="primary" icon="plus" onClick={toggle}>Add student</Btn>
+              )}
+            >
+              <div role="menu">
+                <MenuItem icon="user" onClick={() => app.go('school.sis.add')}>Add Single Student</MenuItem>
+                <MenuItem icon="upload" onClick={() => setImportOpen(true)}>Bulk Add Students</MenuItem>
+              </div>
+            </Popover>
             <Btn variant="secondary" icon="arrowRight" onClick={() => toast.info('Promote class', 'Open the year-end promotion wizard to advance students.')}>Promote class</Btn>
           </>
         ) : <Badge tone="neutral" icon="eye">View only</Badge>}

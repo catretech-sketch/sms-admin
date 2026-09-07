@@ -69,7 +69,7 @@ export function Popover({ trigger, children, align = 'right' }: { trigger: (open
 
 export function MenuItem({ icon, children, onClick, danger }: { icon?: string; children: ReactNode; onClick?: () => void; danger?: boolean }) {
   return (
-    <button className={['sm-menu-item', danger && 'danger'].filter(Boolean).join(' ')} onClick={onClick}>
+    <button role="menuitem" className={['sm-menu-item', danger && 'danger'].filter(Boolean).join(' ')} onClick={onClick}>
       {icon && <Icon name={icon} size={15} />}
       {children}
     </button>
