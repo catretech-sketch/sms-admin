@@ -502,4 +502,205 @@ describe('Transport section', () => {
     await waitFor(() => expect(routeSelect()).toHaveValue('r1'), { timeout: 10000 })
     await waitFor(() => expect(stopSelect()).toHaveValue('st1'), { timeout: 10000 })
   }, 20000)
+
+  it('edit: unchecking Uses School Transport (Yes -> No) opts the student out', async () => {
+    function FocusEditTransport({ id }: { id: string }) {
+      const app = useApp()
+      useEffect(() => { app.go('school.sis.edit', { focus: id }) }, [id])
+      if (app.focus !== id) return null
+      return <EditStudentScreen />
+    }
+
+    const EDIT_STUDENT = {
+      id: 'rahul-1', admission_no: 'sccrdtb/STU/26/0001', class_label: 'IV-B',
+      name: 'Rahul Sharma', gender: 'M', grade: 'IV', section: 'B', roll: 0,
+      guardian_name: 'Vaibhav Dubey', guardian_phone: '7080080089', guardian_email: null,
+      email: 'rahul@yopmail.com', dob: '2014-05-01',
+      attendance_pct: 60, fee_status: 'due', fee_due: 0,
+      status: 'active', house: 'Ruby', avatar_hue: 1,
+    }
+
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: { method?: string; body?: string }) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
+      const method = (init?.method ?? 'GET').toUpperCase()
+      const auth = authAndSchoolResponse(url, method)
+      if (auth) return Promise.resolve(auth)
+      if (url.includes('/classes')) {
+        return Promise.resolve(jsonResponse({
+          data: [{ id: 'c-ivb', name: 'IV-B', grade: 'IV', section: 'B', room: null, class_teacher_id: null, student_count: 2 }],
+          next_cursor: null,
+        }))
+      }
+      if (url.includes('/fees/heads')) {
+        return Promise.resolve(jsonResponse({
+          data: [{ id: 'fh1', name: 'Transport', code: null, active: true, is_system: false, is_transport_fee_head: true }],
+          next_cursor: null,
+        }))
+      }
+      if (url.includes('/transport/routes/r1/stops')) {
+        return Promise.resolve(jsonResponse({ data: [{ id: 'st1', route_id: 'r1', name: 'Shastri Nagar', sequence: 1 }] }))
+      }
+      if (url.includes('/transport/routes')) {
+        return Promise.resolve(jsonResponse({ data: [{ id: 'r1', name: 'Route 5', stops: 3 }] }))
+      }
+      if (url.includes('/students/rahul-1/transport') && method === 'PUT') {
+        return Promise.resolve(jsonResponse({
+          data: { opted_in: false, assigned: false, status: 'opted_out', bus_id: null, route_id: null, stop_id: null, fee_head_id: null, pending_reason: null },
+        }))
+      }
+      if (url.includes('/students/rahul-1/transport')) {
+        return Promise.resolve(jsonResponse({
+          data: {
+            opted_in: true, assigned: true, status: 'assigned', bus_id: 'b1',
+            route_id: 'r1', stop_id: 'st1', fee_head_id: 'fh1', pending_reason: null,
+          },
+        }))
+      }
+      if (url.includes('/extras') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ data: { extras_json: '{}' } }))
+      }
+      if (url.includes('/students/rahul-1') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ data: EDIT_STUDENT }))
+      }
+      if (url.includes('/students') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ data: [EDIT_STUDENT], next_cursor: null }))
+      }
+      return Promise.resolve(jsonResponse({ data: EDIT_STUDENT }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <AppProvider>
+          <ToastProvider>
+            <FocusEditTransport id="rahul-1" />
+          </ToastProvider>
+        </AppProvider>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => expect(usesTransportCheckbox()).toBeChecked(), { timeout: 10000 })
+    fireEvent.click(usesTransportCheckbox())
+    expect(usesTransportCheckbox()).not.toBeChecked()
+    fireEvent.click(screen.getByText('Save changes'))
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find((c) => {
+        const u = String(c[0])
+        const m = ((c[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase()
+        return u.includes('/students/rahul-1/transport') && m === 'PUT'
+      })
+      expect(call).toBeTruthy()
+      const body = JSON.parse((call![1] as RequestInit).body as string)
+      expect(body.opted_in).toBe(false)
+      expect(body.route_id).toBeNull()
+      expect(body.stop_id).toBeNull()
+      expect(body.fee_head_id).toBeNull()
+    }, { timeout: 10000 })
+  }, 20000)
+
+  it('edit: checking Uses School Transport (No -> Yes) opts the student in with the chosen route/stop', async () => {
+    function FocusEditTransport({ id }: { id: string }) {
+      const app = useApp()
+      useEffect(() => { app.go('school.sis.edit', { focus: id }) }, [id])
+      if (app.focus !== id) return null
+      return <EditStudentScreen />
+    }
+
+    const EDIT_STUDENT = {
+      id: 'rahul-1', admission_no: 'sccrdtb/STU/26/0001', class_label: 'IV-B',
+      name: 'Rahul Sharma', gender: 'M', grade: 'IV', section: 'B', roll: 0,
+      guardian_name: 'Vaibhav Dubey', guardian_phone: '7080080089', guardian_email: null,
+      email: 'rahul@yopmail.com', dob: '2014-05-01',
+      attendance_pct: 60, fee_status: 'due', fee_due: 0,
+      status: 'active', house: 'Ruby', avatar_hue: 1,
+    }
+
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: { method?: string; body?: string }) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
+      const method = (init?.method ?? 'GET').toUpperCase()
+      const auth = authAndSchoolResponse(url, method)
+      if (auth) return Promise.resolve(auth)
+      if (url.includes('/classes')) {
+        return Promise.resolve(jsonResponse({
+          data: [{ id: 'c-ivb', name: 'IV-B', grade: 'IV', section: 'B', room: null, class_teacher_id: null, student_count: 2 }],
+          next_cursor: null,
+        }))
+      }
+      if (url.includes('/fees/heads')) {
+        return Promise.resolve(jsonResponse({
+          data: [{ id: 'fh1', name: 'Transport', code: null, active: true, is_system: false, is_transport_fee_head: true }],
+          next_cursor: null,
+        }))
+      }
+      if (url.includes('/transport/routes/r1/stops')) {
+        return Promise.resolve(jsonResponse({ data: [{ id: 'st1', route_id: 'r1', name: 'Shastri Nagar', sequence: 1 }] }))
+      }
+      if (url.includes('/transport/routes')) {
+        return Promise.resolve(jsonResponse({ data: [{ id: 'r1', name: 'Route 5', stops: 3 }] }))
+      }
+      if (url.includes('/students/rahul-1/transport') && method === 'PUT') {
+        return Promise.resolve(jsonResponse({
+          data: { opted_in: true, assigned: true, status: 'assigned', bus_id: 'b1', route_id: 'r1', stop_id: 'st1', fee_head_id: null, pending_reason: null },
+        }))
+      }
+      if (url.includes('/students/rahul-1/transport')) {
+        return Promise.resolve(jsonResponse({
+          data: { opted_in: false, assigned: false, status: 'not_mapped', bus_id: null, route_id: null, stop_id: null, fee_head_id: null, pending_reason: null },
+        }))
+      }
+      if (url.includes('/extras') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ data: { extras_json: '{}' } }))
+      }
+      if (url.includes('/students/rahul-1') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ data: EDIT_STUDENT }))
+      }
+      if (url.includes('/students') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ data: [EDIT_STUDENT], next_cursor: null }))
+      }
+      return Promise.resolve(jsonResponse({ data: EDIT_STUDENT }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <AppProvider>
+          <ToastProvider>
+            <FocusEditTransport id="rahul-1" />
+          </ToastProvider>
+        </AppProvider>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => expect(usesTransportCheckbox()).not.toBeChecked(), { timeout: 10000 })
+    fireEvent.click(usesTransportCheckbox())
+    await waitFor(() =>
+      expect(Array.from(routeSelect().querySelectorAll('option')).some(
+        (o) => (o as HTMLOptionElement).value === 'r1',
+      )).toBe(true), { timeout: 10000 },
+    )
+    fireEvent.change(routeSelect(), { target: { value: 'r1' } })
+    await waitFor(() =>
+      expect(Array.from(stopSelect().querySelectorAll('option')).some(
+        (o) => (o as HTMLOptionElement).value === 'st1',
+      )).toBe(true), { timeout: 10000 },
+    )
+    fireEvent.change(stopSelect(), { target: { value: 'st1' } })
+    fireEvent.click(screen.getByText('Save changes'))
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find((c) => {
+        const u = String(c[0])
+        const m = ((c[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase()
+        return u.includes('/students/rahul-1/transport') && m === 'PUT'
+      })
+      expect(call).toBeTruthy()
+      const body = JSON.parse((call![1] as RequestInit).body as string)
+      expect(body.opted_in).toBe(true)
+      expect(body.route_id).toBe('r1')
+      expect(body.stop_id).toBe('st1')
+    }, { timeout: 10000 })
+  }, 20000)
 })
