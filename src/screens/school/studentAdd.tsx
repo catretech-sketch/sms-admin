@@ -21,10 +21,7 @@ import type { SchoolClass } from '@/api/classes'
 import { listSchoolHouses } from '@/api/schoolHouses'
 import { useTransportRoutes, useRouteStops, useStudentTransport, useSetStudentTransport } from '@/api/hooks/useOperations'
 import { useFeeHeads } from '@/api/hooks/useFeeHeads'
-import {
-  required, validateAadhaar, validateEmail, validatePhone, validateFile,
-  isDuplicateValue, normalizePhoneDigits, normalizeEmailKey,
-} from '@/lib/validation'
+import { validateStudentForm } from '@/lib/studentValidation'
 import { properName, properPlace } from '@/lib/properCase'
 import { toDateInputValue } from '@/lib/dateInput'
 import { predictStudentRoll } from '@/lib/studentRoll'
@@ -58,8 +55,6 @@ const RELIGIONS = ['', 'Hindu', 'Muslim', 'Christian', 'Sikh', 'Buddhist', 'Jain
 const CATEGORIES = ['', 'General', 'OBC', 'SC', 'ST', 'EWS']
 const GENDERS = [{ value: '', label: 'Select…' }, { value: 'M', label: 'Male' }, { value: 'F', label: 'Female' }]
 const STATUSES = [{ value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }]
-
-const REQUIRED_FIELDS = ['firstName', 'lastName', 'cls', 'dob', 'gender', 'phone', 'email'] as const
 
 type Form = Record<string, string>
 type Files = Record<string, File | null>
@@ -399,45 +394,14 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
     return [{ value: '', label: houses.length ? 'Select house…' : 'No houses — add in Academics' }, ...opts]
   }, [houses, f.house])
 
-  const validate = (): Record<string, string> => {
-    const e: Record<string, string> = {}
-    for (const key of REQUIRED_FIELDS) {
-      const msg = required(f[key])
-      if (msg) e[key] = msg
-    }
-    if (!f.fatherName.trim() && !f.motherName.trim()) {
-      e.fatherName = 'Enter father or mother name'
-    }
-    const roster = rosterQ.data ?? []
-    const checks: [string, string | null][] = [
-      ['aadhaar', validateAadhaar(f.aadhaar)],
-      ['fatherAadhaar', validateAadhaar(f.fatherAadhaar)],
-      ['email', e.email ? null : validateEmail(f.email)
-        || (isDuplicateValue(f.email, roster.map((s) => ({ id: s.id, value: s.email })), normalizeEmailKey, existing?.id)
-          ? 'Another student already uses this email' : null)],
-      ['fatherEmail', validateEmail(f.fatherEmail)],
-      ['motherEmail', validateEmail(f.motherEmail)],
-      ['phone', e.phone ? null : validatePhone(f.phone)
-        || (isDuplicateValue(f.phone, roster.map((s) => ({ id: s.id, value: s.phone })), normalizePhoneDigits, existing?.id)
-          ? 'Another student already uses this phone number' : null)],
-      ['fatherPhone', validatePhone(f.fatherPhone)],
-      ['motherPhone', validatePhone(f.motherPhone)],
-    ]
-    for (const [key, msg] of checks) if (msg) e[key] = msg
-    for (const key of Object.keys(files)) {
-      const msg = validateFile(files[key])
-      if (msg) e[key] = msg
-    }
-    /* Backend requires routeId when optedIn is true (400 otherwise). Legacy BusRidersModal
-     * assignments can carry routeId: null by design, so an admin opening a legacy-assigned
-     * student must pick a route (or opt out) before they can save at all — surfaced as a
-     * normal inline validation error, same as any other required field, rather than a
-     * confusing 400 from an unrelated save. */
-    if (opsEnabled && f.transportOptedIn === 'yes' && !f.transportRouteId) {
-      e.transportRouteId = 'Select a route before saving'
-    }
-    return e
-  }
+  const validate = (): Record<string, string> =>
+    validateStudentForm({
+      form: f,
+      files,
+      roster: (rosterQ.data ?? []).map((s) => ({ id: s.id, email: s.email, phone: s.phone })),
+      existingId: existing?.id,
+      transportEnabled: opsEnabled,
+    })
 
   const save = async () => {
     const e = validate()
