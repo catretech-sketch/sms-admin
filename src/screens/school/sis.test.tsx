@@ -55,3 +55,30 @@ describe('Add Student entry point', () => {
     expect(getByRole('menuitem', { name: 'Bulk Add Students' })).toBeInTheDocument()
   })
 })
+
+describe('Bulk import wizard — Step 1 Upload', () => {
+  it('parses an uploaded CSV and shows the real file name and row count', async () => {
+    const { getByText, getByLabelText, findByText } = renderSisScreen()
+    fireEvent.click(getByText('Add student'))
+    fireEvent.click(getByText('Bulk Add Students'))
+    const file = new File(
+      ['First Name,Last Name\nAarav,Sharma\nAditi,Verma\n'], 'students.csv', { type: 'text/csv' },
+    )
+    const input = getByLabelText(/drop your csv/i)
+    fireEvent.change(input, { target: { files: [file] } })
+    expect(await findByText('students.csv')).toBeInTheDocument()
+    expect(await findByText('Rows detected: 2')).toBeInTheDocument()
+    expect(getByText('Continue')).not.toBeDisabled()
+  })
+
+  it('rejects a file with more than 10,000 rows before allowing Continue', async () => {
+    const { getByText, getByLabelText, findByText } = renderSisScreen()
+    fireEvent.click(getByText('Add student'))
+    fireEvent.click(getByText('Bulk Add Students'))
+    const rows = Array.from({ length: 10001 }, (_, i) => `Student${i},Last`).join('\n')
+    const file = new File([`First Name,Last Name\n${rows}\n`], 'huge.csv', { type: 'text/csv' })
+    fireEvent.change(getByLabelText(/drop your csv/i), { target: { files: [file] } })
+    expect(await findByText(/maximum of 10,000 rows/i)).toBeInTheDocument()
+    expect(getByText('Continue')).toBeDisabled()
+  })
+})

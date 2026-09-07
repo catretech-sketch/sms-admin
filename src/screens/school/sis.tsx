@@ -34,6 +34,7 @@ import { useFeePayments } from '@/api/hooks/useFeePayments'
 import { buildStudentTimeline } from '@/lib/studentTimeline'
 import { monthlyBreakdown, monthlySeriesForKeys, academicYearMonthKeys, academicYearStart, monthDailyGrid } from '@/api/studentAttendance'
 import { type AttendanceStatus } from '@/api/attendance'
+import { parseCsvText, parseXlsxBuffer, type ParsedFile } from '@/lib/importFileParse'
 import type { Student, FeeStatus, Role, Exam } from '@/types'
 import type { SchoolClass } from '@/api/classes'
 import { DEFAULT_GRADES } from '@/lib/defaultClasses'
@@ -73,13 +74,67 @@ export function canEdit(role: Role): boolean {
 /* ============================================================
    Bulk-import wizard (upload → map → done)
    ============================================================ */
+const IMPORT_ROW_CAP = 10000
+
+/** Reads a File as text via FileReader (works in jsdom test envs too, unlike File.prototype.text()). */
+function readFileAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read file'))
+    reader.readAsText(file)
+  })
+}
+
+/** Reads a File as an ArrayBuffer via FileReader (works in jsdom test envs too, unlike File.prototype.arrayBuffer()). */
+function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as ArrayBuffer)
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read file'))
+    reader.readAsArrayBuffer(file)
+  })
+}
+
 function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const toast = useToast()
   const [step, setStep] = useState(0)
   const steps = ['Upload', 'Map columns', 'Done']
+  const [upload, setUpload] = useState<{ fileName: string; parsed: ParsedFile } | null>(null)
+  const [uploadError, setUploadError] = useState<string | null>(null)
 
-  const reset = () => { setStep(0); onClose() }
+  const reset = () => { setStep(0); setUpload(null); setUploadError(null); onClose() }
   const finish = () => { toast.success('Import complete', '36 students imported, 0 errors.'); reset() }
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setUploadError(null)
+    try {
+      const isXlsx = /\.xlsx$/i.test(file.name)
+      // NOTE: parseXlsxBuffer relies on ExcelJS's eachRow with the default
+      // includeEmpty:false — a worksheet whose literal row 1 is blank will
+      // shift its real header row into the data set. We can't detect that
+      // case reliably here, so we guard the visible symptom instead: zero
+      // detected headers surfaces as an upload error below rather than
+      // silently treating data rows as headerless columns.
+      const parsed = isXlsx
+        ? await parseXlsxBuffer(await readFileAsArrayBuffer(file))
+        : parseCsvText(await readFileAsText(file))
+      if (parsed.headers.length === 0) {
+        setUploadError('Could not detect column headers in this file. Check that the first row contains column names and try again.')
+      } else if (parsed.rows.length > IMPORT_ROW_CAP) {
+        setUploadError(`This file exceeds the maximum of 10,000 rows (found ${parsed.rows.length.toLocaleString()}). Split it into smaller files and try again.`)
+      }
+      setUpload({ fileName: file.name, parsed })
+    } catch {
+      setUpload(null)
+      setUploadError('Could not read this file. Check that it is a valid CSV or XLSX file and try again.')
+    }
+  }
+
+  const canContinue = step !== 0 || (!!upload && !uploadError)
 
   return (
     <Drawer
@@ -89,7 +144,7 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
         <div className="row gap8 jc-between">
           <Btn variant="ghost" disabled={step === 0} onClick={() => setStep((s) => Math.max(0, s - 1))}>Back</Btn>
           {step < steps.length - 1
-            ? <Btn variant="primary" iconRight="arrowRight" onClick={() => setStep((s) => s + 1)}>Continue</Btn>
+            ? <Btn variant="primary" iconRight="arrowRight" disabled={!canContinue} onClick={() => setStep((s) => s + 1)}>Continue</Btn>
             : <Btn variant="primary" icon="check" onClick={finish}>Finish import</Btn>}
         </div>
       }
@@ -105,13 +160,28 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
 
       {step === 0 && (
         <div className="col gap12">
-          <div className="sm-empty" style={{ border: '1px dashed var(--border)', borderRadius: 12 }}>
+          <label className="sm-empty" style={{ border: '1px dashed var(--border)', borderRadius: 12, cursor: 'pointer', position: 'relative' }}>
+            <input
+              type="file"
+              accept=".csv,.xlsx"
+              onChange={handleFile}
+              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+            />
             <div className="sm-empty-ic"><Icon name="upload" size={26} /></div>
             <div className="sm-empty-title">Drop your CSV / XLSX here</div>
-            <div className="sm-empty-body">Or use our template (Name, Class, Guardian, Phone…). Max 5,000 rows.</div>
+            <div className="sm-empty-body">Or use our template (Name, Class, Guardian, Phone…). Max 10,000 rows.</div>
             <div style={{ marginTop: 16 }}><Btn variant="secondary" icon="download">Download template</Btn></div>
-          </div>
-          <div className="row ai-center gap8 t-sm muted"><Icon name="doc" size={14} />students_2026.csv · 36 rows detected</div>
+          </label>
+          {upload && (
+            <div className="row ai-center gap8 t-sm muted">
+              <Icon name="doc" size={14} />
+              <span>{upload.fileName}</span>
+              <span>Rows detected: {upload.parsed.rows.length}</span>
+            </div>
+          )}
+          {uploadError && (
+            <div className="sm-err row ai-center gap8"><Icon name="alert" size={14} />{uploadError}</div>
+          )}
         </div>
       )}
 
