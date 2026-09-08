@@ -75,19 +75,25 @@ function renderSisScreen() {
 }
 
 describe('Add Student entry point', () => {
-  it('offers Add Single Student and Bulk Add Students from the Add student control', () => {
-    const { getByText, getByRole } = renderSisScreen()
-    fireEvent.click(getByText('Add student'))
-    expect(getByRole('menuitem', { name: 'Add Single Student' })).toBeInTheDocument()
-    expect(getByRole('menuitem', { name: 'Bulk Add Students' })).toBeInTheDocument()
+  it('shows Add Student and Bulk Import as separate top-level buttons, next to Promote class', () => {
+    const { getByText } = renderSisScreen()
+    expect(getByText('Add Student')).toBeInTheDocument()
+    expect(getByText('Bulk Import')).toBeInTheDocument()
+    expect(getByText('Promote class')).toBeInTheDocument()
+  })
+
+  it('Bulk Import opens the wizard directly, with no intermediate menu', () => {
+    const { getByText, queryByRole } = renderSisScreen()
+    fireEvent.click(getByText('Bulk Import'))
+    expect(queryByRole('menu')).not.toBeInTheDocument()
+    expect(getByText('Upload')).toBeInTheDocument()
   })
 })
 
 describe('Bulk import wizard — Step 1 Upload', () => {
   it('parses an uploaded CSV and shows the real file name and row count', async () => {
     const { getByText, getByLabelText, findByText } = renderSisScreen()
-    fireEvent.click(getByText('Add student'))
-    fireEvent.click(getByText('Bulk Add Students'))
+    fireEvent.click(getByText('Bulk Import'))
     const file = new File(
       ['First Name,Last Name\nAarav,Sharma\nAditi,Verma\n'], 'students.csv', { type: 'text/csv' },
     )
@@ -100,8 +106,7 @@ describe('Bulk import wizard — Step 1 Upload', () => {
 
   it('rejects a file with more than 10,000 rows before allowing Continue', async () => {
     const { getByText, getByLabelText, findByText } = renderSisScreen()
-    fireEvent.click(getByText('Add student'))
-    fireEvent.click(getByText('Bulk Add Students'))
+    fireEvent.click(getByText('Bulk Import'))
     const rows = Array.from({ length: 10001 }, (_, i) => `Student${i},Last`).join('\n')
     const file = new File([`First Name,Last Name\n${rows}\n`], 'huge.csv', { type: 'text/csv' })
     fireEvent.change(getByLabelText(/drop your csv/i), { target: { files: [file] } })
@@ -113,8 +118,7 @@ describe('Bulk import wizard — Step 1 Upload', () => {
 describe('Bulk import wizard — Step 2 Map columns', () => {
   it('auto-suggests a mapping from the uploaded headers and blocks Continue until every required field is mapped', async () => {
     const { getByText, getByLabelText, findByText, findAllByText, getAllByRole } = renderSisScreen()
-    fireEvent.click(getByText('Add student'))
-    fireEvent.click(getByText('Bulk Add Students'))
+    fireEvent.click(getByText('Bulk Import'))
     const file = new File(
       ['First Name,Last Name,Phone\nAarav,Sharma,9999999999\n'], 'students.csv', { type: 'text/csv' },
     )
@@ -131,8 +135,7 @@ describe('Bulk import wizard — Step 2 Map columns', () => {
 
   it('re-disables Continue when the admin unmaps a required field, and re-enables it once remapped', async () => {
     const { getByText, getByLabelText, findByText, getAllByRole } = renderSisScreen()
-    fireEvent.click(getByText('Add student'))
-    fireEvent.click(getByText('Bulk Add Students'))
+    fireEvent.click(getByText('Bulk Import'))
     const headers = ['First Name', 'Last Name', 'Class + Section', 'Gender', 'Date of Birth', 'Primary Contact Number', 'Email']
     const file = new File(
       [`${headers.join(',')}\nAarav,Sharma,5-A,Male,2015-01-01,9999999999,a@b.com\n`], 'students.csv', { type: 'text/csv' },
@@ -155,8 +158,7 @@ describe('Bulk import wizard — Step 2 Map columns', () => {
 
   it('keeps two uploaded columns with the identical header name independently mappable', async () => {
     const { getByText, getByLabelText, findByText, getAllByRole } = renderSisScreen()
-    fireEvent.click(getByText('Add student'))
-    fireEvent.click(getByText('Bulk Add Students'))
+    fireEvent.click(getByText('Bulk Import'))
     // Two columns both literally named "First Name" — a plausible duplicate-header CSV.
     const headers = ['First Name', 'First Name', 'Last Name', 'Class + Section', 'Gender', 'Date of Birth', 'Primary Contact Number', 'Email']
     const file = new File(
@@ -192,8 +194,7 @@ async function driveToPreview(
   { getByText, getByLabelText, findByText }: ReturnType<typeof renderSisScreen>,
   csvBody: string,
 ) {
-  fireEvent.click(getByText('Add student'))
-  fireEvent.click(getByText('Bulk Add Students'))
+  fireEvent.click(getByText('Bulk Import'))
   const file = new File([csvBody], 'students.csv', { type: 'text/csv' })
   fireEvent.change(getByLabelText(/drop your csv/i), { target: { files: [file] } })
   expect(await findByText('students.csv')).toBeInTheDocument()
@@ -266,8 +267,7 @@ describe('Bulk import wizard — Step 3 Preview', () => {
       BULK_HEADERS.join(','),
       'Aarav,Sharma,5-A,Male,2015-01-01,9000000001,aarav@x.com,Ramesh Sharma',
     ].join('\n')
-    fireEvent.click(getByText('Add student'))
-    fireEvent.click(getByText('Bulk Add Students'))
+    fireEvent.click(getByText('Bulk Import'))
     const file = new File([csv], 'students.csv', { type: 'text/csv' })
     fireEvent.change(getByLabelText(/drop your csv/i), { target: { files: [file] } })
     expect(await findByText('students.csv')).toBeInTheDocument()
@@ -311,8 +311,7 @@ describe('Bulk import wizard — Step 3 Preview', () => {
       BULK_HEADERS.join(','),
       'Aarav,Sharma,5-A,Male,2015-01-01,9000000001,aarav@x.com,Ramesh Sharma',
     ].join('\n')
-    fireEvent.click(getByText('Add student'))
-    fireEvent.click(getByText('Bulk Add Students'))
+    fireEvent.click(getByText('Bulk Import'))
     const file = new File([csv], 'students.csv', { type: 'text/csv' })
     fireEvent.change(getByLabelText(/drop your csv/i), { target: { files: [file] } })
     expect(await findByText('students.csv')).toBeInTheDocument()
@@ -480,8 +479,7 @@ describe('Bulk import wizard — Step 4 Import', () => {
     fireEvent.click(getByLabelText('Close'))
 
     // Reopen the wizard.
-    fireEvent.click(getByText('Add student'))
-    fireEvent.click(getByText('Bulk Add Students'))
+    fireEvent.click(getByText('Bulk Import'))
     // Step 1 (Upload) should show, with no stale paused/error state bleeding through.
     expect(queryByText(/Import paused at batch/i)).not.toBeInTheDocument()
     expect(queryByText(/network error/i)).not.toBeInTheDocument()
@@ -700,8 +698,7 @@ describe('Bulk import wizard — full end to end', () => {
     const { getByText, getByLabelText, findByText, getAllByRole } = rendered
 
     // 1. Upload the 450-row fixture.
-    fireEvent.click(getByText('Add student'))
-    fireEvent.click(getByText('Bulk Add Students'))
+    fireEvent.click(getByText('Bulk Import'))
     const file = new File([e2eWizardCsv()], 'students.csv', { type: 'text/csv' })
     fireEvent.change(getByLabelText(/drop your csv/i), { target: { files: [file] } })
     expect(await findByText('students.csv')).toBeInTheDocument()
@@ -1084,8 +1081,7 @@ describe('Bulk import wizard — Upload step template download', () => {
     const downloadSpy = vi.spyOn(feeExport, 'downloadTextFile').mockImplementation(() => {})
 
     const { getByText } = renderSisScreen()
-    fireEvent.click(getByText('Add student'))
-    fireEvent.click(getByText('Bulk Add Students'))
+    fireEvent.click(getByText('Bulk Import'))
     fireEvent.click(getByText('Download template'))
 
     expect(downloadSpy).toHaveBeenCalledTimes(1)

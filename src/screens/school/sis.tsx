@@ -7,7 +7,6 @@ import { useApp, useToast } from '@/lib/hooks'
 import {
   PageHead, Card, CardHead, Btn, Badge, Avatar, Search, Select,
   Drawer, Tabs, Icon, Empty, Progress, Spark, Bars, DataTable,
-  Popover, MenuItem,
   type Column, type BadgeTone,
 } from '@/components/ui'
 import { gateRole, tierIncludes } from '@/lib/gating'
@@ -1195,19 +1194,12 @@ function StudentsScreen() {
         sub={sub}
         actions={editable ? (
           <>
-            <Popover
-              role="menu"
-              trigger={(_open, toggle) => (
-                <Btn variant="primary" icon="plus" onClick={toggle}>Add student</Btn>
-              )}
-            >
-              <MenuItem icon="user" onClick={() => app.go('school.sis.add')}>Add Single Student</MenuItem>
-              {/* Bulk import needs a stricter role than single Add (see canBulkImport):
-                  showing it to a role the server will 403 is a working-looking dead end. */}
-              {bulkImportable && (
-                <MenuItem icon="upload" onClick={() => setImportOpen(true)}>Bulk Add Students</MenuItem>
-              )}
-            </Popover>
+            <Btn variant="primary" icon="plus" onClick={() => app.go('school.sis.add')}>Add Student</Btn>
+            {/* Bulk import needs a stricter role than single Add (see canBulkImport):
+                showing it to a role the server will 403 is a working-looking dead end. */}
+            {bulkImportable && (
+              <Btn variant="secondary" icon="upload" onClick={() => setImportOpen(true)}>Bulk Import</Btn>
+            )}
             <Btn variant="secondary" icon="arrowRight" onClick={() => toast.info('Promote class', 'Open the year-end promotion wizard to advance students.')}>Promote class</Btn>
           </>
         ) : <Badge tone="neutral" icon="eye">View only</Badge>}
