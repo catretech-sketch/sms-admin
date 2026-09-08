@@ -320,13 +320,17 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
 
   const bulkImport = useBulkImportStudents()
 
-  // True only while an actual batch HTTP round-trip is outstanding — never a timer/estimate.
-  // Matches the initial (0/0) state as "not in flight" so the drawer stays closable before
-  // Start Import is clicked.
-  const importInFlight = bulkImport.progress.processed < bulkImport.progress.total && bulkImport.pausedAtBatch == null
+  // True only while the hook's import loop is actively iterating batches (its own explicit
+  // isRunning signal) — never inferred from a processed/total count comparison, since a
+  // short/partial server response (processed < rows sent) would otherwise leave that
+  // comparison stuck true forever with no outstanding request, permanently locking the UI.
+  // Matches the initial (not running) state as "not in flight" so the drawer stays closable
+  // before Start Import is clicked, and also covers the retry() round-trip so Retry can't be
+  // double-clicked into two concurrent runs.
+  const importInFlight = bulkImport.isRunning
   const totalBatches = Math.max(1, Math.ceil(bulkImport.progress.total / BATCH_SIZE))
 
-  const reset = () => { setStep(0); setUpload(null); setUploadError(null); setColumnMapping({}); onClose() }
+  const reset = () => { setStep(0); setUpload(null); setUploadError(null); setColumnMapping({}); bulkImport.resetImport(); onClose() }
 
   const startImport = () => {
     if (!preview || preview.validRows.length === 0) return
@@ -372,7 +376,12 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
   const canContinue = step === 0 ? (!!upload && !uploadError) : step === 1 ? !missingRequired : true
   const canStartImport = !!preview && preview.validRows.length > 0
 
-  const importDone = bulkImport.progress.total > 0 && bulkImport.progress.processed >= bulkImport.progress.total && bulkImport.pausedAtBatch == null
+  // Done means the loop actually finished running (isRunning is the real, explicit signal —
+  // see the importInFlight comment above) without pausing on a failure. Deliberately not
+  // `processed >= total`: that comparison can under-count forever on a short/partial batch
+  // response even though the loop itself is finished, which would leave the drawer showing
+  // neither a Retry nor a Done control.
+  const importDone = bulkImport.progress.total > 0 && !bulkImport.isRunning && bulkImport.pausedAtBatch == null
 
   return (
     <Drawer
@@ -391,7 +400,7 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
             <Btn variant="primary" icon="check" disabled={!canStartImport || importInFlight} onClick={startImport}>Start Import</Btn>
           )}
           {step === 3 && bulkImport.pausedAtBatch != null && (
-            <Btn variant="primary" icon="refresh" onClick={() => void bulkImport.retry()}>Retry Import</Btn>
+            <Btn variant="primary" icon="refresh" disabled={importInFlight} onClick={() => void bulkImport.retry()}>Retry Import</Btn>
           )}
           {step === 3 && importDone && (
             <Btn variant="primary" icon="check" onClick={reset}>Done</Btn>

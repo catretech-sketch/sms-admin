@@ -401,6 +401,79 @@ describe('Bulk import wizard — Step 4 Import', () => {
     expect(await findByText('Processed 3 / 3')).toBeInTheDocument()
     expect(screen.queryByText(/Import paused at batch/i)).not.toBeInTheDocument()
   })
+
+  it('re-closable after a short/partial server response that never reports processed===total', async () => {
+    // Regression test for a bug where importInFlight was inferred from
+    // `processed < total`: a batch response that under-reports `processed` (partial
+    // acceptance, a dropped row, an off-by-one) left that comparison stuck true forever,
+    // permanently locking the drawer even though the import loop had actually finished.
+    vi.spyOn(bulkImportApi, 'bulkImportBatch').mockResolvedValue(batchResult({ processed: 2, created: 2 }))
+
+    const rendered = renderSisScreen()
+    const { getByText, findByText, getByLabelText } = rendered
+    await driveToPreview(rendered, IMPORT_CSV)
+    expect(await findByText('Total Rows: 3')).toBeInTheDocument()
+
+    fireEvent.click(getByText('Start Import'))
+
+    // The single batch resolves with processed=2 for 3 sent rows — processed never
+    // reaches total, yet the loop has genuinely finished (only one batch existed).
+    await findByText('Processed 2 / 3')
+
+    // The drawer must be closable via the real X button, not permanently locked.
+    expect(getByLabelText('Close')).toBeInTheDocument()
+  })
+
+  it('disables Retry Import while a retry round-trip is in flight, preventing a double-submit', async () => {
+    let resolveRetryBatch: ((v: BulkImportBatchResult) => void) | null = null
+    let callCount = 0
+    vi.spyOn(bulkImportApi, 'bulkImportBatch').mockImplementation(() => {
+      callCount += 1
+      // The initial run exhausts its 3 retry attempts (all reject) and pauses; only the
+      // 4th call (issued by clicking Retry Import) hangs, so we can observe the button
+      // disabled while that retry round-trip is genuinely outstanding.
+      if (callCount <= 3) return Promise.reject(new Error('network error'))
+      return new Promise((resolve) => { resolveRetryBatch = resolve })
+    })
+
+    const rendered = renderSisScreen()
+    const { getByText, findByText, getByRole } = rendered
+    await driveToPreview(rendered, IMPORT_CSV)
+    expect(await findByText('Total Rows: 3')).toBeInTheDocument()
+
+    fireEvent.click(getByText('Start Import'))
+    expect(await findByText(/Import paused at batch/i)).toBeInTheDocument()
+
+    fireEvent.click(getByText('Retry Import'))
+    // While the retry's batch call is outstanding, the button must be disabled — a second
+    // click must not be able to start a concurrent runFrom loop on the same importId.
+    expect(getByRole('button', { name: 'Retry Import' })).toBeDisabled()
+
+    resolveRetryBatch!(batchResult())
+    await findByText('Processed 3 / 3')
+  })
+
+  it('resets the hook\'s import state (progress/paused/error) when the drawer is closed and reopened', async () => {
+    vi.spyOn(bulkImportApi, 'bulkImportBatch').mockRejectedValue(new Error('network error'))
+
+    const rendered = renderSisScreen()
+    const { getByText, findByText, getByLabelText, queryByText } = rendered
+    await driveToPreview(rendered, IMPORT_CSV)
+    expect(await findByText('Total Rows: 3')).toBeInTheDocument()
+
+    fireEvent.click(getByText('Start Import'))
+    expect(await findByText(/Import paused at batch/i)).toBeInTheDocument()
+
+    // Close the drawer (real X button — closable since the loop is paused, not running).
+    fireEvent.click(getByLabelText('Close'))
+
+    // Reopen the wizard.
+    fireEvent.click(getByText('Add student'))
+    fireEvent.click(getByText('Bulk Add Students'))
+    // Step 1 (Upload) should show, with no stale paused/error state bleeding through.
+    expect(queryByText(/Import paused at batch/i)).not.toBeInTheDocument()
+    expect(queryByText(/network error/i)).not.toBeInTheDocument()
+  })
 })
 
 /** Minimal valid SchoolClass fixtures for buildBulkPreview's class-exists check. */

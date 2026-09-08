@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { bulkImportBatch, type BulkImportRowResult } from '../bulkImportStudents'
 import type { BulkImportRowPayload } from '@/lib/studentMapping'
+import { newIdempotencyKey } from '@/lib/idempotencyKey'
 
 export const BATCH_SIZE = 200
 const MAX_RETRIES_PER_BATCH = 3
@@ -31,42 +32,56 @@ export function useBulkImportStudents() {
   // paused (e.g. a real network/server message) instead of only the generic pause banner —
   // the try/catch below previously swallowed the actual error object.
   const [lastError, setLastError] = useState<string | null>(null)
+  // Explicit "the import loop is actively iterating batches" signal — set true the moment
+  // runFrom starts (from either runImport or retry) and false only once runFrom's loop
+  // function returns (whether it ran out of batches to process, or paused on a failure).
+  // Deliberately NOT derived from `processed < total`: a server response that reports
+  // `processed` less than the rows actually sent in a batch (partial acceptance, a
+  // dropped row, an off-by-one) would otherwise leave that comparison stuck true forever
+  // even though no request is outstanding, permanently locking the UI with no way to
+  // detect completion.
+  const [isRunning, setIsRunning] = useState(false)
   const importIdRef = useRef<string>('')
   const batchesRef = useRef<BulkImportRowPayload[][]>([])
 
   const runFrom = useCallback(async (startBatchIndex: number) => {
-    const batches = batchesRef.current
-    for (let i = startBatchIndex; i < batches.length; i++) {
-      let attempt = 0
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        try {
-          const result = await bulkImportBatch(importIdRef.current, i, batches[i])
-          setProgress((prev) => ({
-            total: prev.total,
-            processed: prev.processed + result.processed,
-            created: prev.created + result.created,
-            skipped: prev.skipped + result.skipped,
-            transportPending: prev.transportPending + result.transportPending,
-            rowResults: [...prev.rowResults, ...result.rows],
-          }))
-          setPausedAtBatch(null)
-          setLastError(null)
-          break
-        } catch (err) {
-          attempt += 1
-          setLastError(err instanceof Error ? err.message : String(err))
-          if (attempt >= MAX_RETRIES_PER_BATCH) {
-            setPausedAtBatch(i)
-            return
+    setIsRunning(true)
+    try {
+      const batches = batchesRef.current
+      for (let i = startBatchIndex; i < batches.length; i++) {
+        let attempt = 0
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          try {
+            const result = await bulkImportBatch(importIdRef.current, i, batches[i])
+            setProgress((prev) => ({
+              total: prev.total,
+              processed: prev.processed + result.processed,
+              created: prev.created + result.created,
+              skipped: prev.skipped + result.skipped,
+              transportPending: prev.transportPending + result.transportPending,
+              rowResults: [...prev.rowResults, ...result.rows],
+            }))
+            setPausedAtBatch(null)
+            setLastError(null)
+            break
+          } catch (err) {
+            attempt += 1
+            setLastError(err instanceof Error ? err.message : String(err))
+            if (attempt >= MAX_RETRIES_PER_BATCH) {
+              setPausedAtBatch(i)
+              return
+            }
           }
         }
       }
+    } finally {
+      setIsRunning(false)
     }
   }, [])
 
   const runImport = useCallback(async (rows: BulkImportRowPayload[]) => {
-    importIdRef.current = crypto.randomUUID()
+    importIdRef.current = newIdempotencyKey()
     batchesRef.current = chunk(rows, BATCH_SIZE)
     setProgress({ ...INITIAL_PROGRESS, total: rows.length })
     setPausedAtBatch(null)
@@ -75,9 +90,18 @@ export function useBulkImportStudents() {
   }, [runFrom])
 
   const retry = useCallback(async () => {
-    if (pausedAtBatch == null) return
+    if (pausedAtBatch == null || isRunning) return
     await runFrom(pausedAtBatch)
-  }, [pausedAtBatch, runFrom])
+  }, [pausedAtBatch, isRunning, runFrom])
 
-  return { runImport, retry, progress, pausedAtBatch, lastError }
+  const resetImport = useCallback(() => {
+    setProgress(INITIAL_PROGRESS)
+    setPausedAtBatch(null)
+    setLastError(null)
+    setIsRunning(false)
+    importIdRef.current = ''
+    batchesRef.current = []
+  }, [])
+
+  return { runImport, retry, resetImport, progress, pausedAtBatch, lastError, isRunning }
 }

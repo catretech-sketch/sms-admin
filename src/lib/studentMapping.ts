@@ -42,6 +42,18 @@ export interface BulkStudentRow {
   transportFeeHeadId: string
 }
 
+/** Normalizes a free-text bulk-import "gender" cell to the app's 'M' | 'F' encoding.
+ *  The single-Add form's dropdown only ever supplies the literal 'M'/'F', so its own
+ *  `f.gender === 'F' ? 'F' : 'M'` exact-match check is fine there — but a bulk-upload CSV
+ *  cell is free text, and an exact-match-only check would silently mis-map any case or
+ *  spelling variant other than the single character 'F' (e.g. "Female", "female", "f ")
+ *  to Male. Treat any of f/female (case-insensitive, trimmed) as 'F'; everything else
+ *  non-blank stays 'M', matching the existing semantics for every other spelling. */
+function normalizeBulkGender(value: string): 'M' | 'F' {
+  const normalized = value.trim().toLowerCase()
+  return normalized === 'f' || normalized === 'female' ? 'F' : 'M'
+}
+
 /** Same shape as buildStudent() in studentAdd.tsx, minus file handling (bulk rows carry no
  *  files) — kept as a separate pure function since bulk import has no React form state to
  *  read files/existing-record from. */
@@ -67,7 +79,7 @@ export function buildStudentFromRow(
     id: `BULK-${row.rowNumber}-${Date.now().toString(36).toUpperCase()}`,
     adm: row.admissionNo.trim(),
     name,
-    gender: row.gender === 'F' ? 'F' : 'M',
+    gender: normalizeBulkGender(row.gender),
     grade: classInfo.grade,
     section: classInfo.section,
     cls: classInfo.cls,

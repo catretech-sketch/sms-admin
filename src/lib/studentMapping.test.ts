@@ -32,6 +32,25 @@ describe('buildStudentFromRow', () => {
     const student = buildStudentFromRow({ ...row, admissionNo: 'legacy/2019/0042' }, classInfo)
     expect(student.adm).toBe('legacy/2019/0042')
   })
+
+  it('maps a spelled-out "Female" gender cell to F, not the literal-M/F-only exact match', () => {
+    // Regression test: `row.gender === 'F' ? 'F' : 'M'` silently wrote any non-exact-'F'
+    // value (including "Female") as Male. Free-text bulk-upload cells need normalization.
+    expect(buildStudentFromRow({ ...row, gender: 'Female' }, classInfo).gender).toBe('F')
+  })
+
+  it('normalizes case and whitespace variants of F/female to F', () => {
+    expect(buildStudentFromRow({ ...row, gender: 'female' }, classInfo).gender).toBe('F')
+    expect(buildStudentFromRow({ ...row, gender: 'FEMALE' }, classInfo).gender).toBe('F')
+    expect(buildStudentFromRow({ ...row, gender: ' f ' }, classInfo).gender).toBe('F')
+    expect(buildStudentFromRow({ ...row, gender: 'F' }, classInfo).gender).toBe('F')
+  })
+
+  it('still maps M and any other non-blank spelling to M', () => {
+    expect(buildStudentFromRow({ ...row, gender: 'M' }, classInfo).gender).toBe('M')
+    expect(buildStudentFromRow({ ...row, gender: 'Male' }, classInfo).gender).toBe('M')
+    expect(buildStudentFromRow({ ...row, gender: '' }, classInfo).gender).toBe('M')
+  })
 })
 
 describe('toBulkImportRowPayload', () => {
