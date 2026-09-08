@@ -10,7 +10,7 @@ import {
   Popover, MenuItem,
   type Column, type BadgeTone,
 } from '@/components/ui'
-import { gateRole } from '@/lib/gating'
+import { gateRole, tierIncludes } from '@/lib/gating'
 import { useStudents, useStudentsPage, useStudent } from '@/api/hooks/useStudents'
 import { useExams } from '@/api/hooks/useExams'
 import { useExamPapers } from '@/api/hooks/useExamPapers'
@@ -36,6 +36,10 @@ import { monthlyBreakdown, monthlySeriesForKeys, academicYearMonthKeys, academic
 import { type AttendanceStatus } from '@/api/attendance'
 import { parseCsvText, parseXlsxBuffer, type ParsedFile } from '@/lib/importFileParse'
 import { BULK_IMPORT_FIELDS, suggestColumnMapping } from '@/lib/importColumnMapping'
+import { validateStudentForm } from '@/lib/studentValidation'
+import { isDuplicateValue, normalizePhoneDigits, normalizeEmailKey } from '@/lib/validation'
+import { errorRowsToCsv, type ErrorReportRow } from '@/lib/importErrorReport'
+import { downloadTextFile } from '@/lib/feeExport'
 import type { Student, FeeStatus, Role, Exam } from '@/types'
 import type { SchoolClass } from '@/api/classes'
 import { DEFAULT_GRADES } from '@/lib/defaultClasses'
@@ -97,16 +101,132 @@ function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
   })
 }
 
+/** Same class-name lookup studentAdd.tsx's resolveClass() uses, kept local since it isn't
+ *  exported — bulk rows resolve their raw "Class + Section" cell against live classes the
+ *  same way a single Add/Edit save does. */
+function resolveImportClass(classes: SchoolClass[], classKey: string): { grade: string; section: string; cls: string } {
+  const key = classKey.trim()
+  const match = classes.find((c) => (c.name || `${c.grade}-${c.section}`).trim() === key)
+  if (match) {
+    return { grade: match.grade || key, section: match.section || '', cls: match.name || `${match.grade}-${match.section}` }
+  }
+  const dash = key.lastIndexOf('-')
+  if (dash > 0) return { grade: key.slice(0, dash), section: key.slice(dash + 1), cls: key }
+  return { grade: key, section: '', cls: key }
+}
+
+/** Builds one row's field-key → cell-value record from a raw parsed row + the index-keyed
+ *  column mapping (Task 13). Every mapped column gets a key even when its cell is blank, so
+ *  every row shares the same key set (needed so errorRowsToCsv's header row is consistent). */
+function buildBulkRowRecord(cells: string[], mapping: Record<number, string | null>): Record<string, string> {
+  const rec: Record<string, string> = {}
+  cells.forEach((cell, index) => {
+    const key = mapping[index]
+    if (key) rec[key] = (cell ?? '').trim()
+  })
+  return rec
+}
+
+/** Groups rows by phone+email so duplicate entries within the SAME uploaded file (not the
+ *  live roster — that's a separate check) get flagged. Rows with neither phone nor email
+ *  never match each other (blank key), so they don't falsely collide. */
+function bulkFileDuplicateKey(record: Record<string, string>): string {
+  const phone = normalizePhoneDigits(record.phone)
+  const email = normalizeEmailKey(record.email)
+  if (!phone && !email) return ''
+  return `${phone}|${email}`
+}
+
+interface BulkPreviewRow {
+  rowNumber: number
+  record: Record<string, string>
+  errors: Record<string, string>
+}
+
+interface BulkPreview {
+  rows: BulkPreviewRow[]
+  validRows: BulkPreviewRow[]
+  errorRows: BulkPreviewRow[]
+  warnings: BulkPreviewRow[]
+}
+
+/** Runs the same field validation single Add Student uses (validateStudentForm), plus two
+ *  bulk-only checks it has no concept of: an admission-number conflict against the roster,
+ *  and a duplicate-within-the-uploaded-file check (same phone+email on more than one row).
+ *  Pure/computation-only — never calls a create or transport API. */
+function buildBulkPreview(
+  parsedRows: string[][],
+  columnMapping: Record<number, string | null>,
+  roster: Student[],
+  opsEnabled: boolean,
+): BulkPreview {
+  const records = parsedRows.map((cells) => buildBulkRowRecord(cells, columnMapping))
+  const validationRoster = roster.map((s) => ({ id: s.id, email: s.email, phone: s.phone }))
+  const admRoster = roster.map((s) => ({ id: s.id, value: s.adm }))
+  const fileKeys = records.map(bulkFileDuplicateKey)
+  const seenFileKeys = new Set<string>()
+
+  const rows: BulkPreviewRow[] = records.map((record, i) => {
+    const form: Record<string, string> = { ...record, cls: record.section ?? '' }
+    const errors = validateStudentForm({
+      form,
+      files: {},
+      roster: validationRoster,
+      existingId: undefined,
+      transportEnabled: opsEnabled,
+    })
+
+    const admissionNo = (record.admissionNo ?? '').trim()
+    if (admissionNo && isDuplicateValue(admissionNo, admRoster, (v) => (v ?? '').trim().toUpperCase())) {
+      errors.admissionNo = 'Another student already uses this admission number'
+    }
+
+    const key = fileKeys[i]
+    if (key) {
+      if (seenFileKeys.has(key)) {
+        errors._duplicateInFile = 'Duplicate row in this file — same phone & email as an earlier row'
+      } else {
+        seenFileKeys.add(key)
+      }
+    }
+
+    return { rowNumber: i + 1, record, errors }
+  })
+
+  const validRows = rows.filter((r) => Object.keys(r.errors).length === 0)
+  const errorRows = rows.filter((r) => Object.keys(r.errors).length > 0)
+  return { rows, validRows, errorRows, warnings: [] }
+}
+
+/** Original mapped columns + a trailing Error Reason column, for errorRowsToCsv. */
+function bulkErrorReportRows(errorRows: BulkPreviewRow[]): ErrorReportRow[] {
+  return errorRows.map((r) => ({
+    Row: String(r.rowNumber),
+    ...r.record,
+    'Error Reason': Object.values(r.errors).join('; '),
+  }))
+}
+
 function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const app = useApp()
   const toast = useToast()
   const [step, setStep] = useState(0)
-  const steps = ['Upload', 'Map columns', 'Done']
+  const steps = ['Upload', 'Map columns', 'Preview']
   const [upload, setUpload] = useState<{ fileName: string; parsed: ParsedFile } | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
   // Keyed by column INDEX (not header text) so two uploaded columns that share the
   // same literal header name still get independent mapping entries instead of
   // silently collapsing onto one.
   const [columnMapping, setColumnMapping] = useState<Record<number, string | null>>({})
+
+  const opsEnabled = tierIncludes(app.plan, 'operations')
+  const classesQ = useClasses()
+  const rosterQ = useStudents({ enabled: open })
+
+  const preview = useMemo<BulkPreview | null>(() => {
+    if (step !== 2 || !upload) return null
+    return buildBulkPreview(upload.parsed.rows, columnMapping, rosterQ.data ?? [], opsEnabled)
+  }, [step, upload, columnMapping, rosterQ.data, opsEnabled])
 
   const reset = () => { setStep(0); setUpload(null); setUploadError(null); setColumnMapping({}); onClose() }
   const finish = () => { toast.success('Import complete', '36 students imported, 0 errors.'); reset() }
@@ -225,11 +345,60 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
       )}
 
       {step === 2 && (
-        <Empty
-          icon="checkCircle"
-          title="Ready to import"
-          body="36 valid rows · 0 errors · 0 duplicates. Click Finish to enrol all students."
-        />
+        preview === null ? (
+          <div className="t-sm muted">Preparing preview…</div>
+        ) : (
+          <div className="col gap16">
+            <div className="row gap12 wrap">
+              <Badge tone="neutral">{`Total Rows: ${preview.rows.length}`}</Badge>
+              <Badge tone="success">{`Valid: ${preview.validRows.length}`}</Badge>
+              <Badge tone="danger">{`Errors: ${preview.errorRows.length}`}</Badge>
+              <Badge tone="warning">{`Warnings: ${preview.warnings.length}`}</Badge>
+            </div>
+
+            {preview.errorRows.length > 0 && (
+              <div className="col gap10">
+                <div className="row ai-center jc-between gap12">
+                  <span className="fw6 t-sm">Rows with errors</span>
+                  <Btn
+                    variant="secondary"
+                    size="sm"
+                    icon="download"
+                    onClick={() => {
+                      const csv = errorRowsToCsv(bulkErrorReportRows(preview.errorRows))
+                      downloadTextFile('bulk-import-errors.csv', csv)
+                    }}
+                  >
+                    Download Error Report
+                  </Btn>
+                </div>
+                <div className="col gap8" style={{ maxHeight: 260, overflowY: 'auto' }}>
+                  {preview.errorRows.map((r) => {
+                    const cls = resolveImportClass(classesQ.data ?? [], r.record.section ?? '').cls
+                    const name = [r.record.firstName, r.record.lastName].filter(Boolean).join(' ') || `Row ${r.rowNumber}`
+                    return (
+                      <div key={r.rowNumber} className="sm-err col gap4">
+                        <div className="row ai-center gap8">
+                          <Icon name="alert" size={14} />
+                          <span className="fw6">Row {r.rowNumber} · {name}{cls ? ` · ${cls}` : ''}</span>
+                        </div>
+                        <div className="t-xs">{Object.values(r.errors).join('; ')}</div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {preview.errorRows.length === 0 && (
+              <Empty
+                icon="checkCircle"
+                title="Ready to import"
+                body={`${preview.validRows.length} valid row(s) · 0 errors. Click Finish to enrol all students.`}
+              />
+            )}
+          </div>
+        )
       )}
     </Drawer>
   )

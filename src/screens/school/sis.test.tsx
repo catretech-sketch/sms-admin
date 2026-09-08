@@ -158,3 +158,57 @@ describe('Bulk import wizard — Step 2 Map columns', () => {
     expect(secondDupSelect.value).toBe('lastName')
   })
 })
+
+const BULK_HEADERS = ['First Name', 'Last Name', 'Class + Section', 'Gender', 'Date of Birth', 'Primary Contact Number', 'Email', 'Father Name']
+
+async function driveToPreview(
+  { getByText, getByLabelText, findByText }: ReturnType<typeof renderSisScreen>,
+  csvBody: string,
+) {
+  fireEvent.click(getByText('Add student'))
+  fireEvent.click(getByText('Bulk Add Students'))
+  const file = new File([csvBody], 'students.csv', { type: 'text/csv' })
+  fireEvent.change(getByLabelText(/drop your csv/i), { target: { files: [file] } })
+  expect(await findByText('students.csv')).toBeInTheDocument()
+  fireEvent.click(getByText('Continue'))
+  await findByText('Map columns')
+  fireEvent.click(getByText('Continue'))
+}
+
+describe('Bulk import wizard — Step 3 Preview', () => {
+  it('shows real Total/Valid/Errors counts and flags a duplicate within the uploaded file', async () => {
+    const rendered = renderSisScreen()
+    const csv = [
+      BULK_HEADERS.join(','),
+      'Aarav,Sharma,5-A,Male,2015-01-01,9000000001,aarav@x.com,Ramesh Sharma',
+      'Aditi,Verma,6-B,Female,2014-05-05,9000000002,aditi@x.com,Suresh Verma',
+      // Same phone AND email as row 1 — a literal duplicate entry within the file.
+      'Rohan,Gupta,5-A,Male,2015-02-02,9000000001,aarav@x.com,Dinesh Gupta',
+    ].join('\n')
+    await driveToPreview(rendered, csv)
+
+    const { findByText } = rendered
+    expect(await findByText('Total Rows: 3')).toBeInTheDocument()
+    expect(await findByText('Valid: 2')).toBeInTheDocument()
+    expect(await findByText('Errors: 1')).toBeInTheDocument()
+    expect(await findByText(/duplicate/i)).toBeInTheDocument()
+  })
+
+  it('does not call any create/transport API during preview', async () => {
+    const calls: { method: string; url: string }[] = []
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      calls.push({ method: init?.method ?? 'GET', url: String(url) })
+      return Promise.resolve(jsonResponse({ data: seed.map(toWire), next_cursor: null }))
+    }))
+    const rendered = renderSisScreen()
+    const csv = [
+      BULK_HEADERS.join(','),
+      'Aarav,Sharma,5-A,Male,2015-01-01,9000000001,aarav@x.com,Ramesh Sharma',
+    ].join('\n')
+    await driveToPreview(rendered, csv)
+    await rendered.findByText('Total Rows: 1')
+
+    const nonGet = calls.filter((c) => c.method.toUpperCase() !== 'GET')
+    expect(nonGet).toHaveLength(0)
+  })
+})
