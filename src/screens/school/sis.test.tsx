@@ -476,6 +476,157 @@ describe('Bulk import wizard — Step 4 Import', () => {
   })
 })
 
+/** Builds an n-row bulk-import CSV of entirely distinct, individually-valid students (unique
+ *  phone/email per row so none collide with each other or the roster seed, alternating between
+ *  the two real test classes so the class-exists check passes for every row). No admission
+ *  number column, so the duplicate-admission-number check never fires. */
+function bulkCsv(n: number): string {
+  const lines = [BULK_HEADERS.join(',')]
+  for (let i = 1; i <= n; i++) {
+    const section = i % 2 === 0 ? '6-B' : '5-A'
+    const gender = i % 2 === 0 ? 'Female' : 'Male'
+    const phone = `9${String(i).padStart(9, '0')}`
+    lines.push(`Student${i},Last${i},${section},${gender},2015-01-01,${phone},student${i}@x.com,Father${i}`)
+  }
+  return lines.join('\n')
+}
+
+describe('Bulk import wizard — Step 5 Complete', () => {
+  it('shows real final totals and the correct message for a fully successful import', async () => {
+    vi.spyOn(bulkImportApi, 'bulkImportBatch').mockImplementation(
+      async (_importId, batchIndex, rows) => ({
+        importId: 'import-1',
+        batchIndex,
+        processed: rows.length,
+        created: rows.length,
+        skipped: 0,
+        transportPending: 0,
+        rows: rows.map((r) => ({ rowNumber: r.rowNumber, studentId: `stu-${r.rowNumber}`, status: 'created' as const })),
+      }),
+    )
+
+    const rendered = renderSisScreen()
+    const { getByText, findByText } = rendered
+    await driveToPreview(rendered, bulkCsv(10000))
+    expect(await findByText('Total Rows: 10000', undefined, { timeout: 10000 })).toBeInTheDocument()
+
+    fireEvent.click(getByText('Start Import'))
+    expect(await findByText('10,000 students imported successfully.', undefined, { timeout: 20000 })).toBeInTheDocument()
+  }, 30000)
+
+  it('shows the partial-success message and lets the admin download the error report', async () => {
+    vi.spyOn(bulkImportApi, 'bulkImportBatch').mockImplementation(
+      async (_importId, batchIndex, rows) => {
+        const outRows = rows.map((r) => {
+          const skipped = r.rowNumber <= 250
+          return {
+            rowNumber: r.rowNumber,
+            studentId: skipped ? null : `stu-${r.rowNumber}`,
+            status: (skipped ? 'skipped' : 'created') as 'skipped' | 'created',
+            error: skipped ? 'Duplicate phone number at creation time' : null,
+          }
+        })
+        return {
+          importId: 'import-1',
+          batchIndex,
+          processed: rows.length,
+          created: outRows.filter((r) => r.status === 'created').length,
+          skipped: outRows.filter((r) => r.status === 'skipped').length,
+          transportPending: 0,
+          rows: outRows,
+        }
+      },
+    )
+
+    const rendered = renderSisScreen()
+    const { getByText, findByText } = rendered
+    await driveToPreview(rendered, bulkCsv(10000))
+    expect(await findByText('Total Rows: 10000', undefined, { timeout: 10000 })).toBeInTheDocument()
+
+    fireEvent.click(getByText('Start Import'))
+    expect(await findByText('9,750 students imported. 250 rows were skipped.', undefined, { timeout: 20000 })).toBeInTheDocument()
+    expect(getByText('Download Error Report')).toBeEnabled()
+  }, 30000)
+
+  it('downloads an error report with the original row data and the real per-row error reason', async () => {
+    vi.spyOn(bulkImportApi, 'bulkImportBatch').mockResolvedValue({
+      importId: 'import-1', batchIndex: 0, processed: 3, created: 2, skipped: 1, transportPending: 0,
+      rows: [
+        { rowNumber: 1, studentId: 'stu-1', status: 'created' },
+        { rowNumber: 2, studentId: null, status: 'skipped', error: 'Phone already registered' },
+        { rowNumber: 3, studentId: 'stu-3', status: 'created' },
+      ],
+    })
+    const feeExport = await import('@/lib/feeExport')
+    const downloadSpy = vi.spyOn(feeExport, 'downloadTextFile').mockImplementation(() => {})
+
+    const rendered = renderSisScreen()
+    const { getByText, findByText } = rendered
+    await driveToPreview(rendered, IMPORT_CSV)
+    expect(await findByText('Total Rows: 3')).toBeInTheDocument()
+
+    fireEvent.click(getByText('Start Import'))
+    expect(await findByText('2 students imported. 1 rows were skipped.')).toBeInTheDocument()
+
+    fireEvent.click(getByText('Download Error Report'))
+    expect(downloadSpy).toHaveBeenCalledTimes(1)
+    const [, csv] = downloadSpy.mock.calls[0]
+    // Real original mapped row data (row 2 — Aditi Verma) plus the real error reason —
+    // never a placeholder like "Row 2" with no other columns.
+    expect(csv).toContain('Aditi')
+    expect(csv).toContain('Verma')
+    expect(csv).toContain('aditi@x.com')
+    expect(csv).toContain('Phone already registered')
+  })
+
+  it('View Imported Students closes the drawer; Import Another File resets to Step 1 without closing it', async () => {
+    vi.spyOn(bulkImportApi, 'bulkImportBatch').mockResolvedValue(batchResult())
+
+    const rendered = renderSisScreen()
+    const { getByText, findByText, queryByText } = rendered
+    await driveToPreview(rendered, IMPORT_CSV)
+    expect(await findByText('Total Rows: 3')).toBeInTheDocument()
+    fireEvent.click(getByText('Start Import'))
+    expect(await findByText('3 students imported successfully.')).toBeInTheDocument()
+
+    fireEvent.click(getByText('Import Another File'))
+    // Back to Step 1, drawer still open.
+    expect(await findByText(/drop your csv/i)).toBeInTheDocument()
+
+    // Re-drive a second import and this time close via View Imported Students.
+    await driveToPreview(rendered, IMPORT_CSV)
+    fireEvent.click(getByText('Start Import'))
+    expect(await findByText('3 students imported successfully.')).toBeInTheDocument()
+    fireEvent.click(getByText('View Imported Students'))
+    // Drawer closed — its step indicator is gone.
+    expect(queryByText('Map columns')).not.toBeInTheDocument()
+    expect(queryByText(/drop your csv/i)).not.toBeInTheDocument()
+  })
+
+  it('View Errors reveals the skipped-row list', async () => {
+    vi.spyOn(bulkImportApi, 'bulkImportBatch').mockResolvedValue({
+      importId: 'import-1', batchIndex: 0, processed: 3, created: 2, skipped: 1, transportPending: 0,
+      rows: [
+        { rowNumber: 1, studentId: 'stu-1', status: 'created' },
+        { rowNumber: 2, studentId: null, status: 'skipped', error: 'Phone already registered' },
+        { rowNumber: 3, studentId: 'stu-3', status: 'created' },
+      ],
+    })
+
+    const rendered = renderSisScreen()
+    const { getByText, findByText, queryByText } = rendered
+    await driveToPreview(rendered, IMPORT_CSV)
+    expect(await findByText('Total Rows: 3')).toBeInTheDocument()
+    fireEvent.click(getByText('Start Import'))
+    expect(await findByText('2 students imported. 1 rows were skipped.')).toBeInTheDocument()
+
+    expect(queryByText('Phone already registered')).not.toBeInTheDocument()
+    fireEvent.click(getByText('View Errors'))
+    expect(await findByText('Phone already registered')).toBeInTheDocument()
+    expect(getByText(/Row 2/)).toBeInTheDocument()
+  })
+})
+
 /** Minimal valid SchoolClass fixtures for buildBulkPreview's class-exists check. */
 function schoolClass(name: string, grade: string, section: string) {
   return { id: name, name, grade, section, teacherId: '', students: 0, room: '—' }

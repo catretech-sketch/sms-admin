@@ -2,7 +2,7 @@
    SchoolMate — Students (SIS) list + Student 360 profile.
    Phase 1 flagship screen. Live /students list + create.
    ============================================================ */
-import { useEffect, useMemo, useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import {
   PageHead, Card, CardHead, Btn, Badge, Avatar, Search, Select,
@@ -319,6 +319,13 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
   }, [step, upload, columnMapping, classesQ.data, classesQ.isSuccess, rosterQ.data, rosterQ.isSuccess, opsEnabled])
 
   const bulkImport = useBulkImportStudents()
+  // Snapshot of the SUBMITTED rows' original mapped-column data, keyed by rowNumber, captured
+  // at startImport (from preview.validRows — the only rows ever sent to the batch endpoint).
+  // Needed because `preview` itself goes back to null once step advances past 2 (its useMemo
+  // is gated on step === 2), so by the time Complete renders in step 3 the original row data
+  // would otherwise be unrecoverable for the final error report / skipped-row list.
+  const importedRowRecordsRef = useRef<Map<number, Record<string, string>>>(new Map())
+  const [showSkippedList, setShowSkippedList] = useState(false)
 
   // True only while the hook's import loop is actively iterating batches (its own explicit
   // isRunning signal) — never inferred from a processed/total count comparison, since a
@@ -330,10 +337,20 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
   const importInFlight = bulkImport.isRunning
   const totalBatches = Math.max(1, Math.ceil(bulkImport.progress.total / BATCH_SIZE))
 
-  const reset = () => { setStep(0); setUpload(null); setUploadError(null); setColumnMapping({}); bulkImport.resetImport(); onClose() }
+  // Resets wizard state and returns to Step 1 WITHOUT closing the drawer — used by both the
+  // drawer's own close/backdrop (which also calls onClose, via `reset` below) and the
+  // Complete screen's "Import Another File" action (which must NOT close the drawer).
+  const resetToUpload = () => {
+    setStep(0); setUpload(null); setUploadError(null); setColumnMapping({})
+    bulkImport.resetImport()
+    importedRowRecordsRef.current = new Map()
+    setShowSkippedList(false)
+  }
+  const reset = () => { resetToUpload(); onClose() }
 
   const startImport = () => {
     if (!preview || preview.validRows.length === 0) return
+    importedRowRecordsRef.current = new Map(preview.validRows.map((r) => [r.rowNumber, r.record]))
     const rows = buildBulkImportPayloads(preview.validRows, classesQ.data ?? [])
     setStep(3)
     void bulkImport.runImport(rows)
@@ -401,9 +418,6 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
           )}
           {step === 3 && bulkImport.pausedAtBatch != null && (
             <Btn variant="primary" icon="refresh" disabled={importInFlight} onClick={() => void bulkImport.retry()}>Retry Import</Btn>
-          )}
-          {step === 3 && importDone && (
-            <Btn variant="primary" icon="check" onClick={reset}>Done</Btn>
           )}
         </div>
       }
@@ -557,13 +571,71 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
             </div>
           )}
 
-          {importDone && (
-            <Empty
-              icon="checkCircle"
-              title="Import finished"
-              body={`Processed ${bulkImport.progress.processed} row(s) — ${bulkImport.progress.created} created, ${bulkImport.progress.skipped} skipped.`}
-            />
-          )}
+          {importDone && (() => {
+            const { total, created, skipped } = bulkImport.progress
+            const skippedResults = bulkImport.progress.rowResults.filter((r) => r.status === 'skipped')
+            const message = skipped === 0
+              ? `${total.toLocaleString()} students imported successfully.`
+              : `${created.toLocaleString()} students imported. ${skipped.toLocaleString()} rows were skipped.`
+            return (
+              <div className="col gap16">
+                <Empty icon="checkCircle" title={skipped === 0 ? 'Import complete' : 'Import completed with some skipped rows'} body={message} />
+                <div className="row gap8 wrap">
+                  <Btn
+                    variant="primary"
+                    icon="users"
+                    onClick={() => { app.go('school.sis'); reset() }}
+                  >
+                    View Imported Students
+                  </Btn>
+                  <Btn
+                    variant="secondary"
+                    icon="alert"
+                    disabled={skippedResults.length === 0}
+                    onClick={() => setShowSkippedList((v) => !v)}
+                  >
+                    View Errors
+                  </Btn>
+                  <Btn
+                    variant="secondary"
+                    icon="download"
+                    disabled={skippedResults.length === 0}
+                    onClick={() => {
+                      const rows: ErrorReportRow[] = skippedResults.map((r) => ({
+                        Row: String(r.rowNumber),
+                        ...(importedRowRecordsRef.current.get(r.rowNumber) ?? {}),
+                        'Error Reason': r.error || 'Row was skipped during import.',
+                      }))
+                      const csv = errorRowsToCsv(rows)
+                      downloadTextFile('bulk-import-final-errors.csv', csv)
+                    }}
+                  >
+                    Download Error Report
+                  </Btn>
+                  <Btn variant="secondary" icon="refresh" onClick={resetToUpload}>Import Another File</Btn>
+                  <Btn variant="ghost" onClick={reset}>Close</Btn>
+                </div>
+
+                {showSkippedList && skippedResults.length > 0 && (
+                  <div className="col gap8" style={{ maxHeight: 260, overflowY: 'auto' }}>
+                    {skippedResults.map((r) => {
+                      const record = importedRowRecordsRef.current.get(r.rowNumber)
+                      const name = record ? [record.firstName, record.lastName].filter(Boolean).join(' ') : ''
+                      return (
+                        <div key={r.rowNumber} className="sm-err col gap4">
+                          <div className="row ai-center gap8">
+                            <Icon name="alert" size={14} />
+                            <span className="fw6">Row {r.rowNumber}{name ? ` · ${name}` : ''}</span>
+                          </div>
+                          <div className="t-xs">{r.error || 'Row was skipped during import.'}</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          })()}
         </div>
       )}
     </Drawer>
