@@ -265,13 +265,13 @@ export function useUpdateBus(): UseMutationResult<TransportBus, Error, { busId: 
   })
 }
 
-/** Route stops for every distinct routeId present in the live fleet board. */
-export function useFleetRouteStops(fleet: FleetBus[]): Record<string, RouteStop[]> {
+/** Route stops for an arbitrary set of routeIds, keyed by routeId.
+ *  `isReady` is true only once every one of those per-route queries has actually resolved
+ *  (trivially true for an empty/ops-disabled route list) — callers that VALIDATE against
+ *  these stops (bulk import's Preview) must not treat a still-loading map as "no stops
+ *  match", which would falsely flag every real stop as invalid. */
+export function useRouteStopsByRoute(routeIds: string[]): { stopsByRoute: Record<string, RouteStop[]>; isReady: boolean } {
   const ops = useOperationsTier()
-  const routeIds = useMemo(
-    () => [...new Set(fleet.map((b) => b.routeId).filter(Boolean))] as string[],
-    [fleet],
-  )
   const queries = useQueries({
     queries: routeIds.map((id) => ({
       queryKey: queryKeys.operations.transportRouteStops(id),
@@ -281,14 +281,28 @@ export function useFleetRouteStops(fleet: FleetBus[]): Record<string, RouteStop[
     })),
   })
   const stopsSnapshots = queries.map((q) => q.data)
-  return useMemo(() => {
+  const isReady = queries.every((q) => q.isSuccess)
+  const stopsByRoute = useMemo(() => {
     const out: Record<string, RouteStop[]> = {}
     routeIds.forEach((id, i) => {
       const data = stopsSnapshots[i]
       if (data) out[id] = data
     })
     return out
+    // NOTE: `stopsSnapshots` is a fresh array each render, so this memo recomputes every
+    // render — same as before this hook was extracted. Building a small Record is cheap;
+    // a variable-length dep list would be a far worse (illegal) trade.
   }, [routeIds, stopsSnapshots])
+  return { stopsByRoute, isReady }
+}
+
+/** Route stops for every distinct routeId present in the live fleet board. */
+export function useFleetRouteStops(fleet: FleetBus[]): Record<string, RouteStop[]> {
+  const routeIds = useMemo(
+    () => [...new Set(fleet.map((b) => b.routeId).filter(Boolean))] as string[],
+    [fleet],
+  )
+  return useRouteStopsByRoute(routeIds).stopsByRoute
 }
 
 export function useCreateBus(): UseMutationResult<FleetBus, Error, CreateBusInput> {

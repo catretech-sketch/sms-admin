@@ -3,7 +3,24 @@ import { BULK_IMPORT_FIELDS, suggestColumnMapping } from './importColumnMapping'
 
 describe('BULK_IMPORT_FIELDS', () => {
   it('never includes roll number as a mappable field', () => {
-    expect(BULK_IMPORT_FIELDS.some((f) => f.key === 'roll')).toBe(false)
+    // Compared as plain strings: `f.key` is typed as a union that cannot include 'roll',
+    // so a `f.key === 'roll'` comparison is statically impossible (TS2367) and asserts
+    // nothing at runtime. Widening to string keeps the assertion real — it would fail if
+    // someone ever added a roll field to the union AND to this list.
+    const keys: string[] = BULK_IMPORT_FIELDS.map((f) => f.key)
+    expect(keys).not.toContain('roll')
+    expect(keys).not.toContain('rollNumber')
+    // Sanity: the list is non-empty, so `not.toContain` is not vacuously passing.
+    expect(keys.length).toBeGreaterThan(0)
+    expect(keys).toContain('firstName')
+  })
+
+  it('never offers Status as a mappable column (the create payload has no status field)', () => {
+    // studentCoreFields()/fromStudent() carry no `status` — a mapped Status column would be
+    // silently discarded, so the wizard must not advertise one.
+    const keys: string[] = BULK_IMPORT_FIELDS.map((f) => f.key)
+    expect(keys).not.toContain('status')
+    expect(suggestColumnMapping(['Status'])['Status']).toBeNull()
   })
 
   it('marks admission number as optional (mappable, not required)', () => {

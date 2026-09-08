@@ -19,7 +19,7 @@ describe('bulkImportBatch', () => {
     }))
 
     const result = await bulkImportBatch('import-1', 0, [
-      { createStudentRequest: { name: 'Aarav Sharma' }, extrasJson: '{}', transport: null },
+      { rowNumber: 2, createStudentRequest: { name: 'Aarav Sharma' }, extrasJson: '{}', transport: null },
     ])
 
     expect(result.created).toBe(1)
@@ -30,5 +30,7 @@ describe('bulkImportBatch', () => {
     expect(body.import_id).toBe('import-1')
     expect(body.batch_index).toBe(0)
     expect(body.rows[0].create_student_request.name).toBe('Aarav Sharma')
+    // rowNumber must reach the wire — the backend's per-row result joins on it.
+    expect(body.rows[0].row_number).toBe(2)
   })
 })

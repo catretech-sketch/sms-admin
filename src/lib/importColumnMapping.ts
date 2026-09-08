@@ -11,7 +11,14 @@ export interface BulkImportFieldDef {
 
 /** Every field the single Add Student form supports, except Roll Number (never mappable —
  *  always server-assigned, same as single Add). Admission Number is optional/mappable here
- *  (unlike single Add's read-only UI) for migrating legacy records that already have one. */
+ *  (unlike single Add's read-only UI) for migrating legacy records that already have one.
+ *
+ *  Status is deliberately ABSENT too: the create contract (`fromStudent` →
+ *  `studentCoreFields` in src/api/students.ts) carries no `status` field at all, so neither
+ *  single Add nor bulk import can set a student's active/inactive state at creation time —
+ *  it is only settable later via PATCH (`fromStudentUpdate`). Offering a Status column that
+ *  the payload silently drops would be a fake control, so it is not offered. (Adding real
+ *  status-at-create support is a pre-existing gap in the single-add path, out of scope here.) */
 export const BULK_IMPORT_FIELDS: BulkImportFieldDef[] = [
   { key: 'admissionNo', label: 'Admission Number', required: false, aliases: ['admission no', 'admission number', 'adm no'] },
   { key: 'admissionDate', label: 'Admission Date', required: false, aliases: ['admission date', 'doa'] },
@@ -22,7 +29,6 @@ export const BULK_IMPORT_FIELDS: BulkImportFieldDef[] = [
   { key: 'gender', label: 'Gender', required: true, aliases: ['gender', 'sex'] },
   { key: 'dob', label: 'Date of Birth', required: true, aliases: ['dob', 'date of birth', 'birth date'] },
   { key: 'academicYear', label: 'Academic Year', required: false, aliases: ['academic year', 'session'] },
-  { key: 'status', label: 'Status', required: false, aliases: ['status'] },
   { key: 'bloodGroup', label: 'Blood Group', required: false, aliases: ['blood group'] },
   { key: 'religion', label: 'Religion', required: false, aliases: ['religion'] },
   { key: 'category', label: 'Category', required: false, aliases: ['category'] },

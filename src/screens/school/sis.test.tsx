@@ -4,7 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AppProvider } from '@/context/AppProvider'
 import { ToastProvider } from '@/context/ToastProvider'
 import { students as seed } from '@/data/mockDb'
-import { sisScreens, buildBulkPreview, buildBulkRowRecord } from './sis'
+import { sisScreens, buildBulkPreview, buildBulkRowRecord, buildBulkImportPayloads, canBulkImport, bulkImportTemplateCsv } from './sis'
+import { suggestColumnMapping } from '@/lib/importColumnMapping'
 import type { BulkStudentRow } from '@/lib/studentMapping'
 import type { Student } from '@/types'
 import * as bulkImportApi from '@/api/bulkImportStudents'
@@ -32,6 +33,10 @@ const CLASS_FIXTURES = [
   { id: 'c1', name: '5-A', grade: '5', section: 'A' },
   { id: 'c2', name: '6-B', grade: '6', section: 'B' },
 ]
+const HOUSE_FIXTURES = ['Ruby', 'Emerald']
+const ROUTE_FIXTURES = [{ id: 'route-north-id', name: 'North Line', stops: 2 }]
+const STOP_FIXTURES = [{ id: 'stop-park-id', route_id: 'route-north-id', name: 'Park Gate', sequence: 1 }]
+const FEE_HEAD_FIXTURES = [{ id: 'fh-transport-id', name: 'Transport Fee', active: true, is_transport_fee_head: true }]
 
 beforeEach(() => {
   localStorage.clear()
@@ -42,13 +47,19 @@ beforeEach(() => {
   // would fail with "body already read" and silently resolve to {} (readJson swallows
   // that TypeError). Build a fresh Response per call instead, and route /classes requests
   // to a real classes fixture instead of the (unrelated) students seed.
-  vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
-    if (String(url).includes('/classes')) {
-      return Promise.resolve(jsonResponse({ data: CLASS_FIXTURES, next_cursor: null }))
-    }
-    return Promise.resolve(jsonResponse({ data: seed.map(toWire), next_cursor: null }))
-  }))
+  vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => defaultFetch(String(url))))
 })
+
+/** The drawer now also loads houses / transport routes / route stops / fee heads for its
+ *  reference-existence checks, so every one of those must resolve or Preview stays gated. */
+function defaultFetch(url: string): Promise<Response> {
+  if (url.includes('/classes')) return Promise.resolve(jsonResponse({ data: CLASS_FIXTURES, next_cursor: null }))
+  if (url.includes('/houses')) return Promise.resolve(jsonResponse({ data: HOUSE_FIXTURES }))
+  if (url.includes('/stops')) return Promise.resolve(jsonResponse({ data: STOP_FIXTURES }))
+  if (url.includes('/transport/routes')) return Promise.resolve(jsonResponse({ data: ROUTE_FIXTURES }))
+  if (url.includes('/fees/heads')) return Promise.resolve(jsonResponse({ data: FEE_HEAD_FIXTURES, next_cursor: null }))
+  return Promise.resolve(jsonResponse({ data: seed.map(toWire), next_cursor: null }))
+}
 
 function renderSisScreen() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -333,7 +344,8 @@ const IMPORT_CSV = [
 function batchResult(overrides: Partial<BulkImportBatchResult> = {}): BulkImportBatchResult {
   return {
     importId: 'import-1', batchIndex: 0, processed: 3, created: 3, skipped: 0, transportPending: 0,
-    rows: [1, 2, 3].map((n) => ({ rowNumber: n, studentId: `stu-${n}`, status: 'created' })),
+    // File line numbers: the header is line 1, so the 3 data rows are lines 2-4.
+    rows: [2, 3, 4].map((n) => ({ rowNumber: n, studentId: `stu-${n}`, status: 'created' })),
     ...overrides,
   }
 }
@@ -518,7 +530,7 @@ describe('Bulk import wizard — Step 5 Complete', () => {
     vi.spyOn(bulkImportApi, 'bulkImportBatch').mockImplementation(
       async (_importId, batchIndex, rows) => {
         const outRows = rows.map((r) => {
-          const skipped = r.rowNumber <= 250
+          const skipped = r.rowNumber <= 251 // file lines 2..251 = 250 rows
           return {
             rowNumber: r.rowNumber,
             studentId: skipped ? null : `stu-${r.rowNumber}`,
@@ -552,9 +564,10 @@ describe('Bulk import wizard — Step 5 Complete', () => {
     vi.spyOn(bulkImportApi, 'bulkImportBatch').mockResolvedValue({
       importId: 'import-1', batchIndex: 0, processed: 3, created: 2, skipped: 1, transportPending: 0,
       rows: [
-        { rowNumber: 1, studentId: 'stu-1', status: 'created' },
-        { rowNumber: 2, studentId: null, status: 'skipped', error: 'Phone already registered' },
-        { rowNumber: 3, studentId: 'stu-3', status: 'created' },
+        { rowNumber: 2, studentId: 'stu-2', status: 'created' },
+        // File line 3 is the second data row — Aditi Verma.
+        { rowNumber: 3, studentId: null, status: 'skipped', error: 'Phone already registered' },
+        { rowNumber: 4, studentId: 'stu-4', status: 'created' },
       ],
     })
     const feeExport = await import('@/lib/feeExport')
@@ -607,9 +620,10 @@ describe('Bulk import wizard — Step 5 Complete', () => {
     vi.spyOn(bulkImportApi, 'bulkImportBatch').mockResolvedValue({
       importId: 'import-1', batchIndex: 0, processed: 3, created: 2, skipped: 1, transportPending: 0,
       rows: [
-        { rowNumber: 1, studentId: 'stu-1', status: 'created' },
-        { rowNumber: 2, studentId: null, status: 'skipped', error: 'Phone already registered' },
-        { rowNumber: 3, studentId: 'stu-3', status: 'created' },
+        { rowNumber: 2, studentId: 'stu-2', status: 'created' },
+        // File line 3 is the second data row — Aditi Verma.
+        { rowNumber: 3, studentId: null, status: 'skipped', error: 'Phone already registered' },
+        { rowNumber: 4, studentId: 'stu-4', status: 'created' },
       ],
     })
 
@@ -623,7 +637,7 @@ describe('Bulk import wizard — Step 5 Complete', () => {
     expect(queryByText('Phone already registered')).not.toBeInTheDocument()
     fireEvent.click(getByText('View Errors'))
     expect(await findByText('Phone already registered')).toBeInTheDocument()
-    expect(getByText(/Row 2/)).toBeInTheDocument()
+    expect(getByText(/Row 3/)).toBeInTheDocument()
   })
 })
 
@@ -718,9 +732,13 @@ describe('Bulk import wizard — full end to end', () => {
     const [, errorCsv] = downloadSpy.mock.calls[0]
     const errorCsvLines = errorCsv.trim().split('\n')
     expect(errorCsvLines).toHaveLength(3) // header + 2 error rows
-    expect(errorCsv).toContain('300')
+    // The leading `Row` column must be the ORIGINAL FILE LINE number, not the position
+    // within the filtered rows: data row 300 sits on file line 301 (header is line 1).
+    // Asserted as the line's first field, since a substring match would also be satisfied
+    // by the row's own "Student300" name cell and prove nothing.
+    const rowNumbersInReport = errorCsvLines.slice(1).map((line) => line.split(',')[0])
+    expect(rowNumbersInReport).toEqual(['301', '426'])
     expect(errorCsv).toContain('Duplicate row in this file')
-    expect(errorCsv).toContain('425')
     expect(errorCsv).toContain('This field is required')
 
     // 4. Start Import — batch 0 and batch 2 succeed immediately, batch 1 fails 3 times.
@@ -764,21 +782,58 @@ function schoolClass(name: string, grade: string, section: string) {
 }
 const TEST_CLASSES = [schoolClass('5-A', '5', 'A'), schoolClass('6-B', '6', 'B')]
 
-/** One fully-valid row's cells for the column mapping below (11 columns) — callers overwrite
+/** Reference lists Preview validates against (spec §6). Routes/stops carry real GUID-ish
+ *  IDs AND human names, so the by-name-or-by-id resolution can be tested both ways. */
+const TEST_ROUTES = [
+  { id: 'route-north-id', name: 'North Line', stops: 2 },
+  { id: 'route-south-id', name: 'South Line', stops: 1 },
+]
+const TEST_STOPS_BY_ROUTE = {
+  'route-north-id': [
+    { id: 'stop-mg-id', routeId: 'route-north-id', name: 'MG Road', sequence: 1 },
+    { id: 'stop-park-id', routeId: 'route-north-id', name: 'Park Gate', sequence: 2 },
+  ],
+  'route-south-id': [
+    { id: 'stop-lake-id', routeId: 'route-south-id', name: 'Lake View', sequence: 1 },
+  ],
+}
+const TEST_FEE_HEADS = [
+  { id: 'fh-transport-id', name: 'Transport Fee', active: true, isSystem: false, isTransportFeeHead: true },
+]
+const TEST_HOUSES = ['Ruby', 'Emerald']
+const TEST_REFS = {
+  classes: TEST_CLASSES,
+  houses: TEST_HOUSES,
+  routes: TEST_ROUTES,
+  stopsByRoute: TEST_STOPS_BY_ROUTE,
+  feeHeads: TEST_FEE_HEADS,
+}
+
+/** Wraps raw cell arrays as ParsedRow[], numbering them the way the real parser does:
+ *  the header occupies file line 1, so the first data row is line 2. */
+function parsedRows(rows: string[][]) {
+  return rows.map((cells, i) => ({ lineNumber: i + 2, cells }))
+}
+
+/** One fully-valid row's cells for the column mapping below (14 columns) — callers overwrite
  *  just the cell(s) relevant to the case under test. */
 const VALID_ROW_MAPPING: Record<number, string | null> = {
   0: 'firstName', 1: 'lastName', 2: 'section', 3: 'gender', 4: 'dob', 5: 'phone', 6: 'email',
   7: 'fatherName', 8: 'admissionNo', 9: 'transportOptedIn', 10: 'transportRouteId',
+  11: 'transportStopId', 12: 'transportFeeHeadId', 13: 'house',
 }
 function validRowCells(overrides: Partial<{
-  firstName: string; lastName: string; section: string; phone: string; email: string
-  admissionNo: string; transportOptedIn: string; transportRouteId: string
+  firstName: string; lastName: string; section: string; gender: string; dob: string
+  phone: string; email: string; admissionNo: string; transportOptedIn: string
+  transportRouteId: string; transportStopId: string; transportFeeHeadId: string; house: string
 }> = {}): string[] {
   return [
     overrides.firstName ?? 'Aarav', overrides.lastName ?? 'Sharma', overrides.section ?? '5-A',
-    'Male', '2015-01-01', overrides.phone ?? '9000000001', overrides.email ?? 'aarav@x.com',
+    overrides.gender ?? 'Male', overrides.dob ?? '2015-01-01',
+    overrides.phone ?? '9000000001', overrides.email ?? 'aarav@x.com',
     'Ramesh Sharma', overrides.admissionNo ?? '', overrides.transportOptedIn ?? '',
-    overrides.transportRouteId ?? '',
+    overrides.transportRouteId ?? '', overrides.transportStopId ?? '',
+    overrides.transportFeeHeadId ?? '', overrides.house ?? '',
   ]
 }
 
@@ -790,10 +845,13 @@ describe('buildBulkPreview — bulk-only checks (pure)', () => {
       // Same phone AND email as row 1.
       validRowCells({ firstName: 'Rohan', lastName: 'Gupta' }),
     ]
-    const preview = buildBulkPreview(rows, VALID_ROW_MAPPING, TEST_CLASSES, [], false)
+    const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], false)
     expect(preview.validRows).toHaveLength(2)
     expect(preview.errorRows).toHaveLength(1)
-    expect(Object.values(preview.errorRows[0].errors).join(' ')).toMatch(/same phone & email as row 1/i)
+    // Row numbers are ORIGINAL FILE LINE numbers now (header = line 1), so the first data
+    // row is line 2 — the message must name line 2, not "row 1".
+    expect(Object.values(preview.errorRows[0].errors).join(' ')).toMatch(/same phone & email as row 2/i)
+    expect(preview.errorRows[0].rowNumber).toBe(4)
   })
 
   it('flags an admission number reused within the SAME uploaded file, naming the earlier row', () => {
@@ -802,43 +860,173 @@ describe('buildBulkPreview — bulk-only checks (pure)', () => {
       // Different phone/email so only the admission-number check can flag this row.
       validRowCells({ firstName: 'Aditi', lastName: 'Verma', phone: '9000000002', email: 'aditi@x.com', admissionNo: 'adm100' }),
     ]
-    const preview = buildBulkPreview(rows, VALID_ROW_MAPPING, TEST_CLASSES, [], false)
+    const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], false)
     expect(preview.errorRows).toHaveLength(1)
-    expect(preview.errorRows[0].rowNumber).toBe(2)
-    expect(preview.errorRows[0].errors.admissionNo).toMatch(/same as row 1/i)
+    expect(preview.errorRows[0].rowNumber).toBe(3)
+    expect(preview.errorRows[0].errors.admissionNo).toMatch(/same as row 2/i)
   })
 
   it('flags a class value that does not resolve to any real class', () => {
     const rows = [validRowCells({ section: '99-Z' })]
-    const preview = buildBulkPreview(rows, VALID_ROW_MAPPING, TEST_CLASSES, [], false)
+    const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], false)
     expect(preview.errorRows).toHaveLength(1)
     expect(preview.errorRows[0].errors.cls).toMatch(/class not found/i)
   })
 
   it('does not flag a class value that resolves to a real class', () => {
     const rows = [validRowCells({ section: '6-B' })]
-    const preview = buildBulkPreview(rows, VALID_ROW_MAPPING, TEST_CLASSES, [], false)
+    const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], false)
     expect(preview.validRows).toHaveLength(1)
     expect(preview.errorRows).toHaveLength(0)
   })
 
   it('treats a non-lowercase-exact transport opt-in ("Yes") as opted-in, requiring a route', () => {
     const rows = [validRowCells({ transportOptedIn: 'Yes' })]
-    const preview = buildBulkPreview(rows, VALID_ROW_MAPPING, TEST_CLASSES, [], true)
+    const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], true)
     expect(preview.errorRows).toHaveLength(1)
     expect(preview.errorRows[0].errors.transportRouteId).toBeTruthy()
   })
 
   it('treats "TRUE" as opted-in too', () => {
     const rows = [validRowCells({ transportOptedIn: 'TRUE' })]
-    const preview = buildBulkPreview(rows, VALID_ROW_MAPPING, TEST_CLASSES, [], true)
+    const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], true)
     expect(preview.errorRows[0].errors.transportRouteId).toBeTruthy()
   })
 
   it('does not require a route when the row has not opted into transport', () => {
     const rows = [validRowCells()]
-    const preview = buildBulkPreview(rows, VALID_ROW_MAPPING, TEST_CLASSES, [], true)
+    const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], true)
     expect(preview.validRows).toHaveLength(1)
+  })
+})
+
+describe('buildBulkPreview — reference-existence checks (spec §6)', () => {
+  const optedIn = { transportOptedIn: 'Yes' }
+
+  it('accepts a route given by NAME and resolves it as valid', () => {
+    const rows = [validRowCells({ ...optedIn, transportRouteId: 'North Line' })]
+    const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], true)
+    expect(preview.errorRows).toHaveLength(0)
+  })
+
+  it('accepts a route given by ID too', () => {
+    const rows = [validRowCells({ ...optedIn, transportRouteId: 'route-south-id' })]
+    const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], true)
+    expect(preview.errorRows).toHaveLength(0)
+  })
+
+  it('flags a route value that matches no real route', () => {
+    const rows = [validRowCells({ ...optedIn, transportRouteId: 'Route 42' })]
+    const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], true)
+    expect(preview.errorRows).toHaveLength(1)
+    expect(preview.errorRows[0].errors.transportRouteId).toMatch(/route not found/i)
+  })
+
+  it('accepts a stop that belongs to the resolved route', () => {
+    const rows = [validRowCells({ ...optedIn, transportRouteId: 'North Line', transportStopId: 'Park Gate' })]
+    const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], true)
+    expect(preview.errorRows).toHaveLength(0)
+  })
+
+  it('flags a real stop that belongs to a DIFFERENT route (stop-belongs-to-route)', () => {
+    // "Lake View" is a genuine stop — just not on North Line. An existence-only check
+    // would wave this through and produce a wrong bus assignment.
+    const rows = [validRowCells({ ...optedIn, transportRouteId: 'North Line', transportStopId: 'Lake View' })]
+    const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], true)
+    expect(preview.errorRows).toHaveLength(1)
+    expect(preview.errorRows[0].errors.transportStopId).toMatch(/stop not found on this route/i)
+  })
+
+  it('flags an unknown transport fee head', () => {
+    const rows = [validRowCells({ ...optedIn, transportRouteId: 'North Line', transportFeeHeadId: 'Bus Money' })]
+    const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], true)
+    expect(preview.errorRows[0].errors.transportFeeHeadId).toMatch(/transport fee head not found/i)
+  })
+
+  it('skips transport reference checks entirely when the operations tier is off', () => {
+    const rows = [validRowCells({ transportRouteId: 'Route 42', transportStopId: 'Nowhere' })]
+    const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], false)
+    expect(preview.errorRows).toHaveLength(0)
+  })
+
+  it('flags a house that is not in the school house catalog, and accepts one that is', () => {
+    const bad = buildBulkPreview(parsedRows([validRowCells({ house: 'Gryffindor' })]), VALID_ROW_MAPPING, TEST_REFS, [], false)
+    expect(bad.errorRows[0].errors.house).toMatch(/house not found/i)
+    const good = buildBulkPreview(parsedRows([validRowCells({ house: 'ruby' })]), VALID_ROW_MAPPING, TEST_REFS, [], false)
+    expect(good.errorRows).toHaveLength(0)
+  })
+})
+
+describe('buildBulkPreview — dob and gender are parsed, not merely non-empty', () => {
+  it('flags a dob cell that does not parse to a real date', () => {
+    // Was previously "Valid" at Preview then silently sent as dob: null and rejected
+    // server-side, leaving the final counts inconsistent with the Preview promise.
+    const rows = [validRowCells({ dob: 'not a date' })]
+    const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], false)
+    expect(preview.errorRows).toHaveLength(1)
+    expect(preview.errorRows[0].errors.dob).toMatch(/invalid date of birth/i)
+  })
+
+  it('accepts a dob the app can actually parse', () => {
+    const preview = buildBulkPreview(parsedRows([validRowCells({ dob: '2015-04-23' })]), VALID_ROW_MAPPING, TEST_REFS, [], false)
+    expect(preview.errorRows).toHaveLength(0)
+  })
+
+  it('flags an uninterpretable gender instead of silently importing the student as Male', () => {
+    const rows = [validRowCells({ gender: 'Other' })]
+    const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], false)
+    expect(preview.errorRows).toHaveLength(1)
+    expect(preview.errorRows[0].errors.gender).toMatch(/invalid gender/i)
+  })
+
+  it('accepts spelled-out Female and Male', () => {
+    for (const gender of ['Female', 'female', 'F', 'Male', 'm']) {
+      const preview = buildBulkPreview(parsedRows([validRowCells({ gender })]), VALID_ROW_MAPPING, TEST_REFS, [], false)
+      expect(preview.errorRows).toHaveLength(0)
+    }
+  })
+})
+
+describe('buildBulkImportPayloads — the actual wire payload', () => {
+  /** THE test this feature was missing for 17 reviews: nothing ever asserted what actually
+   *  goes on the wire, which is how "route name shipped verbatim as a GUID" and
+   *  "rowNumber = filtered index" both survived. It pins, for one concrete row:
+   *   - transport.routeId / stopId / feeHeadId are the RESOLVED reference IDs, never the
+   *     human-readable cell text the admin typed;
+   *   - rowNumber is the row's ORIGINAL file line number;
+   *   - no `status` field rides along (the create contract has none — Important 7). */
+  it('sends resolved transport IDs, the original file line number, and no status field', () => {
+    const cells = validRowCells({
+      transportOptedIn: 'Yes',
+      transportRouteId: 'North Line',      // a NAME, as a real spreadsheet would hold
+      transportStopId: 'Park Gate',        // a NAME
+      transportFeeHeadId: 'Transport Fee', // a NAME
+      house: 'ruby',                       // lower-case; must be canonicalized
+    })
+    // Pretend this row sat on line 57 of the uploaded file (e.g. after blank rows).
+    const preview = buildBulkPreview([{ lineNumber: 57, cells }], VALID_ROW_MAPPING, TEST_REFS, [], true)
+    expect(preview.errorRows).toHaveLength(0)
+
+    const [payload] = buildBulkImportPayloads(preview.validRows, TEST_REFS)
+
+    expect(payload.transport).toEqual({
+      optedIn: true,
+      routeId: 'route-north-id',
+      stopId: 'stop-park-id',
+      feeHeadId: 'fh-transport-id',
+    })
+    expect(payload.rowNumber).toBe(57)
+    expect(payload.createStudentRequest.name).toBe('Aarav Sharma')
+    expect(payload.createStudentRequest.house).toBe('Ruby') // canonical catalog spelling
+    expect(payload.createStudentRequest.dob).toBe('2015-01-01')
+    expect(payload.createStudentRequest).not.toHaveProperty('status')
+  })
+
+  it('sends transport: null for a row that did not opt in', () => {
+    const preview = buildBulkPreview(parsedRows([validRowCells()]), VALID_ROW_MAPPING, TEST_REFS, [], true)
+    const [payload] = buildBulkImportPayloads(preview.validRows, TEST_REFS)
+    expect(payload.transport).toBeNull()
+    expect(payload.rowNumber).toBe(2)
   })
 })
 
@@ -856,5 +1044,123 @@ describe('buildBulkRowRecord — full BulkStudentRow shape', () => {
     for (const key of expectedKeys) expect(record).toHaveProperty(key)
     expect(record.firstName).toBe('Aarav')
     expect(record.fatherEmail).toBe('') // unmapped optional field — present, not absent
+  })
+})
+
+describe('canBulkImport — entry-point role gate (Important 8)', () => {
+  it('admits owner/admin/principal but NOT vice_principal, matching the stricter backend policy', () => {
+    // canEdit() (single Add) also admits vice_principal; bulk import's backend policy does
+    // not, so showing them the wizard would be a 4-step walk into a 403.
+    expect(canBulkImport('owner')).toBe(true)
+    expect(canBulkImport('admin')).toBe(true)
+    expect(canBulkImport('principal')).toBe(true)
+    expect(canBulkImport('vice_principal')).toBe(false)
+    expect(canBulkImport('teacher')).toBe(false)
+    expect(canBulkImport('staff')).toBe(false)
+  })
+})
+
+describe('bulkImportTemplateCsv', () => {
+  it('is a header-only CSV whose columns are exactly the wizard\'s mappable field labels', () => {
+    const csv = bulkImportTemplateCsv()
+    const lines = csv.trim().split('\n')
+    expect(lines).toHaveLength(1) // headers only, no sample data
+    const headers = lines[0].split(',')
+    expect(headers).toContain('First Name')
+    expect(headers).toContain('Class + Section')
+    expect(headers).toContain('Pickup Stop')
+    expect(headers).not.toContain('Status') // not a mappable column any more
+    expect(headers).not.toContain('Roll Number')
+    // A file built from this template auto-maps with zero manual column matching.
+    const suggested = suggestColumnMapping(headers)
+    expect(Object.values(suggested).every((v) => v !== null)).toBe(true)
+  })
+})
+
+describe('Bulk import wizard — Upload step template download', () => {
+  it('Download template actually downloads a template instead of reopening the file picker', async () => {
+    const feeExport = await import('@/lib/feeExport')
+    const downloadSpy = vi.spyOn(feeExport, 'downloadTextFile').mockImplementation(() => {})
+
+    const { getByText } = renderSisScreen()
+    fireEvent.click(getByText('Add student'))
+    fireEvent.click(getByText('Bulk Add Students'))
+    fireEvent.click(getByText('Download template'))
+
+    expect(downloadSpy).toHaveBeenCalledTimes(1)
+    const [filename, csv] = downloadSpy.mock.calls[0]
+    expect(filename).toMatch(/\.csv$/)
+    expect(csv).toContain('First Name')
+  })
+})
+
+describe('Bulk import wizard — Step 3 Preview robustness', () => {
+  it('never shows a fake "Warnings: 0" badge', async () => {
+    const rendered = renderSisScreen()
+    const csv = [BULK_HEADERS.join(','), 'Aarav,Sharma,5-A,Male,2015-01-01,9000000001,aarav@x.com,Ramesh Sharma'].join('\n')
+    await driveToPreview(rendered, csv)
+    expect(await rendered.findByText('Total Rows: 1')).toBeInTheDocument()
+    expect(screen.queryByText(/Warnings/i)).not.toBeInTheDocument()
+  })
+
+  it('shows an error message with a working Retry when a reference query fails, instead of hanging on "Preparing preview…"', async () => {
+    let classesShouldFail = true
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+      const u = String(url)
+      if (u.includes('/classes') && classesShouldFail) {
+        return Promise.resolve(jsonResponse({ error: { code: 'internal_error', message: 'boom' } }, 500))
+      }
+      return defaultFetch(u)
+    }))
+
+    const rendered = renderSisScreen()
+    const { getByText, findByText } = rendered
+    const csv = [BULK_HEADERS.join(','), 'Aarav,Sharma,5-A,Male,2015-01-01,9000000001,aarav@x.com,Ramesh Sharma'].join('\n')
+    await driveToPreview(rendered, csv)
+
+    expect(await findByText(/Could not load the data needed to check this file/i)).toBeInTheDocument()
+
+    // The Retry button must actually refetch, not just re-render the same error.
+    classesShouldFail = false
+    fireEvent.click(getByText('Retry'))
+    expect(await findByText('Total Rows: 1', undefined, { timeout: 5000 })).toBeInTheDocument()
+  })
+})
+
+describe('Bulk import wizard — failed transport on a created row (Critical 3)', () => {
+  it('surfaces a created-but-transport-failed row distinctly, never as a skip and never silently', async () => {
+    vi.spyOn(bulkImportApi, 'bulkImportBatch').mockResolvedValue({
+      importId: 'import-1', batchIndex: 0, processed: 3, created: 3, skipped: 0, transportPending: 0,
+      rows: [
+        { rowNumber: 2, studentId: 'stu-2', status: 'created' },
+        { rowNumber: 3, studentId: 'stu-3', status: 'created', transportStatus: 'failed', error: 'Route has no active bus' },
+        { rowNumber: 4, studentId: 'stu-4', status: 'created' },
+      ],
+    })
+    const feeExport = await import('@/lib/feeExport')
+    const downloadSpy = vi.spyOn(feeExport, 'downloadTextFile').mockImplementation(() => {})
+
+    const rendered = renderSisScreen()
+    const { getByText, findByText } = rendered
+    await driveToPreview(rendered, IMPORT_CSV)
+    expect(await findByText('Total Rows: 3')).toBeInTheDocument()
+
+    fireEvent.click(getByText('Start Import'))
+    expect(await findByText('3 students imported successfully.')).toBeInTheDocument()
+
+    // Counted as its own thing, not folded into Skipped (the student WAS created).
+    expect(getByText('Transport issues: 1')).toBeInTheDocument()
+    expect(getByText('Skipped: 0')).toBeInTheDocument()
+    expect(await findByText(/could not be mapped to transport/i)).toBeInTheDocument()
+
+    // The row's real server-supplied reason is reachable, not discarded.
+    fireEvent.click(getByText('View Errors'))
+    expect(await findByText(/Route has no active bus/)).toBeInTheDocument()
+
+    fireEvent.click(getByText('Download Error Report'))
+    const [, csv] = downloadSpy.mock.calls[downloadSpy.mock.calls.length - 1]
+    expect(csv).toContain('Route has no active bus')
+    expect(csv).toContain('Created — transport not assigned')
+    expect(csv).toContain('Aditi') // the real original row data for file line 3
   })
 })

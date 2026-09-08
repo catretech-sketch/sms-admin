@@ -42,6 +42,9 @@ export const queryKeys = {
   audit: {
     list: (params: import('./audit').AuditParams = {}) => ['audit', 'list', params] as const,
   },
+  schoolHouses: {
+    all: ['schoolHouses'] as const,
+  },
   classes: {
     all: ['classes'] as const,
     subjects: (classId: string) => ['classes', 'subjects', classId] as const,

@@ -42,16 +42,20 @@ export interface BulkStudentRow {
   transportFeeHeadId: string
 }
 
-/** Normalizes a free-text bulk-import "gender" cell to the app's 'M' | 'F' encoding.
+/** Parses a free-text bulk-import "gender" cell into the app's 'M' | 'F' encoding, or
+ *  `null` when the cell is blank or says something this app cannot interpret.
+ *
  *  The single-Add form's dropdown only ever supplies the literal 'M'/'F', so its own
  *  `f.gender === 'F' ? 'F' : 'M'` exact-match check is fine there — but a bulk-upload CSV
- *  cell is free text, and an exact-match-only check would silently mis-map any case or
- *  spelling variant other than the single character 'F' (e.g. "Female", "female", "f ")
- *  to Male. Treat any of f/female (case-insensitive, trimmed) as 'F'; everything else
- *  non-blank stays 'M', matching the existing semantics for every other spelling. */
-function normalizeBulkGender(value: string): 'M' | 'F' {
-  const normalized = value.trim().toLowerCase()
-  return normalized === 'f' || normalized === 'female' ? 'F' : 'M'
+ *  cell is free text. Returning `null` (rather than silently defaulting to 'M') is the
+ *  point: an unrecognised cell is real data corruption waiting to happen, so Preview turns
+ *  it into a row Error the admin can see and fix, instead of quietly enrolling a girl as
+ *  male. Exported so Preview validation and payload building share ONE parser. */
+export function parseBulkGender(value: string): 'M' | 'F' | null {
+  const normalized = (value ?? '').trim().toLowerCase()
+  if (normalized === 'f' || normalized === 'female') return 'F'
+  if (normalized === 'm' || normalized === 'male') return 'M'
+  return null
 }
 
 /** Same shape as buildStudent() in studentAdd.tsx, minus file handling (bulk rows carry no
@@ -79,7 +83,10 @@ export function buildStudentFromRow(
     id: `BULK-${row.rowNumber}-${Date.now().toString(36).toUpperCase()}`,
     adm: row.admissionNo.trim(),
     name,
-    gender: normalizeBulkGender(row.gender),
+    // Preview marks any row whose gender cell does not parse as an Error, so a valid,
+    // actually-submitted row always resolves here. The 'M' fallback only exists so this
+    // pure helper stays total for direct unit calls — it is unreachable via the wizard.
+    gender: parseBulkGender(row.gender) ?? 'M',
     grade: classInfo.grade,
     section: classInfo.section,
     cls: classInfo.cls,
@@ -117,7 +124,10 @@ export interface BulkTransportInput {
 }
 
 export interface BulkImportRowPayload {
-  rowNumber?: number
+  /** Required, never optional: the whole error-report join (and the backend's own
+   *  BulkImportRowResult.rowNumber, which is non-optional) keys on this value, so a row
+   *  without one is unusable. Callers must supply the ORIGINAL file line number. */
+  rowNumber: number
   createStudentRequest: Record<string, unknown>
   extrasJson: string
   transport: { optedIn: true; routeId: string | null; stopId: string | null; feeHeadId: string | null } | null
@@ -126,9 +136,14 @@ export interface BulkImportRowPayload {
 /** Shapes one built Student into the exact wire payload the bulk-import batch endpoint
  *  expects — reusing fromStudent() (the same function POST /students uses) and
  *  extrasFromStudent() (the same function PUT /students/{id}/extras uses), with an empty
- *  files list since bulk rows never carry documents. */
-export function toBulkImportRowPayload(student: Student, transport: BulkTransportInput | null): BulkImportRowPayload {
+ *  files list since bulk rows never carry documents. `rowNumber` is taken as an explicit
+ *  argument (rather than left for the caller to bolt on afterwards) so the payload type's
+ *  non-optional rowNumber is guaranteed by construction. */
+export function toBulkImportRowPayload(
+  student: Student, transport: BulkTransportInput | null, rowNumber: number,
+): BulkImportRowPayload {
   return {
+    rowNumber,
     createStudentRequest: fromStudent(student),
     extrasJson: JSON.stringify(extrasFromStudent(student, [])),
     transport: transport
