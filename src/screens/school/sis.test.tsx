@@ -270,6 +270,55 @@ describe('Bulk import wizard — Step 3 Preview', () => {
     releaseStudents()
     expect(await findByText('Total Rows: 1')).toBeInTheDocument()
   })
+
+  it('gates the preview on the classes query resolving instead of treating a still-loading classes list as empty', async () => {
+    // Mirrors the roster-loading test above: hold every /classes call open until
+    // releaseClasses() fires, so the preview must not treat an empty/not-yet-loaded
+    // classes array as "no classes match" (which would falsely flag the row's real,
+    // existing class "5-A" as not found).
+    let ready = false
+    const pendingResolvers: ((r: Response) => void)[] = []
+    function classesResponse(): Response { return jsonResponse({ data: CLASS_FIXTURES, next_cursor: null }) }
+    function releaseClasses() {
+      ready = true
+      pendingResolvers.splice(0).forEach((resolve) => resolve(classesResponse()))
+    }
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+      const u = String(url)
+      if (u.includes('/classes')) {
+        if (ready) return Promise.resolve(classesResponse())
+        return new Promise<Response>((resolve) => { pendingResolvers.push(resolve) })
+      }
+      if (u.includes('/students')) return Promise.resolve(jsonResponse({ data: [], next_cursor: null }))
+      return Promise.resolve(jsonResponse({ data: [], next_cursor: null }))
+    }))
+    const rendered = renderSisScreen()
+    const { getByText, getByLabelText, findByText } = rendered
+    const csv = [
+      BULK_HEADERS.join(','),
+      'Aarav,Sharma,5-A,Male,2015-01-01,9000000001,aarav@x.com,Ramesh Sharma',
+    ].join('\n')
+    fireEvent.click(getByText('Add student'))
+    fireEvent.click(getByText('Bulk Add Students'))
+    const file = new File([csv], 'students.csv', { type: 'text/csv' })
+    fireEvent.change(getByLabelText(/drop your csv/i), { target: { files: [file] } })
+    expect(await findByText('students.csv')).toBeInTheDocument()
+    fireEvent.click(getByText('Continue'))
+    await findByText('Map columns')
+    fireEvent.click(getByText('Continue'))
+
+    // Classes query is still in flight — Preview must show a loading state, never
+    // computed counts (which would silently treat the classes list as empty and flag
+    // every row's class as "not found").
+    expect(await findByText(/loading classes/i)).toBeInTheDocument()
+    expect(screen.queryByText(/Total Rows/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/class not found/i)).not.toBeInTheDocument()
+
+    releaseClasses()
+    expect(await findByText('Total Rows: 1')).toBeInTheDocument()
+    expect(await findByText('Valid: 1')).toBeInTheDocument()
+    expect(screen.queryByText(/class not found/i)).not.toBeInTheDocument()
+  })
 })
 
 /** Minimal valid SchoolClass fixtures for buildBulkPreview's class-exists check. */

@@ -289,10 +289,14 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
   // different query key than the parent list's useStudentsPage, so it's genuinely cold when
   // the drawer opens; without this gate every row would silently pass as Valid (roster-based
   // duplicate/admission checks skipped) during that window.
+  // Also gated on classesQ.isSuccess for the same reason: an empty/not-yet-loaded classes
+  // array reads as "no classes match" to importClassExists, which would falsely flag every
+  // row's class as not found while classes are still loading (or leave that false-invalid
+  // state permanently if the classes query ever errors).
   const preview = useMemo<BulkPreview | null>(() => {
-    if (step !== 2 || !upload || !rosterQ.isSuccess) return null
+    if (step !== 2 || !upload || !rosterQ.isSuccess || !classesQ.isSuccess) return null
     return buildBulkPreview(upload.parsed.rows, columnMapping, classesQ.data ?? [], rosterQ.data ?? [], opsEnabled)
-  }, [step, upload, columnMapping, classesQ.data, rosterQ.data, rosterQ.isSuccess, opsEnabled])
+  }, [step, upload, columnMapping, classesQ.data, classesQ.isSuccess, rosterQ.data, rosterQ.isSuccess, opsEnabled])
 
   const reset = () => { setStep(0); setUpload(null); setUploadError(null); setColumnMapping({}); onClose() }
   const finish = () => { toast.success('Import complete', '36 students imported, 0 errors.'); reset() }
@@ -413,6 +417,8 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
       {step === 2 && (
         rosterQ.isLoading ? (
           <div className="t-sm muted">Loading roster…</div>
+        ) : classesQ.isLoading ? (
+          <div className="t-sm muted">Loading classes…</div>
         ) : preview === null ? (
           <div className="t-sm muted">Preparing preview…</div>
         ) : (
