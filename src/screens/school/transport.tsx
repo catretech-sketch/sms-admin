@@ -16,7 +16,7 @@ import {
 import { useStaff } from '@/api/hooks/useStaff'
 import type { TransportRoute, RouteStop, TransportBus } from '@/api/operations'
 import { RouteBuilderMap } from '@/components/maps/RouteBuilderMap'
-import { normalizeStaffCategory, staffCategoryLabel } from '@/lib/staffCategory'
+import { staffCategoryLabel } from '@/lib/staffCategory'
 import { routeMetrics } from '@/lib/routeMetrics'
 import { TransportStudentsScreen } from './transportStudents'
 

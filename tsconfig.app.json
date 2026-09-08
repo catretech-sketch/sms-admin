@@ -20,7 +20,10 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
 
-    "types": ["vitest/globals", "@testing-library/jest-dom"],
+    // "types" is an explicit allow-list, so it suppresses automatic @types inclusion —
+    // google.maps must be named here or the `google.*` global RouteBuilderMap uses (and
+    // which @vis.gl/react-google-maps ships types for) is unresolved.
+    "types": ["vitest/globals", "@testing-library/jest-dom", "google.maps"],
     "baseUrl": ".",
     "paths": { "@/*": ["./src/*"] }
   },

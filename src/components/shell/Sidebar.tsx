@@ -7,7 +7,7 @@ import { SchoolMark } from '@/components/SchoolMark'
 import { tierIncludes, gateRole, requiredTier } from '@/lib/gating'
 import { useApprovals } from '@/api/hooks/useApprovals'
 import { approvalsForRole } from '@/api/approvals'
-import type { Tier, Role } from '@/types'
+import type { Role } from '@/types'
 
 interface NavItem { label: string; view: string; icon: string; lockFeature?: string; adminOnly?: boolean; badge?: number }
 interface NavGroup { label?: string; items: NavItem[] }
@@ -100,7 +100,7 @@ export function Sidebar() {
                   <span className="sm-nav-ic"><Icon name={it.icon} size={17} /></span>
                   <span className="flex1" style={{ textAlign: 'left' }}>{it.label}</span>
                   {it.badge != null && <span className="sm-nav-badge">{it.badge}</span>}
-                  {locked && <Tip text={`${requiredTier(it.lockFeature)} feature`}><span className="sm-nav-lock"><Icon name="lock" size={13} /></span></Tip>}
+                  {locked && it.lockFeature && <Tip text={`${requiredTier(it.lockFeature)} feature`}><span className="sm-nav-lock"><Icon name="lock" size={13} /></span></Tip>}
                 </button>
               )
             })}

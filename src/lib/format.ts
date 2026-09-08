@@ -31,7 +31,7 @@ export function gpaFor(g: string): number {
 
 export function studentSubjectMarks(stu: Student, subj: string, examId?: string): number {
   const h = hash(stu.id + subj + (examId || ''))
-  const base = stu.attendance
+  const base = stu.attendance ?? 0
   return Math.max(18, Math.min(99, Math.round(base * 0.55 + (h % 45) + (subj === 'Mathematics' ? -4 : subj === 'English' ? 4 : 0))))
 }
 
