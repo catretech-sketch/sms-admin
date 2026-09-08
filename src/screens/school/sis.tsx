@@ -103,7 +103,10 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
   const steps = ['Upload', 'Map columns', 'Done']
   const [upload, setUpload] = useState<{ fileName: string; parsed: ParsedFile } | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
-  const [columnMapping, setColumnMapping] = useState<Record<string, string | null>>({})
+  // Keyed by column INDEX (not header text) so two uploaded columns that share the
+  // same literal header name still get independent mapping entries instead of
+  // silently collapsing onto one.
+  const [columnMapping, setColumnMapping] = useState<Record<number, string | null>>({})
 
   const reset = () => { setStep(0); setUpload(null); setUploadError(null); setColumnMapping({}); onClose() }
   const finish = () => { toast.success('Import complete', '36 students imported, 0 errors.'); reset() }
@@ -130,7 +133,10 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
         setUploadError(`This file exceeds the maximum of 10,000 rows (found ${parsed.rows.length.toLocaleString()}). Split it into smaller files and try again.`)
       }
       setUpload({ fileName: file.name, parsed })
-      setColumnMapping(suggestColumnMapping(parsed.headers))
+      const suggestedByHeader = suggestColumnMapping(parsed.headers)
+      const suggestedByIndex: Record<number, string | null> = {}
+      parsed.headers.forEach((header, index) => { suggestedByIndex[index] = suggestedByHeader[header] ?? null })
+      setColumnMapping(suggestedByIndex)
     } catch {
       setUpload(null)
       setUploadError('Could not read this file. Check that it is a valid CSV or XLSX file and try again.')
@@ -193,11 +199,11 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
       {step === 1 && upload && (
         <div className="col gap10">
           <div className="muted t-sm">Match spreadsheet columns to SchoolMate fields.</div>
-          {upload.parsed.headers.map((header) => {
-            const mappedKey = columnMapping[header] ?? ''
+          {upload.parsed.headers.map((header, index) => {
+            const mappedKey = columnMapping[index] ?? ''
             const mappedField = BULK_IMPORT_FIELDS.find((f) => f.key === mappedKey)
             return (
-              <div key={header} className="row ai-center gap12">
+              <div key={index} className="row ai-center gap12">
                 <Badge tone="neutral">{header}</Badge>
                 <Icon name="arrowRight" size={14} />
                 <Select
@@ -207,7 +213,7 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
                     ...BULK_IMPORT_FIELDS.map((f) => ({ value: f.key, label: f.label })),
                   ]}
                   value={mappedKey}
-                  onChange={(e) => setColumnMapping((prev) => ({ ...prev, [header]: e.target.value || null }))}
+                  onChange={(e) => setColumnMapping((prev) => ({ ...prev, [index]: e.target.value || null }))}
                 />
                 {mappedField && (
                   <Badge tone={mappedField.required ? 'brand' : 'neutral'}>{mappedField.required ? 'Required' : 'Optional'}</Badge>

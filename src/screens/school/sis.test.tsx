@@ -125,4 +125,36 @@ describe('Bulk import wizard — Step 2 Map columns', () => {
     fireEvent.change(firstNameSelect, { target: { value: 'firstName' } })
     expect(getByText('Continue')).not.toBeDisabled()
   })
+
+  it('keeps two uploaded columns with the identical header name independently mappable', async () => {
+    const { getByText, getByLabelText, findByText, getAllByRole } = renderSisScreen()
+    fireEvent.click(getByText('Add student'))
+    fireEvent.click(getByText('Bulk Add Students'))
+    // Two columns both literally named "First Name" — a plausible duplicate-header CSV.
+    const headers = ['First Name', 'First Name', 'Last Name', 'Class + Section', 'Gender', 'Date of Birth', 'Primary Contact Number', 'Email']
+    const file = new File(
+      [`${headers.join(',')}\nAarav,Sharma,5-A,Male,2015-01-01,9999999999,a@b.com\n`], 'students.csv', { type: 'text/csv' },
+    )
+    fireEvent.change(getByLabelText(/drop your csv/i), { target: { files: [file] } })
+    expect(await findByText('students.csv')).toBeInTheDocument()
+    fireEvent.click(getByText('Continue'))
+    await findByText('Map columns')
+
+    // Page-level list filters (grade/status/fee) render 3 comboboxes ahead of the
+    // mapping rows, which follow in the same order as `headers`.
+    const allSelects = getAllByRole('combobox') as HTMLSelectElement[]
+    const mappingSelects = allSelects.slice(allSelects.length - headers.length)
+    const [firstDupSelect, secondDupSelect] = mappingSelects
+
+    // Both duplicate-header columns auto-suggest to the same field initially.
+    expect(firstDupSelect.value).toBe('firstName')
+    expect(secondDupSelect.value).toBe('firstName')
+
+    // Remapping the SECOND "First Name" column must not affect the first — if the
+    // two rows shared one state entry keyed by header text, this change would have
+    // also flipped the first select's displayed value.
+    fireEvent.change(secondDupSelect, { target: { value: 'lastName' } })
+    expect(firstDupSelect.value).toBe('firstName')
+    expect(secondDupSelect.value).toBe('lastName')
+  })
 })
