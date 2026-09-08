@@ -82,3 +82,47 @@ describe('Bulk import wizard — Step 1 Upload', () => {
     expect(getByText('Continue')).toBeDisabled()
   })
 })
+
+describe('Bulk import wizard — Step 2 Map columns', () => {
+  it('auto-suggests a mapping from the uploaded headers and blocks Continue until every required field is mapped', async () => {
+    const { getByText, getByLabelText, findByText, findAllByText, getAllByRole } = renderSisScreen()
+    fireEvent.click(getByText('Add student'))
+    fireEvent.click(getByText('Bulk Add Students'))
+    const file = new File(
+      ['First Name,Last Name,Phone\nAarav,Sharma,9999999999\n'], 'students.csv', { type: 'text/csv' },
+    )
+    const input = getByLabelText(/drop your csv/i)
+    fireEvent.change(input, { target: { files: [file] } })
+    expect(await findByText('students.csv')).toBeInTheDocument()
+    fireEvent.click(getByText('Continue'))
+
+    expect((await findAllByText('First Name')).length).toBeGreaterThan(0)
+    const selects = getAllByRole('combobox')
+    expect(selects.find((s) => (s as HTMLSelectElement).value === 'firstName')).toBeTruthy()
+    expect(getByText('Continue')).toBeDisabled()
+  })
+
+  it('re-disables Continue when the admin unmaps a required field, and re-enables it once remapped', async () => {
+    const { getByText, getByLabelText, findByText, getAllByRole } = renderSisScreen()
+    fireEvent.click(getByText('Add student'))
+    fireEvent.click(getByText('Bulk Add Students'))
+    const headers = ['First Name', 'Last Name', 'Class + Section', 'Gender', 'Date of Birth', 'Primary Contact Number', 'Email']
+    const file = new File(
+      [`${headers.join(',')}\nAarav,Sharma,5-A,Male,2015-01-01,9999999999,a@b.com\n`], 'students.csv', { type: 'text/csv' },
+    )
+    fireEvent.change(getByLabelText(/drop your csv/i), { target: { files: [file] } })
+    expect(await findByText('students.csv')).toBeInTheDocument()
+    fireEvent.click(getByText('Continue'))
+    await findByText('Map columns')
+
+    expect(getByText('Continue')).not.toBeDisabled()
+
+    const firstNameSelect = getAllByRole('combobox').find((s) => (s as HTMLSelectElement).value === 'firstName') as HTMLSelectElement
+    expect(firstNameSelect).toBeTruthy()
+    fireEvent.change(firstNameSelect, { target: { value: '' } })
+    expect(getByText('Continue')).toBeDisabled()
+
+    fireEvent.change(firstNameSelect, { target: { value: 'firstName' } })
+    expect(getByText('Continue')).not.toBeDisabled()
+  })
+})

@@ -35,6 +35,7 @@ import { buildStudentTimeline } from '@/lib/studentTimeline'
 import { monthlyBreakdown, monthlySeriesForKeys, academicYearMonthKeys, academicYearStart, monthDailyGrid } from '@/api/studentAttendance'
 import { type AttendanceStatus } from '@/api/attendance'
 import { parseCsvText, parseXlsxBuffer, type ParsedFile } from '@/lib/importFileParse'
+import { BULK_IMPORT_FIELDS, suggestColumnMapping } from '@/lib/importColumnMapping'
 import type { Student, FeeStatus, Role, Exam } from '@/types'
 import type { SchoolClass } from '@/api/classes'
 import { DEFAULT_GRADES } from '@/lib/defaultClasses'
@@ -102,8 +103,9 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
   const steps = ['Upload', 'Map columns', 'Done']
   const [upload, setUpload] = useState<{ fileName: string; parsed: ParsedFile } | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [columnMapping, setColumnMapping] = useState<Record<string, string | null>>({})
 
-  const reset = () => { setStep(0); setUpload(null); setUploadError(null); onClose() }
+  const reset = () => { setStep(0); setUpload(null); setUploadError(null); setColumnMapping({}); onClose() }
   const finish = () => { toast.success('Import complete', '36 students imported, 0 errors.'); reset() }
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -128,13 +130,16 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
         setUploadError(`This file exceeds the maximum of 10,000 rows (found ${parsed.rows.length.toLocaleString()}). Split it into smaller files and try again.`)
       }
       setUpload({ fileName: file.name, parsed })
+      setColumnMapping(suggestColumnMapping(parsed.headers))
     } catch {
       setUpload(null)
       setUploadError('Could not read this file. Check that it is a valid CSV or XLSX file and try again.')
     }
   }
 
-  const canContinue = step !== 0 || (!!upload && !uploadError)
+  const requiredFields = BULK_IMPORT_FIELDS.filter((f) => f.required)
+  const missingRequired = requiredFields.some((f) => !Object.values(columnMapping).includes(f.key))
+  const canContinue = step === 0 ? (!!upload && !uploadError) : step === 1 ? !missingRequired : true
 
   return (
     <Drawer
@@ -185,16 +190,31 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
         </div>
       )}
 
-      {step === 1 && (
+      {step === 1 && upload && (
         <div className="col gap10">
           <div className="muted t-sm">Match spreadsheet columns to SchoolMate fields.</div>
-          {[['Column A', 'Name'], ['Column B', 'Class'], ['Column C', 'Guardian'], ['Column D', 'Phone']].map(([col, field]) => (
-            <div key={col} className="row ai-center gap12">
-              <Badge tone="neutral">{col}</Badge>
-              <Icon name="arrowRight" size={14} />
-              <Select style={{ flex: 1 }} options={['Name', 'Class', 'Guardian', 'Phone', 'Admission no', 'Ignore']} defaultValue={field} />
-            </div>
-          ))}
+          {upload.parsed.headers.map((header) => {
+            const mappedKey = columnMapping[header] ?? ''
+            const mappedField = BULK_IMPORT_FIELDS.find((f) => f.key === mappedKey)
+            return (
+              <div key={header} className="row ai-center gap12">
+                <Badge tone="neutral">{header}</Badge>
+                <Icon name="arrowRight" size={14} />
+                <Select
+                  style={{ flex: 1 }}
+                  options={[
+                    { value: '', label: 'Ignore' },
+                    ...BULK_IMPORT_FIELDS.map((f) => ({ value: f.key, label: f.label })),
+                  ]}
+                  value={mappedKey}
+                  onChange={(e) => setColumnMapping((prev) => ({ ...prev, [header]: e.target.value || null }))}
+                />
+                {mappedField && (
+                  <Badge tone={mappedField.required ? 'brand' : 'neutral'}>{mappedField.required ? 'Required' : 'Optional'}</Badge>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
 
