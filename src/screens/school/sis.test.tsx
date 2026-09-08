@@ -4,7 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AppProvider } from '@/context/AppProvider'
 import { ToastProvider } from '@/context/ToastProvider'
 import { students as seed } from '@/data/mockDb'
-import { sisScreens } from './sis'
+import { sisScreens, buildBulkPreview, buildBulkRowRecord } from './sis'
+import type { BulkStudentRow } from '@/lib/studentMapping'
 import type { Student } from '@/types'
 
 const StudentsScreen = sisScreens['school.sis']
@@ -22,6 +23,14 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
+// Real classes for the bulk-import "Class + Section" fixtures used below ("5-A", "6-B") to
+// resolve against — Task 14's invalid-class check needs at least one row's class value to
+// genuinely exist so the counter-example (a garbage class string) is meaningful.
+const CLASS_FIXTURES = [
+  { id: 'c1', name: '5-A', grade: '5', section: 'A' },
+  { id: 'c2', name: '6-B', grade: '6', section: 'B' },
+]
+
 beforeEach(() => {
   localStorage.clear()
   vi.restoreAllMocks()
@@ -29,9 +38,14 @@ beforeEach(() => {
   // exam marks, exam papers). mockResolvedValue would hand every one of them the SAME
   // Response instance, whose body can only be read once — every query after the first
   // would fail with "body already read" and silently resolve to {} (readJson swallows
-  // that TypeError). Build a fresh Response per call instead.
-  vi.stubGlobal('fetch', vi.fn().mockImplementation(() =>
-    Promise.resolve(jsonResponse({ data: seed.map(toWire), next_cursor: null }))))
+  // that TypeError). Build a fresh Response per call instead, and route /classes requests
+  // to a real classes fixture instead of the (unrelated) students seed.
+  vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+    if (String(url).includes('/classes')) {
+      return Promise.resolve(jsonResponse({ data: CLASS_FIXTURES, next_cursor: null }))
+    }
+    return Promise.resolve(jsonResponse({ data: seed.map(toWire), next_cursor: null }))
+  }))
 })
 
 function renderSisScreen() {
@@ -210,5 +224,151 @@ describe('Bulk import wizard — Step 3 Preview', () => {
 
     const nonGet = calls.filter((c) => c.method.toUpperCase() !== 'GET')
     expect(nonGet).toHaveLength(0)
+  })
+
+  it('gates the preview on the roster query resolving instead of treating a still-loading roster as empty', async () => {
+    // Several concurrent /students callers exist (this drawer's roster query, the parent
+    // list's page query, …) — each needs its OWN fresh Response, since a Response body can
+    // only be read once (see the beforeEach note above). Hold every /students call open
+    // until releaseStudents() fires, then hand each waiting caller a freshly built Response.
+    let ready = false
+    const pendingResolvers: ((r: Response) => void)[] = []
+    function studentsResponse(): Response { return jsonResponse({ data: [], next_cursor: null }) }
+    function releaseStudents() {
+      ready = true
+      pendingResolvers.splice(0).forEach((resolve) => resolve(studentsResponse()))
+    }
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+      const u = String(url)
+      if (u.includes('/classes')) return Promise.resolve(jsonResponse({ data: CLASS_FIXTURES, next_cursor: null }))
+      if (u.includes('/students')) {
+        if (ready) return Promise.resolve(studentsResponse())
+        return new Promise<Response>((resolve) => { pendingResolvers.push(resolve) })
+      }
+      return Promise.resolve(jsonResponse({ data: [], next_cursor: null }))
+    }))
+    const rendered = renderSisScreen()
+    const { getByText, getByLabelText, findByText } = rendered
+    const csv = [
+      BULK_HEADERS.join(','),
+      'Aarav,Sharma,5-A,Male,2015-01-01,9000000001,aarav@x.com,Ramesh Sharma',
+    ].join('\n')
+    fireEvent.click(getByText('Add student'))
+    fireEvent.click(getByText('Bulk Add Students'))
+    const file = new File([csv], 'students.csv', { type: 'text/csv' })
+    fireEvent.change(getByLabelText(/drop your csv/i), { target: { files: [file] } })
+    expect(await findByText('students.csv')).toBeInTheDocument()
+    fireEvent.click(getByText('Continue'))
+    await findByText('Map columns')
+    fireEvent.click(getByText('Continue'))
+
+    // Roster query is still in flight — Preview must show a loading state, never computed
+    // counts (which would silently treat the roster as empty and pass every row as Valid).
+    expect(await findByText(/loading roster/i)).toBeInTheDocument()
+    expect(screen.queryByText(/Total Rows/)).not.toBeInTheDocument()
+
+    releaseStudents()
+    expect(await findByText('Total Rows: 1')).toBeInTheDocument()
+  })
+})
+
+/** Minimal valid SchoolClass fixtures for buildBulkPreview's class-exists check. */
+function schoolClass(name: string, grade: string, section: string) {
+  return { id: name, name, grade, section, teacherId: '', students: 0, room: '—' }
+}
+const TEST_CLASSES = [schoolClass('5-A', '5', 'A'), schoolClass('6-B', '6', 'B')]
+
+/** One fully-valid row's cells for the column mapping below (11 columns) — callers overwrite
+ *  just the cell(s) relevant to the case under test. */
+const VALID_ROW_MAPPING: Record<number, string | null> = {
+  0: 'firstName', 1: 'lastName', 2: 'section', 3: 'gender', 4: 'dob', 5: 'phone', 6: 'email',
+  7: 'fatherName', 8: 'admissionNo', 9: 'transportOptedIn', 10: 'transportRouteId',
+}
+function validRowCells(overrides: Partial<{
+  firstName: string; lastName: string; section: string; phone: string; email: string
+  admissionNo: string; transportOptedIn: string; transportRouteId: string
+}> = {}): string[] {
+  return [
+    overrides.firstName ?? 'Aarav', overrides.lastName ?? 'Sharma', overrides.section ?? '5-A',
+    'Male', '2015-01-01', overrides.phone ?? '9000000001', overrides.email ?? 'aarav@x.com',
+    'Ramesh Sharma', overrides.admissionNo ?? '', overrides.transportOptedIn ?? '',
+    overrides.transportRouteId ?? '',
+  ]
+}
+
+describe('buildBulkPreview — bulk-only checks (pure)', () => {
+  it('names the earlier row a phone+email duplicate collides with', () => {
+    const rows = [
+      validRowCells(),
+      validRowCells({ firstName: 'Aditi', lastName: 'Verma', phone: '9000000002', email: 'aditi@x.com' }),
+      // Same phone AND email as row 1.
+      validRowCells({ firstName: 'Rohan', lastName: 'Gupta' }),
+    ]
+    const preview = buildBulkPreview(rows, VALID_ROW_MAPPING, TEST_CLASSES, [], false)
+    expect(preview.validRows).toHaveLength(2)
+    expect(preview.errorRows).toHaveLength(1)
+    expect(Object.values(preview.errorRows[0].errors).join(' ')).toMatch(/same phone & email as row 1/i)
+  })
+
+  it('flags an admission number reused within the SAME uploaded file, naming the earlier row', () => {
+    const rows = [
+      validRowCells({ admissionNo: 'ADM100' }),
+      // Different phone/email so only the admission-number check can flag this row.
+      validRowCells({ firstName: 'Aditi', lastName: 'Verma', phone: '9000000002', email: 'aditi@x.com', admissionNo: 'adm100' }),
+    ]
+    const preview = buildBulkPreview(rows, VALID_ROW_MAPPING, TEST_CLASSES, [], false)
+    expect(preview.errorRows).toHaveLength(1)
+    expect(preview.errorRows[0].rowNumber).toBe(2)
+    expect(preview.errorRows[0].errors.admissionNo).toMatch(/same as row 1/i)
+  })
+
+  it('flags a class value that does not resolve to any real class', () => {
+    const rows = [validRowCells({ section: '99-Z' })]
+    const preview = buildBulkPreview(rows, VALID_ROW_MAPPING, TEST_CLASSES, [], false)
+    expect(preview.errorRows).toHaveLength(1)
+    expect(preview.errorRows[0].errors.cls).toMatch(/class not found/i)
+  })
+
+  it('does not flag a class value that resolves to a real class', () => {
+    const rows = [validRowCells({ section: '6-B' })]
+    const preview = buildBulkPreview(rows, VALID_ROW_MAPPING, TEST_CLASSES, [], false)
+    expect(preview.validRows).toHaveLength(1)
+    expect(preview.errorRows).toHaveLength(0)
+  })
+
+  it('treats a non-lowercase-exact transport opt-in ("Yes") as opted-in, requiring a route', () => {
+    const rows = [validRowCells({ transportOptedIn: 'Yes' })]
+    const preview = buildBulkPreview(rows, VALID_ROW_MAPPING, TEST_CLASSES, [], true)
+    expect(preview.errorRows).toHaveLength(1)
+    expect(preview.errorRows[0].errors.transportRouteId).toBeTruthy()
+  })
+
+  it('treats "TRUE" as opted-in too', () => {
+    const rows = [validRowCells({ transportOptedIn: 'TRUE' })]
+    const preview = buildBulkPreview(rows, VALID_ROW_MAPPING, TEST_CLASSES, [], true)
+    expect(preview.errorRows[0].errors.transportRouteId).toBeTruthy()
+  })
+
+  it('does not require a route when the row has not opted into transport', () => {
+    const rows = [validRowCells()]
+    const preview = buildBulkPreview(rows, VALID_ROW_MAPPING, TEST_CLASSES, [], true)
+    expect(preview.validRows).toHaveLength(1)
+  })
+})
+
+describe('buildBulkRowRecord — full BulkStudentRow shape', () => {
+  it('includes every BulkStudentRow field (defaulted to "") even when only one column is mapped', () => {
+    const record = buildBulkRowRecord(['Aarav'], { 0: 'firstName' })
+    const expectedKeys: (keyof Omit<BulkStudentRow, 'rowNumber'>)[] = [
+      'admissionNo', 'firstName', 'lastName', 'section', 'gender', 'dob', 'phone', 'email',
+      'fatherName', 'fatherPhone', 'fatherEmail', 'fatherOccupation',
+      'motherName', 'motherPhone', 'motherEmail', 'motherOccupation',
+      'bloodGroup', 'house', 'religion', 'category', 'caste', 'motherTongue', 'languages',
+      'lastSchool', 'address', 'academicYear', 'admissionDate', 'status',
+      'transportOptedIn', 'transportRouteId', 'transportStopId', 'transportFeeHeadId',
+    ]
+    for (const key of expectedKeys) expect(record).toHaveProperty(key)
+    expect(record.firstName).toBe('Aarav')
+    expect(record.fatherEmail).toBe('') // unmapped optional field — present, not absent
   })
 })

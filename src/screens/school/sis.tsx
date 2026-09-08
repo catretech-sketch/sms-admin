@@ -40,6 +40,7 @@ import { validateStudentForm } from '@/lib/studentValidation'
 import { isDuplicateValue, normalizePhoneDigits, normalizeEmailKey } from '@/lib/validation'
 import { errorRowsToCsv, type ErrorReportRow } from '@/lib/importErrorReport'
 import { downloadTextFile } from '@/lib/feeExport'
+import type { BulkStudentRow } from '@/lib/studentMapping'
 import type { Student, FeeStatus, Role, Exam } from '@/types'
 import type { SchoolClass } from '@/api/classes'
 import { DEFAULT_GRADES } from '@/lib/defaultClasses'
@@ -115,11 +116,39 @@ function resolveImportClass(classes: SchoolClass[], classKey: string): { grade: 
   return { grade: key, section: '', cls: key }
 }
 
+/** True only when the row's raw class cell resolves to a REAL class in the fetched roster of
+ *  classes (same match rule resolveImportClass's first branch uses) — a garbage class string
+ *  like "99-Z" or "Grade Five" that merely gets dash-split into a display label does not
+ *  count as existing. Blank input is treated as non-existent (the required-field check on
+ *  `cls` already flags blank separately). */
+function importClassExists(classes: SchoolClass[], classKey: string): boolean {
+  const key = classKey.trim()
+  if (!key) return false
+  return classes.some((c) => (c.name || `${c.grade}-${c.section}`).trim() === key)
+}
+
+/** Every non-rowNumber field of BulkStudentRow (studentMapping.ts) — used so
+ *  buildBulkRowRecord always returns a FULL BulkStudentRow-shaped record (every key present,
+ *  defaulting to '' when the admin didn't map a column to it) rather than a sparse partial
+ *  object. buildStudentFromRow dereferences these fields unguarded (e.g. row.phone.trim()),
+ *  so a missing key would throw once Task 15 wires this record into it. */
+const BULK_ROW_FIELD_KEYS: (keyof Omit<BulkStudentRow, 'rowNumber'>)[] = [
+  'admissionNo', 'firstName', 'lastName', 'section', 'gender', 'dob', 'phone', 'email',
+  'fatherName', 'fatherPhone', 'fatherEmail', 'fatherOccupation',
+  'motherName', 'motherPhone', 'motherEmail', 'motherOccupation',
+  'bloodGroup', 'house', 'religion', 'category', 'caste', 'motherTongue', 'languages',
+  'lastSchool', 'address', 'academicYear', 'admissionDate', 'status',
+  'transportOptedIn', 'transportRouteId', 'transportStopId', 'transportFeeHeadId',
+]
+
 /** Builds one row's field-key → cell-value record from a raw parsed row + the index-keyed
- *  column mapping (Task 13). Every mapped column gets a key even when its cell is blank, so
- *  every row shares the same key set (needed so errorRowsToCsv's header row is consistent). */
-function buildBulkRowRecord(cells: string[], mapping: Record<number, string | null>): Record<string, string> {
+ *  column mapping (Task 13). Starts from a FULL BulkStudentRow-shaped record (every field
+ *  defaulted to '') so every row shares the same key set (needed so errorRowsToCsv's header
+ *  row is consistent, and so any field the admin didn't map is still safely present as ''
+ *  rather than absent). */
+export function buildBulkRowRecord(cells: string[], mapping: Record<number, string | null>): Record<string, string> {
   const rec: Record<string, string> = {}
+  for (const key of BULK_ROW_FIELD_KEYS) rec[key] = ''
   cells.forEach((cell, index) => {
     const key = mapping[index]
     if (key) rec[key] = (cell ?? '').trim()
@@ -137,26 +166,39 @@ function bulkFileDuplicateKey(record: Record<string, string>): string {
   return `${phone}|${email}`
 }
 
-interface BulkPreviewRow {
+/** Normalizes a bulk-file "transport opted in" cell to the exact 'yes' string
+ *  validateStudentForm's `f.transportOptedIn === 'yes'` check expects — CSV data commonly
+ *  spells this 'Yes', 'TRUE', 'Y', or with stray whitespace, none of which the shared
+ *  validator (also used by single Add Student, which must stay behavior-identical) will
+ *  recognize on its own. Only affects the copy of the value passed into validation, not the
+ *  row's original record. */
+function normalizeBulkTransportOptedIn(value: string): string {
+  const v = (value ?? '').trim().toLowerCase()
+  return (v === 'yes' || v === 'y' || v === 'true' || v === '1') ? 'yes' : value
+}
+
+export interface BulkPreviewRow {
   rowNumber: number
   record: Record<string, string>
   errors: Record<string, string>
 }
 
-interface BulkPreview {
+export interface BulkPreview {
   rows: BulkPreviewRow[]
   validRows: BulkPreviewRow[]
   errorRows: BulkPreviewRow[]
   warnings: BulkPreviewRow[]
 }
 
-/** Runs the same field validation single Add Student uses (validateStudentForm), plus two
- *  bulk-only checks it has no concept of: an admission-number conflict against the roster,
- *  and a duplicate-within-the-uploaded-file check (same phone+email on more than one row).
- *  Pure/computation-only — never calls a create or transport API. */
-function buildBulkPreview(
+/** Runs the same field validation single Add Student uses (validateStudentForm), plus bulk-only
+ *  checks it has no concept of: an admission-number conflict (both against the live roster and
+ *  within the same uploaded file), a duplicate-within-the-uploaded-file check (same phone+email
+ *  on more than one row), and a class-exists check against the live classes list. Exported for
+ *  direct unit testing — pure/computation-only, never calls a create or transport API. */
+export function buildBulkPreview(
   parsedRows: string[][],
   columnMapping: Record<number, string | null>,
+  classes: SchoolClass[],
   roster: Student[],
   opsEnabled: boolean,
 ): BulkPreview {
@@ -164,10 +206,17 @@ function buildBulkPreview(
   const validationRoster = roster.map((s) => ({ id: s.id, email: s.email, phone: s.phone }))
   const admRoster = roster.map((s) => ({ id: s.id, value: s.adm }))
   const fileKeys = records.map(bulkFileDuplicateKey)
-  const seenFileKeys = new Set<string>()
+  // Map (not Set) so the collision message can name the earlier row it duplicates.
+  const seenFileKeys = new Map<string, number>()
+  const seenAdmissionNos = new Map<string, number>()
 
   const rows: BulkPreviewRow[] = records.map((record, i) => {
-    const form: Record<string, string> = { ...record, cls: record.section ?? '' }
+    const rowNumber = i + 1
+    const form: Record<string, string> = {
+      ...record,
+      cls: record.section ?? '',
+      transportOptedIn: normalizeBulkTransportOptedIn(record.transportOptedIn ?? ''),
+    }
     const errors = validateStudentForm({
       form,
       files: {},
@@ -177,20 +226,32 @@ function buildBulkPreview(
     })
 
     const admissionNo = (record.admissionNo ?? '').trim()
-    if (admissionNo && isDuplicateValue(admissionNo, admRoster, (v) => (v ?? '').trim().toUpperCase())) {
-      errors.admissionNo = 'Another student already uses this admission number'
+    if (admissionNo) {
+      const admKey = admissionNo.toUpperCase()
+      if (isDuplicateValue(admissionNo, admRoster, (v) => (v ?? '').trim().toUpperCase())) {
+        errors.admissionNo = 'Another student already uses this admission number'
+      } else if (seenAdmissionNos.has(admKey)) {
+        errors.admissionNo = `Duplicate admission number — same as row ${seenAdmissionNos.get(admKey)}`
+      } else {
+        seenAdmissionNos.set(admKey, rowNumber)
+      }
+    }
+
+    const sectionValue = (record.section ?? '').trim()
+    if (sectionValue && !errors.cls && !importClassExists(classes, sectionValue)) {
+      errors.cls = 'Class not found — check spelling or add it in Academics first'
     }
 
     const key = fileKeys[i]
     if (key) {
       if (seenFileKeys.has(key)) {
-        errors._duplicateInFile = 'Duplicate row in this file — same phone & email as an earlier row'
+        errors._duplicateInFile = `Duplicate row in this file — same phone & email as row ${seenFileKeys.get(key)}`
       } else {
-        seenFileKeys.add(key)
+        seenFileKeys.set(key, rowNumber)
       }
     }
 
-    return { rowNumber: i + 1, record, errors }
+    return { rowNumber, record, errors }
   })
 
   const validRows = rows.filter((r) => Object.keys(r.errors).length === 0)
@@ -223,10 +284,15 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
   const classesQ = useClasses()
   const rosterQ = useStudents({ enabled: open })
 
+  // Gated on rosterQ.isSuccess (not just rosterQ.data ?? []) so Preview never computes counts
+  // against a still-loading roster — this drawer's useStudents({ enabled: open }) uses a
+  // different query key than the parent list's useStudentsPage, so it's genuinely cold when
+  // the drawer opens; without this gate every row would silently pass as Valid (roster-based
+  // duplicate/admission checks skipped) during that window.
   const preview = useMemo<BulkPreview | null>(() => {
-    if (step !== 2 || !upload) return null
-    return buildBulkPreview(upload.parsed.rows, columnMapping, rosterQ.data ?? [], opsEnabled)
-  }, [step, upload, columnMapping, rosterQ.data, opsEnabled])
+    if (step !== 2 || !upload || !rosterQ.isSuccess) return null
+    return buildBulkPreview(upload.parsed.rows, columnMapping, classesQ.data ?? [], rosterQ.data ?? [], opsEnabled)
+  }, [step, upload, columnMapping, classesQ.data, rosterQ.data, rosterQ.isSuccess, opsEnabled])
 
   const reset = () => { setStep(0); setUpload(null); setUploadError(null); setColumnMapping({}); onClose() }
   const finish = () => { toast.success('Import complete', '36 students imported, 0 errors.'); reset() }
@@ -345,7 +411,9 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
       )}
 
       {step === 2 && (
-        preview === null ? (
+        rosterQ.isLoading ? (
+          <div className="t-sm muted">Loading roster…</div>
+        ) : preview === null ? (
           <div className="t-sm muted">Preparing preview…</div>
         ) : (
           <div className="col gap16">
