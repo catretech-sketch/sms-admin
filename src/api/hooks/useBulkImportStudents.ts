@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react'
 import { bulkImportBatch, type BulkImportRowResult } from '../bulkImportStudents'
 import type { BulkImportRowPayload } from '@/lib/studentMapping'
 
-const BATCH_SIZE = 200
+export const BATCH_SIZE = 200
 const MAX_RETRIES_PER_BATCH = 3
 
 export interface BulkImportProgress {
@@ -27,6 +27,10 @@ function chunk<T>(items: T[], size: number): T[][] {
 export function useBulkImportStudents() {
   const [progress, setProgress] = useState<BulkImportProgress>(INITIAL_PROGRESS)
   const [pausedAtBatch, setPausedAtBatch] = useState<number | null>(null)
+  // Surfaced to the UI alongside "Import paused at batch N/M" so the admin sees WHY it
+  // paused (e.g. a real network/server message) instead of only the generic pause banner —
+  // the try/catch below previously swallowed the actual error object.
+  const [lastError, setLastError] = useState<string | null>(null)
   const importIdRef = useRef<string>('')
   const batchesRef = useRef<BulkImportRowPayload[][]>([])
 
@@ -47,9 +51,11 @@ export function useBulkImportStudents() {
             rowResults: [...prev.rowResults, ...result.rows],
           }))
           setPausedAtBatch(null)
+          setLastError(null)
           break
-        } catch {
+        } catch (err) {
           attempt += 1
+          setLastError(err instanceof Error ? err.message : String(err))
           if (attempt >= MAX_RETRIES_PER_BATCH) {
             setPausedAtBatch(i)
             return
@@ -64,6 +70,7 @@ export function useBulkImportStudents() {
     batchesRef.current = chunk(rows, BATCH_SIZE)
     setProgress({ ...INITIAL_PROGRESS, total: rows.length })
     setPausedAtBatch(null)
+    setLastError(null)
     await runFrom(0)
   }, [runFrom])
 
@@ -72,5 +79,5 @@ export function useBulkImportStudents() {
     await runFrom(pausedAtBatch)
   }, [pausedAtBatch, runFrom])
 
-  return { runImport, retry, progress, pausedAtBatch }
+  return { runImport, retry, progress, pausedAtBatch, lastError }
 }

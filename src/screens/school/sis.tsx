@@ -40,7 +40,8 @@ import { validateStudentForm } from '@/lib/studentValidation'
 import { isDuplicateValue, normalizePhoneDigits, normalizeEmailKey } from '@/lib/validation'
 import { errorRowsToCsv, type ErrorReportRow } from '@/lib/importErrorReport'
 import { downloadTextFile } from '@/lib/feeExport'
-import type { BulkStudentRow } from '@/lib/studentMapping'
+import { buildStudentFromRow, toBulkImportRowPayload, type BulkStudentRow, type BulkImportRowPayload } from '@/lib/studentMapping'
+import { useBulkImportStudents, BATCH_SIZE } from '@/api/hooks/useBulkImportStudents'
 import type { Student, FeeStatus, Role, Exam } from '@/types'
 import type { SchoolClass } from '@/api/classes'
 import { DEFAULT_GRADES } from '@/lib/defaultClasses'
@@ -268,11 +269,30 @@ function bulkErrorReportRows(errorRows: BulkPreviewRow[]): ErrorReportRow[] {
   }))
 }
 
+/** Shapes Preview's validated rows into the exact BulkImportRowPayload[] the batch endpoint
+ *  expects. Each row's `record` is already a FULL BulkStudentRow-shaped Record<string,string>
+ *  (buildBulkRowRecord defaults every field to ''), so it's safe to spread directly into a
+ *  BulkStudentRow. Transport is only sent as opted-in when the row's normalized
+ *  transportOptedIn cell reads 'yes' — routeId/stopId/feeHeadId are passed through verbatim
+ *  (never fuzzy-resolved by name), per the design spec: bulk import only accepts IDs already
+ *  present in the file. */
+export function buildBulkImportPayloads(validRows: BulkPreviewRow[], classes: SchoolClass[]): BulkImportRowPayload[] {
+  return validRows.map((r) => {
+    const row = { rowNumber: r.rowNumber, ...r.record } as BulkStudentRow
+    const classInfo = resolveImportClass(classes, row.section)
+    const student = buildStudentFromRow(row, classInfo)
+    const optedIn = normalizeBulkTransportOptedIn(row.transportOptedIn) === 'yes'
+    const transport = optedIn
+      ? { routeId: row.transportRouteId, stopId: row.transportStopId, feeHeadId: row.transportFeeHeadId }
+      : null
+    return { ...toBulkImportRowPayload(student, transport), rowNumber: row.rowNumber }
+  })
+}
+
 function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const app = useApp()
-  const toast = useToast()
   const [step, setStep] = useState(0)
-  const steps = ['Upload', 'Map columns', 'Preview']
+  const steps = ['Upload', 'Map columns', 'Preview', 'Import']
   const [upload, setUpload] = useState<{ fileName: string; parsed: ParsedFile } | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
   // Keyed by column INDEX (not header text) so two uploaded columns that share the
@@ -298,8 +318,22 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
     return buildBulkPreview(upload.parsed.rows, columnMapping, classesQ.data ?? [], rosterQ.data ?? [], opsEnabled)
   }, [step, upload, columnMapping, classesQ.data, classesQ.isSuccess, rosterQ.data, rosterQ.isSuccess, opsEnabled])
 
+  const bulkImport = useBulkImportStudents()
+
+  // True only while an actual batch HTTP round-trip is outstanding — never a timer/estimate.
+  // Matches the initial (0/0) state as "not in flight" so the drawer stays closable before
+  // Start Import is clicked.
+  const importInFlight = bulkImport.progress.processed < bulkImport.progress.total && bulkImport.pausedAtBatch == null
+  const totalBatches = Math.max(1, Math.ceil(bulkImport.progress.total / BATCH_SIZE))
+
   const reset = () => { setStep(0); setUpload(null); setUploadError(null); setColumnMapping({}); onClose() }
-  const finish = () => { toast.success('Import complete', '36 students imported, 0 errors.'); reset() }
+
+  const startImport = () => {
+    if (!preview || preview.validRows.length === 0) return
+    const rows = buildBulkImportPayloads(preview.validRows, classesQ.data ?? [])
+    setStep(3)
+    void bulkImport.runImport(rows)
+  }
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -336,17 +370,32 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
   const requiredFields = BULK_IMPORT_FIELDS.filter((f) => f.required)
   const missingRequired = requiredFields.some((f) => !Object.values(columnMapping).includes(f.key))
   const canContinue = step === 0 ? (!!upload && !uploadError) : step === 1 ? !missingRequired : true
+  const canStartImport = !!preview && preview.validRows.length > 0
+
+  const importDone = bulkImport.progress.total > 0 && bulkImport.progress.processed >= bulkImport.progress.total && bulkImport.pausedAtBatch == null
 
   return (
     <Drawer
-      open={open} onClose={reset} icon="upload"
+      // Genuinely un-closable (not just visually dimmed) while a batch round-trip is in
+      // flight: onClose is omitted entirely, so the header's X button doesn't render, Esc
+      // is a no-op, and a backdrop click is a no-op too.
+      open={open} onClose={importInFlight ? undefined : reset} icon="upload"
       title="Bulk import students" sub={`Step ${step + 1} of ${steps.length} · ${steps[step]}`}
       footer={
         <div className="row gap8 jc-between">
-          <Btn variant="ghost" disabled={step === 0} onClick={() => setStep((s) => Math.max(0, s - 1))}>Back</Btn>
-          {step < steps.length - 1
-            ? <Btn variant="primary" iconRight="arrowRight" disabled={!canContinue} onClick={() => setStep((s) => s + 1)}>Continue</Btn>
-            : <Btn variant="primary" icon="check" onClick={finish}>Finish import</Btn>}
+          <Btn variant="ghost" disabled={step === 0 || step === 3} onClick={() => setStep((s) => Math.max(0, s - 1))}>Back</Btn>
+          {step < 2 && (
+            <Btn variant="primary" iconRight="arrowRight" disabled={!canContinue} onClick={() => setStep((s) => s + 1)}>Continue</Btn>
+          )}
+          {step === 2 && (
+            <Btn variant="primary" icon="check" disabled={!canStartImport || importInFlight} onClick={startImport}>Start Import</Btn>
+          )}
+          {step === 3 && bulkImport.pausedAtBatch != null && (
+            <Btn variant="primary" icon="refresh" onClick={() => void bulkImport.retry()}>Retry Import</Btn>
+          )}
+          {step === 3 && importDone && (
+            <Btn variant="primary" icon="check" onClick={reset}>Done</Btn>
+          )}
         </div>
       }
     >
@@ -468,11 +517,45 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
               <Empty
                 icon="checkCircle"
                 title="Ready to import"
-                body={`${preview.validRows.length} valid row(s) · 0 errors. Click Finish to enrol all students.`}
+                body={`${preview.validRows.length} valid row(s) · 0 errors. Click Start Import to enrol all students.`}
               />
             )}
           </div>
         )
+      )}
+
+      {step === 3 && (
+        <div className="col gap16">
+          <div className="t-sm fw6">{`Processed ${bulkImport.progress.processed} / ${bulkImport.progress.total}`}</div>
+          <Progress
+            value={bulkImport.progress.total > 0 ? (bulkImport.progress.processed / bulkImport.progress.total) * 100 : 0}
+          />
+          <div className="row gap12 wrap">
+            <Badge tone="success">{`Created: ${bulkImport.progress.created}`}</Badge>
+            <Badge tone="neutral">{`Skipped: ${bulkImport.progress.skipped}`}</Badge>
+            <Badge tone="warning">{`Transport pending: ${bulkImport.progress.transportPending}`}</Badge>
+          </div>
+
+          {bulkImport.pausedAtBatch != null && (
+            <div className="sm-err col gap4">
+              <div className="row ai-center gap8">
+                <Icon name="alert" size={14} />
+                <span className="fw6">{`Import paused at batch ${bulkImport.pausedAtBatch + 1} / ${totalBatches}`}</span>
+              </div>
+              <div className="t-xs">
+                {bulkImport.lastError || 'This batch failed after several attempts. Check your connection and click Retry Import.'}
+              </div>
+            </div>
+          )}
+
+          {importDone && (
+            <Empty
+              icon="checkCircle"
+              title="Import finished"
+              body={`Processed ${bulkImport.progress.processed} row(s) — ${bulkImport.progress.created} created, ${bulkImport.progress.skipped} skipped.`}
+            />
+          )}
+        </div>
       )}
     </Drawer>
   )

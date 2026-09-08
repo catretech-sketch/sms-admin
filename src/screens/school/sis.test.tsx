@@ -7,6 +7,8 @@ import { students as seed } from '@/data/mockDb'
 import { sisScreens, buildBulkPreview, buildBulkRowRecord } from './sis'
 import type { BulkStudentRow } from '@/lib/studentMapping'
 import type { Student } from '@/types'
+import * as bulkImportApi from '@/api/bulkImportStudents'
+import type { BulkImportBatchResult } from '@/api/bulkImportStudents'
 
 const StudentsScreen = sisScreens['school.sis']
 
@@ -318,6 +320,86 @@ describe('Bulk import wizard — Step 3 Preview', () => {
     expect(await findByText('Total Rows: 1')).toBeInTheDocument()
     expect(await findByText('Valid: 1')).toBeInTheDocument()
     expect(screen.queryByText(/class not found/i)).not.toBeInTheDocument()
+  })
+})
+
+const IMPORT_CSV = [
+  BULK_HEADERS.join(','),
+  'Aarav,Sharma,5-A,Male,2015-01-01,9000000001,aarav@x.com,Ramesh Sharma',
+  'Aditi,Verma,6-B,Female,2014-05-05,9000000002,aditi@x.com,Suresh Verma',
+  'Rohan,Gupta,5-A,Male,2015-02-02,9000000003,rohan@x.com,Dinesh Gupta',
+].join('\n')
+
+function batchResult(overrides: Partial<BulkImportBatchResult> = {}): BulkImportBatchResult {
+  return {
+    importId: 'import-1', batchIndex: 0, processed: 3, created: 3, skipped: 0, transportPending: 0,
+    rows: [1, 2, 3].map((n) => ({ rowNumber: n, studentId: `stu-${n}`, status: 'created' })),
+    ...overrides,
+  }
+}
+
+describe('Bulk import wizard — Step 4 Import', () => {
+  it('shows a real, server-response-driven progress bar with no fake timers', async () => {
+    let resolveBatch: ((v: BulkImportBatchResult) => void) | null = null
+    vi.spyOn(bulkImportApi, 'bulkImportBatch').mockImplementation(
+      () => new Promise((resolve) => { resolveBatch = resolve }),
+    )
+
+    const rendered = renderSisScreen()
+    const { getByText, findByText } = rendered
+    await driveToPreview(rendered, IMPORT_CSV)
+    expect(await findByText('Total Rows: 3')).toBeInTheDocument()
+
+    fireEvent.click(getByText('Start Import'))
+
+    // Progress appears immediately (synchronously, before the batch call resolves) —
+    // proving the counter reflects real hook state, not a timer.
+    expect(getByText('Processed 0 / 3')).toBeInTheDocument()
+
+    vi.useFakeTimers()
+    await vi.advanceTimersByTimeAsync(5000) // 5 real seconds pass with no batch response yet
+    expect(getByText('Processed 0 / 3')).toBeInTheDocument() // must NOT have advanced from time alone
+    vi.useRealTimers()
+
+    resolveBatch!(batchResult())
+    expect(await findByText('Processed 3 / 3')).toBeInTheDocument()
+    expect(await findByText('Created: 3')).toBeInTheDocument()
+  })
+
+  it('shows the paused state with a Retry Import button when batches are exhausted', async () => {
+    vi.spyOn(bulkImportApi, 'bulkImportBatch').mockRejectedValue(new Error('network error'))
+
+    const rendered = renderSisScreen()
+    const { getByText, findByText, getByRole } = rendered
+    await driveToPreview(rendered, IMPORT_CSV)
+    expect(await findByText('Total Rows: 3')).toBeInTheDocument()
+
+    fireEvent.click(getByText('Start Import'))
+
+    expect(await findByText(/Import paused at batch/i)).toBeInTheDocument()
+    expect(getByRole('button', { name: 'Retry Import' })).toBeInTheDocument()
+    expect(await findByText('network error')).toBeInTheDocument()
+  })
+
+  it('resumes from the paused batch on Retry Import instead of restarting', async () => {
+    let callCount = 0
+    vi.spyOn(bulkImportApi, 'bulkImportBatch').mockImplementation(async () => {
+      callCount += 1
+      if (callCount <= 3) throw new Error('network error')
+      return batchResult()
+    })
+
+    const rendered = renderSisScreen()
+    const { getByText, findByText } = rendered
+    await driveToPreview(rendered, IMPORT_CSV)
+    expect(await findByText('Total Rows: 3')).toBeInTheDocument()
+
+    fireEvent.click(getByText('Start Import'))
+    expect(await findByText(/Import paused at batch/i)).toBeInTheDocument()
+
+    fireEvent.click(getByText('Retry Import'))
+    expect(await findByText('Processed 3 / 3')).toBeInTheDocument()
+    expect(screen.queryByText(/Import paused at batch/i)).not.toBeInTheDocument()
   })
 })
 
