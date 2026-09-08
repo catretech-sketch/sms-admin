@@ -418,10 +418,13 @@ export function buildBulkImportPayloads(validRows: BulkPreviewRow[], refs: BulkI
   })
 }
 
-/** Header-only CSV template matching the wizard's own mappable column labels exactly, so a
- *  file built from it auto-maps end to end with no manual column matching. */
+/** Header-only CSV template matching the wizard's own mappable column labels, so a file built
+ *  from it auto-maps end to end with no manual column matching. Omits Admission Number — like
+ *  Roll Number, it's server-auto-generated; the column stays mappable for schools migrating
+ *  legacy data with existing admission numbers, but a fresh template shouldn't invite filling it. */
 export function bulkImportTemplateCsv(): string {
-  return `${csvHeaderOnly(BULK_IMPORT_FIELDS.map((f) => f.label))}\n`
+  const labels = BULK_IMPORT_FIELDS.filter((f) => f.key !== 'admissionNo').map((f) => f.label)
+  return `${csvHeaderOnly(labels)}\n`
 }
 
 function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
