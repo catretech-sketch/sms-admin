@@ -655,19 +655,21 @@ describe('Bulk import wizard — full end to end', () => {
     // internal attempts the hook allows per batch (MAX_RETRIES_PER_BATCH in
     // useBulkImportStudents.ts) — exhausting them pauses the import — then succeeds once
     // Retry Import issues the 4th call. Batches 0 and 2 succeed on their first call. Tracks
-    // every call's batchIndex so we can assert batch 0 is never called twice (no restart
-    // from scratch on retry).
-    const calls: number[] = []
+    // every call's (importId, batchIndex) tuple — the real idempotency key per Tasks 6-9 —
+    // so we can assert not just that batch 0 is never called twice, but that the
+    // Retry-triggered calls reuse the SAME importId as the original run (a regression that
+    // regenerated a new importId on retry() would break this).
+    const calls: { importId: string; batchIndex: number }[] = []
     let batch1Attempts = 0
     vi.spyOn(bulkImportApi, 'bulkImportBatch').mockImplementation(
-      async (_importId, batchIndex, rows) => {
-        calls.push(batchIndex)
+      async (importId, batchIndex, rows) => {
+        calls.push({ importId, batchIndex })
         if (batchIndex === 1) {
           batch1Attempts += 1
           if (batch1Attempts <= 3) throw new Error('network error')
         }
         return {
-          importId: 'import-1',
+          importId,
           batchIndex,
           processed: rows.length,
           created: rows.length,
@@ -733,11 +735,21 @@ describe('Bulk import wizard — full end to end', () => {
     expect(screen.queryByText(/Import paused at batch/i)).not.toBeInTheDocument()
 
     // Batch 0 was called exactly once — retry resumed from batch 1, not from scratch.
-    expect(calls.filter((b) => b === 0)).toHaveLength(1)
-    expect(calls.filter((b) => b === 2)).toHaveLength(1)
+    const batch0Calls = calls.filter((c) => c.batchIndex === 0)
+    const batch1Calls = calls.filter((c) => c.batchIndex === 1)
+    const batch2Calls = calls.filter((c) => c.batchIndex === 2)
+    expect(batch0Calls).toHaveLength(1)
+    expect(batch2Calls).toHaveLength(1)
     // Batch 1 was called 4 times total: 3 failures (exhausting the pause threshold) + 1
     // success (issued by the Retry Import click).
-    expect(calls.filter((b) => b === 1)).toHaveLength(4)
+    expect(batch1Calls).toHaveLength(4)
+    // The real idempotency key is the (importId, batchIndex) TUPLE (Tasks 6-9) — asserting
+    // batchIndex progression alone would not catch a regression where retry() regenerated a
+    // fresh importId instead of reusing importIdRef.current. Every call across the original
+    // run AND the Retry Import click must share the exact same importId.
+    const allImportIds = new Set(calls.map((c) => c.importId))
+    expect(allImportIds.size).toBe(1)
+    expect(batch1Calls[batch1Calls.length - 1].importId).toBe(batch0Calls[0].importId)
 
     // 6. Complete screen: correct final created/skipped counts.
     expect(await findByText('448 students imported successfully.')).toBeInTheDocument()
