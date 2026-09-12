@@ -9,7 +9,7 @@ import { useApp, useToast } from '@/lib/hooks'
 import { useFeePayments, usePayInvoice, useCreateFeeRazorpayOrder, useVerifyFeeRazorpayPayment } from '@/api/hooks/useFeePayments'
 import { useSchoolIntegrations } from '@/api/hooks/useSchoolIntegrations'
 import { loadRazorpayScript } from '@/api/upgradeRequests'
-import { useFeeHeads, useCreateFeeHead, useDeleteFeeHead } from '@/api/hooks/useFeeHeads'
+import { useFeeHeads, useCreateFeeHead, useDeleteFeeHead, useUpdateFeeHead } from '@/api/hooks/useFeeHeads'
 import { useFeeStructure, useSaveFeeStructure } from '@/api/hooks/useFeeStructure'
 import type { FeeStructureDocument, FeeStructureStatus } from '@/api/feeStructure'
 import { useFeeInvoices, useGenerateFeeInvoices } from '@/api/hooks/useFeeInvoices'
@@ -275,6 +275,60 @@ function WaiverModal({ invoice, cur, onClose }: { invoice: FeeInvoice; cur: stri
   )
 }
 
+/** Confirms flipping a fee head's transport flag — it changes what invoice
+ *  generation charges students, so it isn't a silent toggle. */
+function TransportToggleModal({ head, onClose }: { head: FeeHead; onClose: () => void }) {
+  const toast = useToast()
+  const updateHead = useUpdateFeeHead()
+  const willBeTransport = !head.isTransportFeeHead
+
+  const confirm = () => {
+    updateHead.mutate({ id: head.id, patch: { isTransportFeeHead: willBeTransport } }, {
+      onSuccess: () => {
+        toast.success(
+          willBeTransport ? `${head.name} marked as Transport` : `${head.name} marked as Regular`,
+          willBeTransport
+            ? 'Invoice generation will now charge this fee only to students with an active transport assignment for it.'
+            : 'Invoice generation will charge this fee to every student in the selected class/grade again.',
+        )
+        onClose()
+      },
+      onError: (err) => toast.danger('Could not update fee type', err instanceof Error ? err.message : 'Please try again.'),
+    })
+  }
+
+  return (
+    <Modal
+      open onClose={onClose} icon="bus" size="sm"
+      title={willBeTransport ? 'Mark as Transport Fee?' : 'Mark as Regular Fee?'}
+      sub={head.name}
+      footer={
+        <div className="row gap8 jc-end">
+          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn variant="primary" icon="check" disabled={updateHead.isPending} onClick={confirm}>
+            {updateHead.isPending ? 'Saving…' : 'Confirm'}
+          </Btn>
+        </div>
+      }
+    >
+      <div className="col gap8 t-sm">
+        {willBeTransport ? (
+          <p>
+            This fee will only be charged to a student on invoice generation when that student has an
+            active transport assignment linked to it. Students without a transport assignment will no
+            longer be billed for it.
+          </p>
+        ) : (
+          <p>
+            This fee will go back to being charged to every student in the selected class/grade on
+            invoice generation, regardless of transport assignment.
+          </p>
+        )}
+      </div>
+    </Modal>
+  )
+}
+
 /* ---------- Fee history (saved payments) ---------- */
 function FeeHistoryTab({ cur }: { cur: string }) {
   const app = useApp()
@@ -456,6 +510,8 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
     description: '',
   })
   const [newHead, setNewHead] = useState('')
+  const [newHeadTransport, setNewHeadTransport] = useState(false)
+  const [toggleHead, setToggleHead] = useState<FeeHead | null>(null)
   const [draft, setDraft] = useState<Record<string, Record<string, number>>>({})
   const [hydrated, setHydrated] = useState(false)
   const [viewGrade, setViewGrade] = useState('') /* '' = all grades */
@@ -573,8 +629,8 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
     const name = properName(newHead.trim())
     if (!name) { toast.danger('Name required', 'Enter a fee type name.'); return }
     if (heads.some((h) => h.name.toLowerCase() === name.toLowerCase())) { toast.danger('Already exists', `${name} is already a fee type.`); return }
-    createHead.mutate({ name }, {
-      onSuccess: () => { setNewHead('') },
+    createHead.mutate({ name, isTransportFeeHead: newHeadTransport }, {
+      onSuccess: () => { setNewHead(''); setNewHeadTransport(false) },
       onError: (err) => { toast.danger('Could not add fee type', err instanceof Error ? err.message : 'Please try again.') },
     })
   }
@@ -953,6 +1009,11 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
                       <Input value={newHead} placeholder="e.g. Library" onChange={(e) => setNewHead(e.target.value)} />
                     </Field>
                   </div>
+                  <Checkbox
+                    checked={newHeadTransport}
+                    onChange={setNewHeadTransport}
+                    label="Mark as Transport Fee"
+                  />
                   <Btn variant="secondary" icon="plus" disabled={createHead.isPending || !newHead.trim()} onClick={addHead}>
                     Add fee type
                   </Btn>
@@ -980,6 +1041,11 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
                         />
                       </Field>
                     </div>
+                    <Checkbox
+                      checked={newHeadTransport}
+                      onChange={setNewHeadTransport}
+                      label="Mark as Transport Fee"
+                    />
                     <Btn variant="secondary" icon="plus" disabled={createHead.isPending || !newHead.trim()} onClick={addHead}>
                       Add fee type
                     </Btn>
@@ -987,19 +1053,37 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
                 )}
                 <div className="row gap6 wrap">
                   {heads.map((h) => (
-                    <Badge key={h.id} tone="brand">
-                      {h.name}
-                      {editable && (
+                    <div key={h.id} className="row ai-center gap4">
+                      <Badge tone="brand">
+                        {h.name}
+                        {editable && (
+                          <button
+                            type="button"
+                            onClick={() => removeHead(h)}
+                            aria-label={`Remove ${h.name}`}
+                            style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'inherit', display: 'inline-flex', marginLeft: 6, padding: 0, opacity: 0.75 }}
+                          >
+                            <Icon name="x" size={12} />
+                          </button>
+                        )}
+                      </Badge>
+                      {editable ? (
                         <button
                           type="button"
-                          onClick={() => removeHead(h)}
-                          aria-label={`Remove ${h.name}`}
-                          style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'inherit', display: 'inline-flex', marginLeft: 6, padding: 0, opacity: 0.75 }}
+                          onClick={() => setToggleHead(h)}
+                          aria-label={`${h.isTransportFeeHead ? 'Unmark' : 'Mark'} ${h.name} as transport fee`}
+                          style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0, display: 'inline-flex' }}
                         >
-                          <Icon name="x" size={12} />
+                          <Badge tone={h.isTransportFeeHead ? 'info' : 'neutral'}>
+                            {h.isTransportFeeHead ? '🚌 Transport' : 'Regular'}
+                          </Badge>
                         </button>
+                      ) : (
+                        <Badge tone={h.isTransportFeeHead ? 'info' : 'neutral'}>
+                          {h.isTransportFeeHead ? '🚌 Transport' : 'Regular'}
+                        </Badge>
                       )}
-                    </Badge>
+                    </div>
                   ))}
                 </div>
 
@@ -1376,6 +1460,7 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
           </div>
         </Card>
       )}
+      {toggleHead && <TransportToggleModal head={toggleHead} onClose={() => setToggleHead(null)} />}
     </div>
   )
 }

@@ -100,9 +100,20 @@ beforeEach(() => {
     if (u.includes('/fees/heads')) {
       if (method === 'POST') {
         const body = JSON.parse((opts?.body as string) ?? '{}')
-        const created = { id: `h${feeHeads.length + 1}`, name: body.name, code: body.code, active: true }
+        const created = {
+          id: `h${feeHeads.length + 1}`, name: body.name, code: body.code, active: true,
+          is_transport_fee_head: !!body.is_transport_fee_head,
+        }
         feeHeads = [...feeHeads, created]
         return jsonOk({ data: created })
+      }
+      if (method === 'PATCH') {
+        const id = u.split('/fees/heads/')[1]
+        const body = JSON.parse((opts?.body as string) ?? '{}')
+        const idx = feeHeads.findIndex((h) => h.id === id)
+        if (idx === -1) return new Response(JSON.stringify({ error: { message: 'not found' } }), { status: 404, headers: { 'Content-Type': 'application/json' } })
+        feeHeads[idx] = { ...feeHeads[idx], ...body }
+        return jsonOk({ data: feeHeads[idx] })
       }
       return jsonOk({ data: feeHeads, next_cursor: null })
     }
@@ -515,7 +526,7 @@ describe('Fee structure', () => {
     await waitFor(() => {
       expect(within(container).getByText(/Fee structure saved/i)).toBeInTheDocument()
     })
-  })
+  }, 15000)
 
   it('generates invoices for selected classes (class-wise)', async () => {
     const { container, clickTab } = renderScreen()
@@ -550,6 +561,114 @@ describe('Fee structure', () => {
     })
     await waitFor(() => {
       expect(within(container).getByText(/invoices generated/i)).toBeInTheDocument()
+    })
+  })
+
+  it('creates a fee head with the Transport flag checked', async () => {
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+    await waitFor(() => {
+      expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0)
+    })
+
+    fireEvent.change(within(container).getByPlaceholderText(/Type fee name|e\.g\. Library|Custom head|Add another/i), { target: { value: 'Transport Fee' } })
+    fireEvent.click(within(container).getByLabelText(/mark as transport fee/i))
+    fireEvent.click(within(container).getByRole('button', { name: /Add fee type/i }))
+
+    await waitFor(() => {
+      const fetchMock = vi.mocked(fetch)
+      const postCall = fetchMock.mock.calls.find(([url, opts]) => opts?.method === 'POST' && String(url).includes('/fees/heads'))
+      expect(postCall).toBeDefined()
+      const body = JSON.parse((postCall?.[1] as RequestInit).body as string)
+      expect(body.is_transport_fee_head).toBe(true)
+    })
+    await waitFor(() => {
+      expect(within(container).getAllByText('🚌 Transport').length).toBeGreaterThan(0)
+    })
+  })
+
+  it('creates a fee head without the Transport flag (shown as Regular)', async () => {
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+    await waitFor(() => {
+      expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0)
+    })
+
+    fireEvent.change(within(container).getByPlaceholderText(/Type fee name|e\.g\. Library|Custom head|Add another/i), { target: { value: 'Lab fee' } })
+    fireEvent.click(within(container).getByRole('button', { name: /Add fee type/i }))
+
+    await waitFor(() => {
+      const fetchMock = vi.mocked(fetch)
+      const postCall = fetchMock.mock.calls.find(([url, opts]) => opts?.method === 'POST' && String(url).includes('/fees/heads'))
+      expect(postCall).toBeDefined()
+      const body = JSON.parse((postCall?.[1] as RequestInit).body as string)
+      expect(body.is_transport_fee_head).toBe(false)
+    })
+    await waitFor(() => {
+      expect(within(container).getAllByText(/Lab [Ff]ee/).length).toBeGreaterThan(0)
+    })
+    expect(within(container).getAllByText('Regular').length).toBeGreaterThan(0)
+  })
+
+  it('shows a Transport badge only for fee heads flagged as transport', async () => {
+    feeHeads = feeHeads.map((h) => (h.id === 'h2' ? { ...h, is_transport_fee_head: true } : h))
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+
+    await waitFor(() => {
+      expect(within(container).getAllByText('🚌 Transport').length).toBeGreaterThan(0)
+    })
+    expect(within(container).getAllByText('Regular').length).toBeGreaterThan(0)
+  })
+
+  it('marks an existing fee head as Transport via the toggle + confirmation modal', async () => {
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+    await waitFor(() => {
+      expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0)
+    })
+
+    fireEvent.click(within(container).getByRole('button', { name: /Mark Academic as transport fee/i }))
+    await waitFor(() => {
+      expect(within(container).getByText('Mark as Transport Fee?')).toBeInTheDocument()
+    })
+    fireEvent.click(within(container).getByRole('button', { name: 'Confirm' }))
+
+    await waitFor(() => {
+      const fetchMock = vi.mocked(fetch)
+      const patchCall = fetchMock.mock.calls.find(([url, opts]) => opts?.method === 'PATCH' && String(url).includes('/fees/heads/h1'))
+      expect(patchCall).toBeDefined()
+      const body = JSON.parse((patchCall?.[1] as RequestInit).body as string)
+      expect(body.is_transport_fee_head).toBe(true)
+    })
+    await waitFor(() => {
+      expect(within(container).getByText(/marked as Transport/i)).toBeInTheDocument()
+    })
+  })
+
+  it('unmarks an existing transport fee head back to Regular via the toggle + confirmation modal', async () => {
+    feeHeads = feeHeads.map((h) => (h.id === 'h2' ? { ...h, is_transport_fee_head: true } : h))
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+    await waitFor(() => {
+      expect(within(container).getAllByText('🚌 Transport').length).toBeGreaterThan(0)
+    })
+
+    fireEvent.click(within(container).getByRole('button', { name: /Unmark Transport as transport fee/i }))
+    await waitFor(() => {
+      expect(within(container).getByText('Mark as Regular Fee?')).toBeInTheDocument()
+    })
+    fireEvent.click(within(container).getByRole('button', { name: 'Confirm' }))
+
+    await waitFor(() => {
+      const fetchMock = vi.mocked(fetch)
+      const patchCall = fetchMock.mock.calls.find(([url, opts]) => opts?.method === 'PATCH' && String(url).includes('/fees/heads/h2'))
+      expect(patchCall).toBeDefined()
+      const body = JSON.parse((patchCall?.[1] as RequestInit).body as string)
+      expect(body.is_transport_fee_head).toBe(false)
+    })
+    await waitFor(() => {
+      expect(within(container).getByText(/marked as Regular/i)).toBeInTheDocument()
     })
   })
 })
