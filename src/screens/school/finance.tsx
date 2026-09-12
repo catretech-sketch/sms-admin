@@ -22,8 +22,7 @@ import { useSendFeeReminders } from '@/api/hooks/useFeeReminders'
 import { buildUpiPayUri, upiQrImageUrl } from '@/lib/upiQr'
 import { downloadTextFile, invoicesToCsv } from '@/lib/feeExport'
 import { payrollRunToCsv, payrollCsvFileName, downloadPayslip } from '@/lib/payrollExport'
-import { downloadFeeReceipt, type FeeReceiptData } from '@/lib/feeReceipt'
-import { getStudent } from '@/api/students'
+import { downloadFeeReceipt } from '@/lib/feeReceipt'
 import { studentPhotoUrl } from '@/api/studentExtras'
 import { can } from '@/lib/gating'
 import { newIdempotencyKey } from '@/lib/idempotencyKey'
@@ -59,15 +58,11 @@ const STARTER_FEE_HEADS = ['Academic', 'Transport', 'Exam', 'Admission', 'Lab']
 /* ---------- Record-payment modal ---------- */
 const FEE_TYPE_ALL = '__all__'
 
-function PaymentModal({ invoice, cur, schoolName, schoolCity, studentAdm, logoUrl, logoInitials, brandColor, onClose }: {
+function PaymentModal({ invoice, cur, schoolName, studentAdm, onClose }: {
   invoice: FeeInvoice
   cur: string
   schoolName: string
-  schoolCity?: string
   studentAdm?: string
-  logoUrl?: string | null
-  logoInitials?: string
-  brandColor?: string
   onClose: () => void
 }) {
   const toast = useToast()
@@ -1776,11 +1771,7 @@ function FeesScreen() {
           invoice={payRow}
           cur={cur}
           schoolName={app.school.name}
-          schoolCity={app.school.city}
           studentAdm={admOf(payRow)}
-          logoUrl={app.school.logoUrl}
-          logoInitials={app.school.logo}
-          brandColor={app.school.color}
           onClose={() => setPayRow(null)}
         />
       )}
