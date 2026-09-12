@@ -19,7 +19,6 @@ import { useStudents } from '@/api/hooks/useStudents'
 import { useTeachers } from '@/api/hooks/useTeachers'
 import { useStaff } from '@/api/hooks/useStaff'
 import { useSendFeeReminders } from '@/api/hooks/useFeeReminders'
-import { notifyFeeAudience } from '@/lib/feeNotify'
 import { buildUpiPayUri, upiQrImageUrl } from '@/lib/upiQr'
 import { downloadTextFile, invoicesToCsv } from '@/lib/feeExport'
 import { payrollRunToCsv, payrollCsvFileName, downloadPayslip } from '@/lib/payrollExport'
@@ -51,87 +50,11 @@ import type { FeeStatus, FeePayment, FeeHead, FeeInvoice, Student } from '@/type
 /* ============================================================
    Fees collection
    ============================================================ */
-/** After pay: email parent + push app receipt with downloadable attachment. */
-async function notifyReceiptBestEffort(
-  invoice: FeeInvoice,
-  amount: number,
-  mode: string,
-  schoolName: string,
-  cur: string,
-  opts?: { ref?: string; headName?: string; schoolCity?: string; logoUrl?: string | null; logoInitials?: string; brandColor?: string },
-): Promise<{ emailed: boolean; app: boolean; reason?: string }> {
-  try {
-    const student = await getStudent(invoice.studentId)
-    const emails = [
-      student.email,
-      student.father?.email,
-      student.mother?.email,
-    ].filter((v): v is string => !!v && v.includes('@'))
-    const phones = [
-      student.phone,
-      student.father?.phone,
-      student.mother?.phone,
-    ].filter((v): v is string => !!v && String(v).replace(/\D/g, '').length >= 10)
-    const receipt: FeeReceiptData = {
-      schoolName,
-      schoolCity: opts?.schoolCity,
-      studentName: invoice.studentName,
-      studentAdm: invoice.studentAdm || student.adm,
-      cls: invoice.cls,
-      amount,
-      currency: cur,
-      mode,
-      ref: opts?.ref,
-      paidAt: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
-      term: invoice.term,
-      academicYear: invoice.academicYear,
-      headName: opts?.headName,
-      invoiceId: invoice.id,
-      logoUrl: opts?.logoUrl,
-      logoInitials: opts?.logoInitials,
-      brandColor: opts?.brandColor,
-    }
-    const res = await notifyFeeAudience({
-      kind: 'receipt',
-      schoolName,
-      studentName: invoice.studentName,
-      amount,
-      mode,
-      currency: cur,
-      channels: {
-        email: emails.length > 0,
-        sms: phones.length > 0,
-        app: true,
-      },
-      emails,
-      phones,
-      receipt,
-    })
-    return {
-      emailed: res.channels.includes('email'),
-      app: res.channels.includes('app'),
-      reason: !emails.length ? 'No parent email on file — app receipt still sent.' : undefined,
-    }
-  } catch (err) {
-    return {
-      emailed: false,
-      app: false,
-      reason: err instanceof Error ? err.message : 'Receipt notify failed',
-    }
-  }
-}
-
 const feeTone: Record<FeeStatus, BadgeTone> = { paid: 'success', partial: 'warning', due: 'danger' }
 const feeLabel: Record<FeeStatus, string> = { paid: 'Paid', partial: 'Partial', due: 'Due' }
 const PAY_MODES = ['Cash', 'UPI (manual)', 'Cheque', 'Card / POS', 'Bank transfer', 'DD']
 const ALL_MODES = [...PAY_MODES, 'Razorpay', 'Adjustment / waiver']
 const STARTER_FEE_HEADS = ['Academic', 'Transport', 'Exam', 'Admission', 'Lab']
-
-/** Razorpay may return amount in paise; receipt/toast need rupees. */
-function feeAmountFromRazorpayOrder(orderAmount: number, dueHint: number): number {
-  if (dueHint > 0 && orderAmount >= dueHint * 50) return Math.round(orderAmount / 100)
-  return orderAmount
-}
 
 /* ---------- Record-payment modal ---------- */
 const FEE_TYPE_ALL = '__all__'
@@ -213,18 +136,6 @@ function PaymentModal({ invoice, cur, schoolName, schoolCity, studentAdm, logoUr
       onSuccess: () => {
         toast.success('Payment recorded', `${fmtMoney(n, cur)} · ${mode} · ${properName(invoice.studentName)} (${invoice.cls})`)
         onClose()
-        void notifyReceiptBestEffort(invoice, n, mode, schoolName, cur, {
-          ref: paymentRef,
-          headName,
-          schoolCity,
-          logoUrl,
-          logoInitials,
-          brandColor,
-        }).then((r) => {
-          if (r.emailed) toast.success('Receipt emailed', 'Parent mail + app downloadable receipt sent.')
-          else if (r.app) toast.info('Receipt on app', r.reason || 'Parent / student app can download the receipt.')
-          else if (r.reason) toast.info('Receipt not sent', r.reason)
-        })
       },
       onError: (err) => { toast.danger('Payment failed', err instanceof Error ? err.message : 'Please try again.') },
     })
@@ -1615,18 +1526,6 @@ function FeesScreen() {
           }, {
             onSuccess: () => {
               toast.success('Payment received', `${invoice.studentName} (${invoice.cls}) paid online via Razorpay.`)
-              const paidAmt = feeAmountFromRazorpayOrder(order.amount, invoice.due || invoice.total)
-              void notifyReceiptBestEffort(invoice, paidAmt, 'Razorpay', app.school.name, cur, {
-                ref: response.razorpay_payment_id,
-                schoolCity: app.school.city,
-                logoUrl: app.school.logoUrl,
-                logoInitials: app.school.logo,
-                brandColor: app.school.color,
-              }).then((r) => {
-                if (r.emailed) toast.success('Receipt emailed', 'Parent mail + app downloadable receipt sent.')
-                else if (r.app) toast.info('Receipt on app', r.reason || 'Parent / student app can download the receipt.')
-                else if (r.reason) toast.info('Receipt not sent', r.reason)
-              })
             },
             onError: (err) => { toast.danger('Verification failed', err instanceof Error ? err.message : 'Please try again.') },
           })

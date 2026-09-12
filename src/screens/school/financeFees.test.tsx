@@ -6,6 +6,9 @@ import { AppProvider } from '@/context/AppProvider'
 import { useApp } from '@/lib/hooks'
 import { ToastProvider } from '@/context/ToastProvider'
 import { financeScreens } from './finance'
+import { notifyFeeAudience } from '@/lib/feeNotify'
+
+vi.mock('@/lib/feeNotify', () => ({ notifyFeeAudience: vi.fn().mockResolvedValue({ channels: [] }) }))
 
 const FeesScreen = financeScreens['school.fees']
 
@@ -18,6 +21,7 @@ function LoginAs({ role, children }: { role: string; children: ReactNode }) {
 }
 
 afterEach(cleanup)
+afterEach(() => { vi.mocked(notifyFeeAudience).mockClear() })
 
 let feeHeads: Record<string, unknown>[] = []
 let feeInvoices: Record<string, unknown>[] = []
@@ -222,6 +226,22 @@ describe('Fee collection tab', () => {
     })
   })
 
+  it('does not fire a client-side notification after recording a manual payment (the backend already does)', async () => {
+    const { container } = renderScreen()
+    await waitFor(() => {
+      expect(within(container).getByText('Asha Verma')).toBeInTheDocument()
+    })
+    fireEvent.click(within(container).getAllByText('Record')[0])
+    const dialog = within(container).getByRole('dialog')
+    await waitFor(() => { expect(within(dialog).getByDisplayValue('Academic')).toBeInTheDocument() })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Record payment' }))
+
+    await waitFor(() => {
+      expect(within(container).getByText(/Payment recorded/i)).toBeInTheDocument()
+    })
+    expect(notifyFeeAudience).not.toHaveBeenCalled()
+  })
+
   it('sends a stable idempotency_key on payment submission', async () => {
     const { container } = renderScreen()
     await waitFor(() => {
@@ -379,6 +399,31 @@ describe('Fee collection tab — school Razorpay collect', () => {
     await waitFor(() => {
       expect(within(container).getByText(/paid online via Razorpay/i)).toBeInTheDocument()
     })
+  })
+
+  it('does not fire a client-side notification after a successful Razorpay payment (the backend already does)', async () => {
+    schoolIntegrations = { ...schoolIntegrations, razorpay: { enabled: true, key_id: 'rzp_test_1', mode: 'test', status: 'configured' } }
+    type CheckoutResponse = { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }
+    let capturedHandler: ((r: CheckoutResponse) => void) | null = null
+    const RazorpayCtor = vi.fn((opts: Record<string, unknown>) => {
+      capturedHandler = opts.handler as (r: CheckoutResponse) => void
+      return { open: vi.fn() }
+    })
+    vi.stubGlobal('Razorpay', RazorpayCtor)
+
+    const { container } = renderScreen()
+    await waitFor(() => {
+      expect(within(container).getByText('Collect online')).toBeInTheDocument()
+    })
+    fireEvent.click(within(container).getByText('Collect online'))
+
+    await waitFor(() => { expect(capturedHandler).not.toBeNull() })
+    capturedHandler!({ razorpay_order_id: 'order_abc', razorpay_payment_id: 'pay_123', razorpay_signature: 'sig_1' })
+
+    await waitFor(() => {
+      expect(within(container).getByText(/paid online via Razorpay/i)).toBeInTheDocument()
+    })
+    expect(notifyFeeAudience).not.toHaveBeenCalled()
   })
 
   it('copies the pay link to the clipboard when the order includes one', async () => {
