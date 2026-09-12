@@ -205,6 +205,23 @@ describe('Fee collection tab', () => {
     expect(within(container).getByText('Rohan Iyer')).toBeInTheDocument()
   })
 
+  it('shows the fee-head breakdown for a multi-line invoice, not just the lump total', async () => {
+    feeInvoices = feeInvoices.map((inv) => inv.id === 'inv-1'
+      ? {
+        ...inv,
+        lines: [
+          { head_id: 'h1', head_name: 'Tuition Fee', amount: 30000 },
+          { head_id: 'h2', head_name: 'Transport Fee', amount: 6000 },
+        ],
+      }
+      : inv)
+    const { container } = renderScreen()
+    await waitFor(() => {
+      expect(within(container).getByText('Asha Verma')).toBeInTheDocument()
+    })
+    expect(within(container).getByText(/Tuition Fee.*Transport Fee/)).toBeInTheDocument()
+  })
+
   it('shows KPIs and live cue from useFeeReportSummary (not student math)', async () => {
     const { container } = renderScreen()
     await waitFor(() => {

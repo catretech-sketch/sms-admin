@@ -1686,7 +1686,19 @@ function FeesScreen() {
       key: 'cls', label: 'Class', sortValue: (r) => r.cls,
       render: (r) => <span className="t-sm">{r.cls || '—'}</span>,
     },
-    { key: 'term', label: 'Term fee', align: 'right', sortValue: (r) => r.total, render: (r) => fmtMoney(r.total, cur) },
+    {
+      key: 'term', label: 'Term fee', align: 'right', sortValue: (r) => r.total,
+      render: (r) => (
+        <div>
+          <div>{fmtMoney(r.total, cur)}</div>
+          {r.lines.length > 0 && (
+            <div className="t-xs muted">
+              {r.lines.map((l) => `${l.headName} ${fmtMoney(l.amount, cur)}`).join(' · ')}
+            </div>
+          )}
+        </div>
+      ),
+    },
     { key: 'paid', label: 'Paid', align: 'right', sortValue: (r) => r.paid, render: (r) => fmtMoney(r.paid, cur) },
     {
       key: 'due', label: 'Due', align: 'right', sortValue: (r) => r.due,

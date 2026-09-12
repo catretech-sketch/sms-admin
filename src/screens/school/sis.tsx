@@ -708,9 +708,12 @@ function Student360() {
   )
   const ledger = studentInvoices.map((inv) => ({
     id: inv.id,
-    label: inv.lines?.map((l) => l.headName).filter(Boolean).join(', ')
-      || [inv.term, inv.academicYear].filter(Boolean).join(' · ')
-      || 'Fee invoice',
+    /** Per-fee-head breakdown of this invoice's total — e.g. "Tuition Fee ₹1,000 · Transport Fee ₹500" —
+     *  so the admin/parent can see what makes up the amount, not just a lump sum. Falls back to the
+     *  period label for invoices created before line items existed (or created manually). */
+    label: inv.lines?.length
+      ? inv.lines.map((l) => `${l.headName} ${fmtMoney(l.amount)}`).join(' · ')
+      : [inv.term, inv.academicYear].filter(Boolean).join(' · ') || 'Fee invoice',
     amount: inv.total,
     paid: inv.paid,
     date: inv.dueDate || '—',
