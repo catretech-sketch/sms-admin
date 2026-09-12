@@ -15,15 +15,20 @@ import {
   listBusStudents, assignStudentToBus, unassignStudentFromBus,
   updateBusLocation, sendBusNotification, startBusTrip, pingBusTrip, endBusTrip,
   createRouteStop, updateRouteStop, deleteRouteStop, reorderRouteStops,
-  createBus, updateBus, listTransportRoutes, createRoute, listRouteStops,
+  createBus, updateBus, assignBusTeacher, unassignBusTeacher,
+  listTravelingTeachers, addTravelingTeacher, removeTravelingTeacher,
+  listTransportRoutes, createRoute, deleteRoute, listRouteStops,
+  getStudentTransport, setStudentTransport, listTransportStudents,
   getHostelSummary, listHostelBlocks, createHostelBlock, listHostelRooms, createHostelRoom,
   listHostelResidents, createHostelResident,
   getSportsSummary, listSportsTeams, createSportsTeam, listSportsEvents, createSportsEvent,
   listSportsMedals, createSportsMedal,
   type LibrarySummary, type TransportSummary, type FleetBus, type TransportBus, type StudentBusAssignment,
+  type BusTeacherAssignment, type TravelingTeacher,
   type TransportRoute, type CreateBusInput, type UpdateBusInput, type CreateRouteInput, type RouteStop,
   type BusLocationInput, type SendBusNotificationInput, type TripPingInput, type TripSummary,
   type CreateRouteStopInput,
+  type StudentTransportStatus, type SetStudentTransportInput, type TransportMappedStudent, type TransportStudentsFilter,
   type HostelSummary, type SportsSummary,
   type HostelBlock, type HostelRoom, type HostelResident,
   type SportsTeam, type SportsEvent, type SportsMedal,
@@ -263,6 +268,56 @@ export function useUpdateBus(): UseMutationResult<TransportBus, Error, { busId: 
   })
 }
 
+export function useAssignBusTeacher(): UseMutationResult<BusTeacherAssignment, Error, { busId: string; teacherUserId: string }> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ busId, teacherUserId }) => assignBusTeacher(busId, teacherUserId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportBuses })
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportFleet })
+    },
+  })
+}
+
+export function useUnassignBusTeacher(): UseMutationResult<void, Error, { busId: string }> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ busId }) => unassignBusTeacher(busId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportBuses })
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportFleet })
+    },
+  })
+}
+
+export function useTravelingTeachers(busId: string): UseQueryResult<TravelingTeacher[], Error> {
+  return useQuery({
+    queryKey: queryKeys.operations.travelingTeachers(busId),
+    queryFn: () => listTravelingTeachers(busId),
+    enabled: !!busId,
+  })
+}
+
+export function useAddTravelingTeacher(): UseMutationResult<TravelingTeacher[], Error, { busId: string; teacherUserId: string }> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ busId, teacherUserId }) => addTravelingTeacher(busId, teacherUserId),
+    onSuccess: (_data, { busId }) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.travelingTeachers(busId) })
+    },
+  })
+}
+
+export function useRemoveTravelingTeacher(): UseMutationResult<void, Error, { busId: string; teacherUserId: string }> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ busId, teacherUserId }) => removeTravelingTeacher(busId, teacherUserId),
+    onSuccess: (_data, { busId }) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.travelingTeachers(busId) })
+    },
+  })
+}
+
 /** Route stops for every distinct routeId present in the live fleet board. */
 export function useFleetRouteStops(fleet: FleetBus[]): Record<string, RouteStop[]> {
   const ops = useOperationsTier()
@@ -312,12 +367,53 @@ export function useRouteStops(routeId: string | null): UseQueryResult<RouteStop[
     enabled: ops && !!routeId,
   })
 }
+export function useStudentTransport(studentId: string | null): UseQueryResult<StudentTransportStatus> {
+  const ops = useOperationsTier()
+  return useQuery({
+    queryKey: queryKeys.operations.studentTransport(studentId ?? ''),
+    queryFn: () => getStudentTransport(studentId as string),
+    enabled: ops && !!studentId,
+  })
+}
+
+export function useSetStudentTransport(): UseMutationResult<StudentTransportStatus, Error, { studentId: string; input: SetStudentTransportInput }> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ studentId, input }) => setStudentTransport(studentId, input),
+    onSuccess: (_data, { studentId }) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.studentTransport(studentId) })
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportStudentsList() })
+    },
+  })
+}
+
+export function useTransportStudentsList(filter: TransportStudentsFilter = {}): UseQueryResult<TransportMappedStudent[]> {
+  const ops = useOperationsTier()
+  return useQuery({
+    queryKey: queryKeys.operations.transportStudentsList(filter),
+    queryFn: () => listTransportStudents(filter),
+    enabled: ops,
+  })
+}
 export function useCreateRoute(): UseMutationResult<TransportRoute, Error, CreateRouteInput> {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: createRoute,
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: queryKeys.operations.transportRoutes })
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportSummary })
+    },
+  })
+}
+
+export function useDeleteRoute(): UseMutationResult<void, Error, string> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: deleteRoute,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportRoutes })
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportBuses })
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportFleet })
       void qc.invalidateQueries({ queryKey: queryKeys.operations.transportSummary })
     },
   })

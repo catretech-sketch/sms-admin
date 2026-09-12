@@ -36,14 +36,19 @@ export async function getLibrarySummary(): Promise<LibrarySummary> {
 /* ---------- Transport (re-exported from transport module) ---------- */
 export {
   getTransportSummary, getTransportFleet, listTransportBuses, createBus, updateBus,
-  listTransportRoutes, createRoute,
+  assignBusTeacher, unassignBusTeacher,
+  listTravelingTeachers, addTravelingTeacher, removeTravelingTeacher,
+  listTransportRoutes, createRoute, deleteRoute,
   listRouteStops, listBusStudents, assignStudentToBus, unassignStudentFromBus,
   updateBusLocation, sendBusNotification, startBusTrip, pingBusTrip, endBusTrip,
   createRouteStop, updateRouteStop, deleteRouteStop, reorderRouteStops,
+  getStudentTransport, setStudentTransport, listTransportStudents,
   type TransportSummary, type FleetBus, type TransportBus, type StudentBusAssignment,
+  type BusTeacherAssignment, type TravelingTeacher,
   type CreateBusInput, type UpdateBusInput, type TransportRoute, type CreateRouteInput, type RouteStop,
   type BusLocationInput, type SendBusNotificationInput, type TripPingInput, type TripSummary,
   type CreateRouteStopInput,
+  type StudentTransportStatus, type SetStudentTransportInput, type TransportMappedStudent, type TransportStudentsFilter,
 } from './transport'
 
 /* ---------- Hostel ---------- */

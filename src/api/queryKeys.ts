@@ -129,7 +129,11 @@ export const queryKeys = {
     transportBuses: ['operations', 'transport', 'buses'] as const,
     transportRoutes: ['operations', 'transport', 'routes'] as const,
     busStudents: (busId: string) => ['operations', 'transport', 'busStudents', busId] as const,
+    travelingTeachers: (busId: string) => ['operations', 'transport', 'travelingTeachers', busId] as const,
     transportRouteStops: (routeId: string) => ['operations', 'transport', 'routeStops', routeId] as const,
+    studentTransport: (studentId: string) => ['operations', 'transport', 'studentTransport', studentId] as const,
+    transportStudentsList: (filters: import('./transport').TransportStudentsFilter = {}) =>
+      ['operations', 'transport', 'studentsList', filters] as const,
     hostelSummary: ['operations', 'hostel', 'summary'] as const,
     hostelBlocks: ['operations', 'hostel', 'blocks'] as const,
     hostelRooms: ['operations', 'hostel', 'rooms'] as const,

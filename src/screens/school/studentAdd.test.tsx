@@ -270,3 +270,93 @@ describe('Edit student form', () => {
     vi.unstubAllGlobals()
   })
 })
+
+describe('Transport section', () => {
+  function makeFetchWithTransport(opts: { assigned?: boolean } = {}) {
+    return vi.fn().mockImplementation((url: unknown, init?: { method?: string; body?: string }) => {
+      const u = String(url)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (u.includes('/classes')) {
+        return Promise.resolve(jsonResponse({
+          data: [{ id: 'c1', name: 'VIII-A', grade: 'VIII', section: 'A', room: null, class_teacher_id: null, student_count: 0 }],
+          next_cursor: null,
+        }))
+      }
+      if (u.includes('/fees/heads')) {
+        return Promise.resolve(jsonResponse({
+          data: [{ id: 'fh1', name: 'Transport', code: null, active: true, is_system: false, is_transport_fee_head: true }],
+          next_cursor: null,
+        }))
+      }
+      if (u.includes('/students/srv/transport') && method === 'PUT') {
+        return Promise.resolve(jsonResponse({
+          data: opts.assigned === false
+            ? { opted_in: true, assigned: false, status: 'pending', bus_id: null, route_id: 'r1', stop_id: 'st1', fee_head_id: 'fh1', pending_reason: { code: 'no_capacity', message: 'No bus currently has available capacity on this route.' } }
+            : { opted_in: true, assigned: true, status: 'assigned', bus_id: 'b1', route_id: 'r1', stop_id: 'st1', fee_head_id: 'fh1', pending_reason: null },
+        }))
+      }
+      if (u.includes('/students') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ data: [STUDENT_ROW], next_cursor: null }))
+      }
+      return Promise.resolve(jsonResponse({ data: STUDENT_ROW }))
+    })
+  }
+
+  /* Transport routes/stops are gated behind the "operations" (platinum) tier, and this
+     school defaults to "gold" in tests (no /me/schools stub). Seed the query cache directly
+     instead of stubbing tier upgrade — TanStack Query still serves cached data for a
+     disabled (enabled: false) query, it just skips the automatic fetch. */
+  function renderTransportForm() {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    qc.setQueryData(['operations', 'transport', 'routes'], [{ id: 'r1', name: 'Route 5', stops: 3 }])
+    qc.setQueryData(['operations', 'transport', 'routeStops', 'r1'], [{ id: 'st1', routeId: 'r1', name: 'Shastri Nagar', sequence: 1 }])
+    return render(
+      <QueryClientProvider client={qc}>
+        <AppProvider>
+          <ToastProvider>
+            <Probe />
+            <AddStudentScreen />
+          </ToastProvider>
+        </AppProvider>
+      </QueryClientProvider>,
+    )
+  }
+
+  it('hides Route/Stop until "Uses School Transport" is checked', async () => {
+    vi.stubGlobal('fetch', makeFetchWithTransport())
+    renderTransportForm()
+    expect(screen.queryByText('Route')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText(/uses school transport/i))
+    await waitFor(() => expect(screen.getByText('Route')).toBeInTheDocument())
+    vi.unstubAllGlobals()
+  })
+
+  it('saves student then calls transport endpoint and shows pending toast when no capacity', async () => {
+    vi.stubGlobal('fetch', makeFetchWithTransport({ assigned: false }))
+    renderTransportForm()
+    await waitFor(() =>
+      expect(Array.from(classCombo().querySelectorAll('option')).some(
+        (o) => (o as HTMLOptionElement).value === 'VIII-A',
+      )).toBe(true),
+    )
+    fillRequired()
+    fireEvent.change(classCombo(), { target: { value: 'VIII-A' } })
+
+    fireEvent.click(screen.getByLabelText(/uses school transport/i))
+    await waitFor(() => expect(screen.getByText('Route')).toBeInTheDocument())
+    const routeSelect = within(screen.getByText('Route').closest('.sm-field') as HTMLElement).getByRole('combobox')
+    fireEvent.change(routeSelect, { target: { value: 'r1' } })
+
+    await waitFor(() => {
+      const stopSelect = within(screen.getByText('Pickup Stop').closest('.sm-field') as HTMLElement).getByRole('combobox')
+      expect(Array.from(stopSelect.querySelectorAll('option')).some((o) => (o as HTMLOptionElement).value === 'st1')).toBe(true)
+    })
+    const stopSelect = within(screen.getByText('Pickup Stop').closest('.sm-field') as HTMLElement).getByRole('combobox')
+    fireEvent.change(stopSelect, { target: { value: 'st1' } })
+
+    fireEvent.click(screen.getByText('Save student'))
+
+    await waitFor(() => expect(screen.getByText(/bus assignment is pending/i)).toBeInTheDocument())
+    vi.unstubAllGlobals()
+  })
+})

@@ -21,6 +21,8 @@ export interface FleetBus {
   speedKmh?: number | null
   nextStopName?: string | null
   lastPingAt?: string | null
+  conductorStaffId?: string | null
+  capacity?: number | null
 }
 
 export interface StudentBusAssignment {
@@ -42,6 +44,8 @@ export interface CreateBusInput {
   driver?: string | null
   driverPhone?: string | null
   driverStaffId?: string | null
+  conductorStaffId?: string | null
+  capacity?: number | null
 }
 
 export interface UpdateBusInput {
@@ -49,6 +53,10 @@ export interface UpdateBusInput {
   routeId?: string | null
   driverStaffId?: string | null
   clearDriver?: boolean
+  conductorStaffId?: string | null
+  clearConductor?: boolean
+  capacity?: number | null
+  clearCapacity?: boolean
 }
 
 export interface TransportBus {
@@ -63,6 +71,8 @@ export interface TransportBus {
   studentsAssigned: number
   teacherUserId?: string | null
   teacherName?: string | null
+  conductorStaffId?: string | null
+  capacity?: number | null
 }
 export interface TransportRoute { id: string; name: string; stops: number }
 export interface CreateRouteInput { name: string; stops?: number }
@@ -74,6 +84,54 @@ export interface RouteStop {
   sequence: number
   lat?: number | null
   lng?: number | null
+}
+
+export interface StudentTransportStatus {
+  optedIn: boolean
+  assigned: boolean
+  status: 'assigned' | 'pending' | 'opted_out' | 'not_mapped'
+  busId?: string | null
+  routeId?: string | null
+  stopId?: string | null
+  feeHeadId?: string | null
+  pendingReason?: { code: string; message: string } | null
+}
+
+export interface SetStudentTransportInput {
+  optedIn: boolean
+  routeId?: string | null
+  stopId?: string | null
+  feeHeadId?: string | null
+}
+
+export interface TransportMappedStudent {
+  studentId: string
+  studentName: string
+  admissionNo: string
+  grade?: string | null
+  section?: string | null
+  feeHeadId?: string | null
+  feeHeadName?: string | null
+  routeId?: string | null
+  routeName?: string | null
+  stopId?: string | null
+  stopName?: string | null
+  busId?: string | null
+  busNo?: string | null
+  driver?: string | null
+  conductorName?: string | null
+  capacity?: number | null
+  busOccupied: number
+  mappingStatus: 'mapped' | 'pending'
+}
+
+export interface TransportStudentsFilter {
+  routeId?: string
+  stopId?: string
+  busId?: string
+  grade?: string
+  feeHeadId?: string
+  status?: 'mapped' | 'pending'
 }
 
 export interface BusLocationInput {
@@ -130,6 +188,8 @@ export async function createBus(input: CreateBusInput): Promise<FleetBus> {
     driver: input.driver?.trim() || null,
     driverPhone: input.driverPhone?.trim() || null,
     driverStaffId: input.driverStaffId || null,
+    conductorStaffId: input.conductorStaffId || null,
+    capacity: input.capacity ?? null,
   })
   return asObj<FleetBus>(await request<Record<string, unknown>>('/transport/buses', { method: 'POST', body }))
 }
@@ -141,8 +201,61 @@ export async function updateBus(busId: string, input: UpdateBusInput): Promise<T
     routeId: input.routeId || null,
     driverStaffId: input.driverStaffId || null,
     clearDriver: input.clearDriver ?? false,
+    conductorStaffId: input.conductorStaffId || null,
+    clearConductor: input.clearConductor ?? false,
+    capacity: input.capacity ?? null,
+    clearCapacity: input.clearCapacity ?? false,
   })
   return asObj<TransportBus>(await request<Record<string, unknown>>(`/transport/buses/${busId}`, { method: 'PUT', body }))
+}
+
+export interface BusTeacherAssignment {
+  busId: string
+  busNo: string
+  teacherUserId: string | null
+  teacherName: string | null
+}
+
+/** Assigns a teacher to Bus Duty (escort/supervisor) for this bus. One teacher per bus. */
+export async function assignBusTeacher(busId: string, teacherUserId: string): Promise<BusTeacherAssignment> {
+  if (!busId) throw new Error('Bus ID required')
+  if (!teacherUserId) throw new Error('Teacher is required')
+  const body = camelToSnake({ teacherUserId })
+  return asObj<BusTeacherAssignment>(
+    await request<Record<string, unknown>>(`/transport/buses/${busId}/teacher`, { method: 'PUT', body }),
+  )
+}
+
+/** Removes the Bus Duty teacher assignment for this bus. */
+export async function unassignBusTeacher(busId: string): Promise<void> {
+  if (!busId) throw new Error('Bus ID required')
+  await request<void>(`/transport/buses/${busId}/teacher`, { method: 'DELETE' })
+}
+
+export interface TravelingTeacher {
+  teacherUserId: string
+  teacherName: string | null
+}
+
+/** Teachers granted live-tracking view access on this bus — a many-to-many list distinct
+ *  from the single Bus Duty escort; a bus may have any number of traveling teachers. */
+export async function listTravelingTeachers(busId: string): Promise<TravelingTeacher[]> {
+  if (!busId) throw new Error('Bus ID required')
+  return asList<TravelingTeacher>(await request<Record<string, unknown>[]>(`/transport/buses/${busId}/traveling-teachers`))
+}
+
+export async function addTravelingTeacher(busId: string, teacherUserId: string): Promise<TravelingTeacher[]> {
+  if (!busId) throw new Error('Bus ID required')
+  if (!teacherUserId) throw new Error('Teacher is required')
+  return asList<TravelingTeacher>(
+    await request<Record<string, unknown>[]>(`/transport/buses/${busId}/traveling-teachers/${teacherUserId}`, { method: 'PUT' }),
+  )
+}
+
+export async function removeTravelingTeacher(busId: string, teacherUserId: string): Promise<void> {
+  if (!busId) throw new Error('Bus ID required')
+  if (!teacherUserId) throw new Error('Teacher is required')
+  await request<void>(`/transport/buses/${busId}/traveling-teachers/${teacherUserId}`, { method: 'DELETE' })
 }
 
 export async function listTransportRoutes(): Promise<TransportRoute[]> {
@@ -154,6 +267,12 @@ export async function createRoute(input: CreateRouteInput): Promise<TransportRou
   if (!name) throw new Error('Route name is required')
   const body = camelToSnake({ name, stops: Math.max(1, (input.stops ?? 1) | 0) })
   return asObj<TransportRoute>(await request<Record<string, unknown>>('/transport/routes', { method: 'POST', body }))
+}
+
+/** Deletes a route. The backend rejects this (409) if any bus is still assigned to it. */
+export async function deleteRoute(routeId: string): Promise<void> {
+  if (!routeId) throw new Error('Route ID required')
+  await request<void>(`/transport/routes/${routeId}`, { method: 'DELETE' })
 }
 
 export async function listRouteStops(routeId: string): Promise<RouteStop[]> {
@@ -260,4 +379,36 @@ export async function reorderRouteStops(routeId: string, stopIds: string[]): Pro
     method: 'PUT',
     body: camelToSnake({ stopIds }),
   })
+}
+
+export async function getStudentTransport(studentId: string): Promise<StudentTransportStatus> {
+  if (!studentId) throw new Error('Student ID required')
+  return asObj<StudentTransportStatus>(await request<Record<string, unknown>>(`/students/${studentId}/transport`))
+}
+
+export async function setStudentTransport(studentId: string, input: SetStudentTransportInput): Promise<StudentTransportStatus> {
+  if (!studentId) throw new Error('Student ID required')
+  const body = camelToSnake({
+    optedIn: input.optedIn,
+    routeId: input.optedIn ? (input.routeId || null) : null,
+    stopId: input.optedIn ? (input.stopId || null) : null,
+    feeHeadId: input.optedIn ? (input.feeHeadId || null) : null,
+  })
+  return asObj<StudentTransportStatus>(
+    await request<Record<string, unknown>>(`/students/${studentId}/transport`, { method: 'PUT', body }),
+  )
+}
+
+export async function listTransportStudents(filter: TransportStudentsFilter = {}): Promise<TransportMappedStudent[]> {
+  const query: Record<string, string> = {}
+  if (filter.routeId) query.route_id = filter.routeId
+  if (filter.stopId) query.stop_id = filter.stopId
+  if (filter.busId) query.bus_id = filter.busId
+  if (filter.grade) query.grade = filter.grade
+  if (filter.feeHeadId) query.fee_head_id = filter.feeHeadId
+  if (filter.status) query.status = filter.status
+  const qs = new URLSearchParams(query).toString()
+  return asList<TransportMappedStudent>(
+    await request<Record<string, unknown>[]>(`/transport/students${qs ? `?${qs}` : ''}`),
+  )
 }
