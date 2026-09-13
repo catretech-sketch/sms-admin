@@ -269,6 +269,70 @@ describe('Edit student form', () => {
 
     vi.unstubAllGlobals()
   })
+
+  it('keeps the saved Route/Stop/Fee head visible even when student extras load after transport (race regression)', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: unknown, init?: { method?: string; body?: string }) => {
+      const u = String(url)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (u.includes('/classes')) {
+        return Promise.resolve(jsonResponse({
+          data: [{ id: 'c-ivb', name: 'IV-B', grade: 'IV', section: 'B', room: null, class_teacher_id: null, student_count: 2 }],
+          next_cursor: null,
+        }))
+      }
+      if (u.includes('/fees/heads')) {
+        return Promise.resolve(jsonResponse({
+          data: [{ id: 'fh1', name: 'Transport', code: null, active: true, is_system: false, is_transport_fee_head: true }],
+          next_cursor: null,
+        }))
+      }
+      if (u.includes('/extras') && method === 'GET') {
+        return new Promise((resolve) => {
+          setTimeout(() => resolve(jsonResponse({ data: { extras_json: JSON.stringify({}) } })), 20)
+        })
+      }
+      if (u.includes('/students/') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ data: RAHUL }))
+      }
+      if (u.includes('/students') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ data: [RAHUL], next_cursor: null }))
+      }
+      return Promise.resolve(jsonResponse({ data: RAHUL }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    qc.setQueryData(['operations', 'transport', 'routes'], [{ id: 'r1', name: 'Route 5', stops: 3 }])
+    qc.setQueryData(['operations', 'transport', 'routeStops', 'r1'], [{ id: 'st1', routeId: 'r1', name: 'Shastri Nagar', sequence: 1 }])
+    // studentTransport is also gated behind the "operations" tier (gold in tests) — seed the
+    // cache directly, same as routes/routeStops above, since the query itself stays disabled.
+    qc.setQueryData(
+      ['operations', 'transport', 'studentTransport', 'rahul-1'],
+      { optedIn: true, assigned: true, status: 'assigned', busId: 'b1', routeId: 'r1', stopId: 'st1', feeHeadId: 'fh1', pendingReason: null },
+    )
+    render(
+      <QueryClientProvider client={qc}>
+        <AppProvider>
+          <ToastProvider>
+            <FocusEdit id="rahul-1" />
+          </ToastProvider>
+        </AppProvider>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Route')).toBeInTheDocument())
+    const routeSelect = () => within(screen.getByText('Route').closest('.sm-field') as HTMLElement).getByRole('combobox') as HTMLSelectElement
+    await waitFor(() => expect(routeSelect().value).toBe('r1'))
+
+    // Give the delayed /extras response time to resolve and re-run the base-form-reset effect.
+    await new Promise((resolve) => setTimeout(resolve, 40))
+
+    expect(routeSelect().value).toBe('r1')
+    const stopSelect = within(screen.getByText('Pickup Stop').closest('.sm-field') as HTMLElement).getByRole('combobox') as HTMLSelectElement
+    expect(stopSelect.value).toBe('st1')
+
+    vi.unstubAllGlobals()
+  })
 })
 
 describe('Transport section', () => {

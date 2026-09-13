@@ -316,11 +316,28 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
   useEffect(() => {
     if (mode !== 'edit' || !existing) return
     let cancelled = false
-    setForm(studentToForm(existing))
+    // studentToForm never touches transport* fields (they come from a separate query, not the
+    // student record) — a plain replace here would race with the transport-loading effect above
+    // and silently blank out whichever Route/Stop/Fee head it had just set, depending only on
+    // which network call happened to resolve last. Always carry the current transport fields
+    // forward instead of replacing them.
+    setForm((prev) => ({
+      ...studentToForm(existing),
+      transportOptedIn: prev.transportOptedIn,
+      transportRouteId: prev.transportRouteId,
+      transportStopId: prev.transportStopId,
+      transportFeeHeadId: prev.transportFeeHeadId,
+    }))
     void fetchStudentExtras(existing.id)
       .then((ex) => {
         if (cancelled) return
-        setForm(studentToForm(mergeStudentExtras({ ...existing })))
+        setForm((prev) => ({
+          ...studentToForm(mergeStudentExtras({ ...existing })),
+          transportOptedIn: prev.transportOptedIn,
+          transportRouteId: prev.transportRouteId,
+          transportStopId: prev.transportStopId,
+          transportFeeHeadId: prev.transportFeeHeadId,
+        }))
         const next: Partial<Record<keyof typeof INITIAL_FILES, string>> = {}
         const map: Record<string, keyof typeof INITIAL_FILES> = {
           photo: 'studentPhoto',
