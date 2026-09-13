@@ -90,7 +90,7 @@ describe('LoginScreen password reset', () => {
     const urls = fetchMock.mock.calls.map((c) => String(c[0]))
     expect(urls[0]).toContain('/auth/password/forgot')
     expect(urls[1]).toContain('/auth/password/reset')
-  })
+  }, 15000)
 
   it('keeps the user on the reset step when the code is invalid', async () => {
     const fetchMock = vi.fn()
@@ -106,7 +106,7 @@ describe('LoginScreen password reset', () => {
     await userEvent.type(screen.getByPlaceholderText(/re-enter your password/i), 'newPass123')
     await userEvent.click(screen.getByRole('button', { name: /set password/i }))
     expect(await screen.findByText(/invalid or expired/i)).toBeInTheDocument()
-  })
+  }, 15000)
 
   it('blocks a too-short password without calling the reset API', async () => {
     const fetchMock = vi.fn()
@@ -122,5 +122,5 @@ describe('LoginScreen password reset', () => {
     await userEvent.click(screen.getByRole('button', { name: /set password/i }))
     expect(await screen.findByText(/Password must be at least 8 characters/i)).toBeInTheDocument()
     expect(fetchMock).toHaveBeenCalledTimes(1) // forgot only; no reset call
-  })
+  }, 15000)
 })

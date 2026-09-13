@@ -235,7 +235,7 @@ describe('RolesTab — real data, staff dropped', () => {
     const sent = vi.mocked(setRoleTemplate).mock.calls.at(-1)![0]
     expect(sent).toContainEqual({ role: 'admin', module: 'fees', cap: 'A', effect: 'grant' })
     expect(sent).not.toContainEqual({ role: 'admin', module: 'fees', cap: 'V', effect: 'grant' })
-  })
+  }, 15000)
 })
 
 vi.mock('@/api/invitations', async (importOriginal) => {

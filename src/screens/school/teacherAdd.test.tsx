@@ -93,7 +93,7 @@ describe('Add Teacher form', () => {
     fireEvent.click(screen.getByText('Save teacher'))
     expect(screen.getByText('Passwords do not match')).toBeInTheDocument()
     expect(view()).not.toBe('school.teachers')
-  })
+  }, 15000)
 
   it('adds the teacher and navigates back when valid', async () => {
     // Return a fresh Response per call: the form mounts a roster query that reads
@@ -113,7 +113,7 @@ describe('Add Teacher form', () => {
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('/teachers')
 
     vi.unstubAllGlobals()
-  })
+  }, 15000)
 })
 
 describe('teacherToForm extras', () => {

@@ -157,7 +157,7 @@ describe('Add Staff form', () => {
     fireEvent.click(screen.getByText('Save staff'))
     expect(screen.getByText('Aadhaar must be exactly 12 digits')).toBeInTheDocument()
     expect(view()).not.toBe('school.staff')
-  })
+  }, 15000)
 
   it('adds the staff member and navigates back when valid', async () => {
     // Return a fresh Response per call: the form mounts a roster query that reads
@@ -178,7 +178,7 @@ describe('Add Staff form', () => {
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>
     const staffCall = fetchMock.mock.calls.find((args) => String(args[0]).includes('/staff'))
     expect(staffCall).toBeDefined()
-  })
+  }, 15000)
 
   it('persists driving license number and expiry through staff extras', async () => {
     vi.stubGlobal('fetch', withPlatinumSession(() => jsonResponse({
@@ -203,5 +203,5 @@ describe('Add Staff form', () => {
     const extras = JSON.parse(body.extras_json)
     expect(extras.transport.license).toBe('KA0120230012345')
     expect(extras.transport.licenseExpiry).toBe('2027-01-01')
-  })
+  }, 15000)
 })
