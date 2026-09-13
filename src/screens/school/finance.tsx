@@ -18,7 +18,7 @@ import type { FeeStructureDocument, FeeStructureStatus } from '@/api/feeStructur
 import { useFeeInvoices, useGenerateFeeInvoices } from '@/api/hooks/useFeeInvoices'
 import { useCreateNotification } from '@/api/hooks/useNotifications'
 import { useFeeReportSummary } from '@/api/hooks/useFeeReports'
-import { useClasses, useClassNames } from '@/api/hooks/useClasses'
+import { useClasses } from '@/api/hooks/useClasses'
 import { useStudents } from '@/api/hooks/useStudents'
 import { useTeachers } from '@/api/hooks/useTeachers'
 import { useStaff } from '@/api/hooks/useStaff'
@@ -1681,20 +1681,20 @@ function FeeStructureVersionModal({ id, onClose }: { id: string; onClose: () => 
 function FeeStructureHistoryTab({ editable, onEdit }: { editable: boolean; onEdit: (id: string) => void }) {
   const toast = useToast()
   const historyQ = useFeeStructureHistory()
-  const classNames = useClassNames()
   const publishVersion = usePublishFeeStructureVersion()
   const unpublishVersion = useUnpublishFeeStructureVersion()
   const deleteVersion = useDeleteFeeStructureVersion()
-  const generateInvoices = useGenerateFeeInvoices()
   const [viewId, setViewId] = useState<string | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
-  const [billTarget, setBillTarget] = useState<{ id: string; name: string; academicYear: string } | null>(null)
   const entries = historyQ.data ?? []
   const deleteTarget = entries.find((e) => e.id === deleteId) ?? null
 
-  const publish = (id: string, name: string, academicYear: string) => {
+  // Publishing is deliberately term-free: it only flips this version's status. Term selection
+  // happens later and separately, when someone generates invoices (Structure tab's Save &
+  // generate) — never bundled into the Publish action itself.
+  const publish = (id: string, name: string) => {
     publishVersion.mutate(id, {
-      onSuccess: () => setBillTarget({ id, name, academicYear }),
+      onSuccess: () => toast.success('Published', `${name} is now billed — every other published version stays billed too. Generate invoices for a term whenever you're ready.`),
       onError: (e) => toast.danger('Could not publish', e instanceof Error ? e.message : 'Please try again.'),
     })
   }
@@ -1762,7 +1762,7 @@ function FeeStructureHistoryTab({ editable, onEdit }: { editable: boolean; onEdi
                     {editable && e.status !== 'active' && (
                       <>
                         <Btn size="sm" variant="ghost" icon="edit" onClick={() => onEdit(e.id)}>Edit</Btn>
-                        <Btn size="sm" variant="secondary" icon="check" disabled={publishVersion.isPending} onClick={() => publish(e.id, e.name, e.academicYear)}>Publish</Btn>
+                        <Btn size="sm" variant="secondary" icon="check" disabled={publishVersion.isPending} onClick={() => publish(e.id, e.name)}>Publish</Btn>
                         <Btn size="sm" variant="ghost" icon="trash" onClick={() => setDeleteId(e.id)}>Delete</Btn>
                       </>
                     )}
@@ -1788,85 +1788,7 @@ function FeeStructureHistoryTab({ editable, onEdit }: { editable: boolean; onEdi
           <div className="t-sm">This draft was never published, so nothing was ever billed against it. This cannot be undone.</div>
         </Modal>
       )}
-      {billTarget && (
-        <BillNowModal
-          name={billTarget.name}
-          academicYear={billTarget.academicYear}
-          classNames={classNames}
-          generateInvoices={generateInvoices}
-          onClose={() => setBillTarget(null)}
-        />
-      )}
     </Card>
-  )
-}
-
-/** Shown right after publishing a version — publishing alone never creates invoices (a
- *  published fee only becomes billed once someone generates invoices for a period), so this
- *  offers to do that immediately for every class, using every currently-published version
- *  together (not just the one just published). Skippable — the same generation is always
- *  available from the Structure tab too. */
-function BillNowModal({ name, academicYear, classNames, generateInvoices, onClose }: {
-  name: string
-  academicYear: string
-  classNames: string[]
-  generateInvoices: ReturnType<typeof useGenerateFeeInvoices>
-  onClose: () => void
-}) {
-  const toast = useToast()
-  const createNotification = useCreateNotification()
-  const [term, setTerm] = useState(TERM_OPTIONS[0])
-  const [dueDate, setDueDate] = useState('')
-
-  const submit = () => {
-    generateInvoices.mutate(
-      { classes: classNames, academicYear, term, ...(dueDate.trim() ? { dueDate: dueDate.trim() } : {}) },
-      {
-        onSuccess: (res) => {
-          if (res.created > 0) {
-            toast.success('Billed', `${res.created} invoice(s) · ${term} · ${academicYear}. Open Collection to record payment.`)
-            createNotification.mutate({
-              title: 'Fee billed',
-              body: `${name} · ${res.created} invoice(s) · ${term} · ${academicYear}`,
-              icon: 'rupee',
-              tone: 'fees',
-            })
-          } else {
-            toast.info('Published · no new invoices', `Every student already has an invoice for ${term} · ${academicYear} — pick a different term above to bill ${name}.`)
-          }
-          onClose()
-        },
-        onError: (e) => toast.danger('Could not bill', e instanceof Error ? e.message : 'Please try again.'),
-      },
-    )
-  }
-
-  return (
-    <Modal
-      open onClose={onClose} icon="rupee" size="sm"
-      title="Bill this now?"
-      sub={`${name} is published. Generate invoices so it actually shows up in Fee Collection.`}
-      footer={
-        <div className="row gap8 jc-end">
-          <Btn variant="ghost" onClick={onClose}>Skip for now</Btn>
-          <Btn variant="primary" icon="check" disabled={generateInvoices.isPending || !classNames.length} onClick={submit}>
-            {generateInvoices.isPending ? 'Billing…' : 'Bill now'}
-          </Btn>
-        </div>
-      }
-    >
-      <div className="col gap16">
-        <Field label="Term">
-          <Select options={TERM_OPTIONS} value={term} onChange={(e) => setTerm(e.target.value)} />
-        </Field>
-        <Field label="Due date (optional)">
-          <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
-        </Field>
-        <div className="t-xs muted">
-          If students already have an invoice for this term, nothing changes for them — pick a term that hasn&apos;t been billed yet.
-        </div>
-      </div>
-    </Modal>
   )
 }
 
