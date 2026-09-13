@@ -226,6 +226,9 @@ export interface FeeStructureHistoryEntry {
   currency: string
   status: FeeStructureStatus
   createdAt: string
+  /** Sum of every class's every fee head for this version — a quick total for the list,
+   *  not a substitute for the full per-class breakdown (see getFeeStructureVersion). */
+  totalAmount: number
 }
 
 interface ListEnvelope { data: Record<string, unknown>[]; next_cursor: string | null }
@@ -240,6 +243,7 @@ function toHistoryEntry(row: Record<string, unknown>): FeeStructureHistoryEntry 
     currency: String(row.currency ?? 'INR').trim(),
     status: String(row.status ?? 'active').toLowerCase() === 'inactive' ? 'inactive' : 'active',
     createdAt: String(row.created_at ?? '').trim(),
+    totalAmount: Number(row.total_amount) || 0,
   }
 }
 

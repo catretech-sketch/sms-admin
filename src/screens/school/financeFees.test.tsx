@@ -146,7 +146,16 @@ beforeEach(() => {
     }
 
     if (u.includes('/fees/structures')) {
-      return jsonOk({ data: feeStructureHistory.map((s) => ({ ...s, amounts_json: undefined })), next_cursor: null })
+      return jsonOk({
+        data: feeStructureHistory.map((s) => {
+          const amounts = (s.amounts as Record<string, Record<string, number>> | undefined) ?? {}
+          const total = Object.values(amounts).reduce(
+            (sum, byHead) => sum + Object.values(byHead).reduce((a, n) => a + n, 0), 0,
+          )
+          return { ...s, amounts: undefined, amounts_json: undefined, total_amount: total }
+        }),
+        next_cursor: null,
+      })
     }
 
     if (u.includes('/fees/structure')) {
@@ -870,5 +879,21 @@ describe('Fee structure', () => {
       expect(deleteCall).toBeDefined()
     })
     await waitFor(() => expect(within(container).getAllByRole('button', { name: /view/i }).length).toBe(1))
+  })
+
+  it('shows the saved version\'s total amount in the Saved versions list', async () => {
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+    await waitFor(() => expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0))
+    fireEvent.click(within(container).getByRole('button', { name: 'X' }))
+    await waitFor(() => expect(within(container).getAllByLabelText('X-A Academic amount').length).toBeGreaterThan(0))
+    const amountInput = within(container).getAllByLabelText('X-A Academic amount')[0] as HTMLInputElement
+    fireEvent.change(amountInput, { target: { value: '4200' } })
+    fireEvent.blur(amountInput)
+    fireEvent.click(within(container).getByText('Save only'))
+    await waitFor(() => expect(within(container).getByText(/Draft saved/i)).toBeInTheDocument())
+
+    clickTab('Saved versions')
+    await waitFor(() => expect(within(container).getAllByText(/4,200|4200/).length).toBeGreaterThan(0))
   })
 })
