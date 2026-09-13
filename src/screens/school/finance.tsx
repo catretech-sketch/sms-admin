@@ -1627,7 +1627,7 @@ function FeeStructureHistoryTab({ editable, onEdit }: { editable: boolean; onEdi
     <Card pad={false}>
       <div style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
         <div className="fw6">Saved fee structure versions</div>
-        <div className="t-sm muted">Every save is kept as a draft here. Publish one to make it the live structure — publishing retires whichever version was live before.</div>
+        <div className="t-sm muted">Every save is kept as a draft here. Publish one to make it the live structure — publishing retires whichever version was live before. Total = each class's fee rate × students currently enrolled in that class.</div>
       </div>
       {historyQ.isLoading ? (
         <div className="t-sm muted" style={{ padding: 16 }}>Loading saved versions…</div>
@@ -1638,7 +1638,7 @@ function FeeStructureHistoryTab({ editable, onEdit }: { editable: boolean; onEdi
       ) : (
         <table className="sm-table">
           <thead>
-            <tr><th>Name</th><th>Academic year</th><th>Class</th><th className="ta-right">Total amount</th><th>Status</th><th>Saved</th><th /></tr>
+            <tr><th>Name</th><th>Academic year</th><th>Class</th><th className="ta-right">Total (by student count)</th><th>Status</th><th>Saved</th><th /></tr>
           </thead>
           <tbody>
             {entries.map((e) => (
