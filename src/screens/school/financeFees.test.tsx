@@ -29,6 +29,7 @@ let feeStructureHistory: Record<string, unknown>[] = []
 let students: Record<string, unknown>[] = []
 let feePayments: Record<string, unknown>[] = []
 let nextGenerateCreated = 4
+let createdNotifications: Record<string, unknown>[] = []
 let schoolIntegrations: Record<string, unknown> = {}
 let razorpayOrderWire: Record<string, unknown> = { order_id: 'order_abc', amount: 36000, currency: 'INR', key_id: 'rzp_test_1' }
 let failNextPay = false
@@ -72,6 +73,7 @@ beforeEach(() => {
   feeStructureHistory = []
   students = []
   nextGenerateCreated = 4
+  createdNotifications = []
   feeInvoices = [
     {
       id: 'inv-1', student_id: 's1', student_name: 'Asha Verma', cls: 'X-A', grade: 'X',
@@ -236,6 +238,12 @@ beforeEach(() => {
 
     if (u.includes('/fees/payments')) {
       return jsonOk({ data: feePayments, next_cursor: null })
+    }
+
+    if (u.includes('/notifications') && method === 'POST') {
+      const body = JSON.parse((opts?.body as string) ?? '{}')
+      createdNotifications.push(body)
+      return jsonOk({ data: { id: createdNotifications.length, ...body, time: 'now', unread: true } })
     }
 
     if (u.includes('/classes')) {
@@ -708,6 +716,7 @@ describe('Fee structure', () => {
         phones: ['9000000001'],
       }))
     })
+    await waitFor(() => expect(createdNotifications.some((n) => n.title === 'Fee billed')).toBe(true))
   })
 
   it('does not auto-notify when Save & generate creates zero new invoices', async () => {
@@ -729,6 +738,7 @@ describe('Fee structure', () => {
       expect(within(container).getByText(/no new invoices/i)).toBeInTheDocument()
     })
     expect(notifyFeeAudience).not.toHaveBeenCalled()
+    expect(createdNotifications).toHaveLength(0)
   })
 
   it('creates a fee head with the Transport flag checked', async () => {
@@ -975,6 +985,8 @@ describe('Fee structure', () => {
       expect(body.classes.length).toBeGreaterThan(0)
     })
     await waitFor(() => expect(within(container).getByText(/^Billed$/i)).toBeInTheDocument())
+    await waitFor(() => expect(createdNotifications.length).toBeGreaterThan(0))
+    expect(createdNotifications[0]).toMatchObject({ title: 'Fee billed' })
   })
 
   it('lets the user skip billing right after publish without generating anything', async () => {

@@ -16,6 +16,7 @@ import {
 } from '@/api/hooks/useFeeStructure'
 import type { FeeStructureDocument, FeeStructureStatus } from '@/api/feeStructure'
 import { useFeeInvoices, useGenerateFeeInvoices } from '@/api/hooks/useFeeInvoices'
+import { useCreateNotification } from '@/api/hooks/useNotifications'
 import { useFeeReportSummary } from '@/api/hooks/useFeeReports'
 import { useClasses, useClassNames } from '@/api/hooks/useClasses'
 import { useStudents } from '@/api/hooks/useStudents'
@@ -482,6 +483,7 @@ function FeeStructureTab({ cur, editable, onGenerated, loadVersionId, onDoneEdit
   const deleteHead = useDeleteFeeHead()
   const saveStructure = useSaveFeeStructure()
   const generateInvoices = useGenerateFeeInvoices()
+  const createNotification = useCreateNotification()
 
   const heads = useMemo<FeeHead[]>(() => (headsQ.data ?? []).filter((h) => h.active !== false), [headsQ.data])
 
@@ -851,6 +853,16 @@ function FeeStructureTab({ cur, editable, onGenerated, loadVersionId, onDoneEdit
           }
         } catch {
           /* Best-effort — a notify failure shouldn't undo the successful publish/generate. */
+        }
+        try {
+          await createNotification.mutateAsync({
+            title: 'Fee billed',
+            body: `${doc.name} · ${res.created} invoice(s) · ${genTerm} · ${doc.academicYear}`,
+            icon: 'rupee',
+            tone: 'fees',
+          })
+        } catch {
+          /* Best-effort — a bell-icon failure shouldn't undo the successful publish/generate. */
         }
       } else {
         toast.info(
@@ -1802,6 +1814,7 @@ function BillNowModal({ name, academicYear, classNames, generateInvoices, onClos
   onClose: () => void
 }) {
   const toast = useToast()
+  const createNotification = useCreateNotification()
   const [term, setTerm] = useState(TERM_OPTIONS[0])
   const [dueDate, setDueDate] = useState('')
 
@@ -1812,6 +1825,12 @@ function BillNowModal({ name, academicYear, classNames, generateInvoices, onClos
         onSuccess: (res) => {
           if (res.created > 0) {
             toast.success('Billed', `${res.created} invoice(s) · ${term} · ${academicYear}. Open Collection to record payment.`)
+            createNotification.mutate({
+              title: 'Fee billed',
+              body: `${name} · ${res.created} invoice(s) · ${term} · ${academicYear}`,
+              icon: 'rupee',
+              tone: 'fees',
+            })
           } else {
             toast.info('Published · no new invoices', `Every student already has an invoice for ${term} · ${academicYear} — pick a different term above to bill ${name}.`)
           }
