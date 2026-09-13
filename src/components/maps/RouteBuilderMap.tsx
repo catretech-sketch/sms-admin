@@ -254,13 +254,13 @@ export function TransportRouteMap({
   )
 }
 
-const ROUTE_COLORS = ['#2563eb', '#0d9488', '#c026d3', '#ea580c', '#64748b']
-
-function routeHue(routeId: string): number {
-  let h = 0
-  for (let i = 0; i < routeId.length; i++) h = (h * 31 + routeId.charCodeAt(i)) % ROUTE_COLORS.length
-  return h
-}
+// 12 visually distinct colors. Assigned by each route's position among the currently *visible*
+// routes (not a hash of its id) — guarantees no two simultaneously-shown routes share a color,
+// as long as 12 or fewer are visible at once (comfortably more than any real fleet selection).
+const ROUTE_COLORS = [
+  '#2563eb', '#0d9488', '#c026d3', '#ea580c', '#65a30d', '#db2777',
+  '#0891b2', '#7c3aed', '#ca8a04', '#dc2626', '#059669', '#4338ca',
+]
 
 /** Live fleet map with route polylines per assigned route and bus markers.
  *  With no bus selected, shows every bus's current location only (no routes) —
@@ -395,8 +395,8 @@ export function FleetLiveMap({
           gestureHandling="greedy"
           style={{ width: '100%', height: '100%' }}
         >
-          {routePaths.map((r) => (
-            <RoutePolyline key={r.routeId} path={r.path} strokeColor={ROUTE_COLORS[routeHue(r.routeId)]} />
+          {routePaths.map((r, i) => (
+            <RoutePolyline key={r.routeId} path={r.path} strokeColor={ROUTE_COLORS[i % ROUTE_COLORS.length]} />
           ))}
           {routePaths.flatMap((r) => r.stops.map((s) => (
             <AdvancedMarker key={s.id} position={{ lat: s.lat as number, lng: s.lng as number }}>

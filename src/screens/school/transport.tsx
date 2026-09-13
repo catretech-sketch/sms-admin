@@ -1,7 +1,7 @@
 /* ============================================================
    Transport module — dashboard, routes & route builder
    ============================================================ */
-import { useEffect, useMemo, useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import { tierIncludes } from '@/lib/gating'
 import {
@@ -11,10 +11,14 @@ import { TierGate } from '@/components/shell/gates'
 import {
   useTransportSummary, useTransportFleet, useTransportRoutes, useCreateRoute,
   useRouteStops, useCreateRouteStop, useUpdateRouteStop, useDeleteRouteStop, useReorderRouteStops,
-  useTransportBuses, useCreateBus, useUpdateBus,
+  useTransportBuses, useCreateBus, useUpdateBus, useAssignBusTeacher, useUnassignBusTeacher,
+  useDeleteRoute, useTravelingTeachers, useAddTravelingTeacher, useRemoveTravelingTeacher,
 } from '@/api/hooks/useOperations'
 import { useStaff } from '@/api/hooks/useStaff'
+import { useTeachers } from '@/api/hooks/useTeachers'
+import { useLeadershipRoleByEmail } from '@/api/hooks/useUsers'
 import type { TransportRoute, RouteStop, TransportBus } from '@/api/operations'
+import type { Teacher } from '@/types'
 import { RouteBuilderMap } from '@/components/maps/RouteBuilderMap'
 import { staffCategoryLabel } from '@/lib/staffCategory'
 import { routeMetrics } from '@/lib/routeMetrics'
@@ -373,10 +377,25 @@ function RouteBuilder({ route, onBack }: { route: TransportRoute; onBack: () => 
 }
 
 function TransportRoutesBody() {
+  const app = useApp()
+  const toast = useToast()
   const routesQ = useTransportRoutes()
   const routes = routesQ.data ?? []
+  const deleteRouteMut = useDeleteRoute()
   const [createOpen, setCreateOpen] = useState(false)
   const [editing, setEditing] = useState<TransportRoute | null>(null)
+  const [deleting, setDeleting] = useState<TransportRoute | null>(null)
+
+  async function confirmDelete() {
+    if (!deleting) return
+    try {
+      await deleteRouteMut.mutateAsync(deleting.id)
+      toast.success('Route deleted', `${deleting.name} was removed.`)
+      setDeleting(null)
+    } catch (e) {
+      toast.danger('Could not delete route', e instanceof Error ? e.message : 'Unknown error')
+    }
+  }
 
   useEffect(() => {
     if (routesQ.isLoading || routes.length === 0) return
@@ -394,7 +413,12 @@ function TransportRoutesBody() {
   return (
     <div>
       <PageHead title="Routes" sub="Build routes on the map · assign buses in Operations"
-        actions={<Btn variant="primary" icon="plus" onClick={() => setCreateOpen(true)}>New route</Btn>} />
+        actions={
+          <div className="row gap8">
+            <Btn variant="ghost" icon="arrowLeft" onClick={() => app.go('school.transport')}>Back to Transport</Btn>
+            <Btn variant="primary" icon="plus" onClick={() => setCreateOpen(true)}>New route</Btn>
+          </div>
+        } />
       <Card pad={false}>
         {routesQ.isError ? (
           <div style={{ padding: 24 }}>
@@ -411,12 +435,35 @@ function TransportRoutesBody() {
                   <div className="fw6 t-lg">{r.name}</div>
                   <div className="t-sm muted3">{r.stops} stop{r.stops === 1 ? '' : 's'}</div>
                 </div>
-                <Btn variant="secondary" icon="pin" onClick={() => setEditing(r)}>Open builder</Btn>
+                <div className="row gap8">
+                  <Btn variant="secondary" icon="pin" onClick={() => setEditing(r)}>Open builder</Btn>
+                  <IconBtn icon="trash" title="Delete route" onClick={() => setDeleting(r)} />
+                </div>
               </div>
             ))}
           </div>
         )}
       </Card>
+      {deleting && (
+        <Modal
+          open icon="alert" title="Delete route"
+          sub={`${deleting.name} · ${deleting.stops} stop${deleting.stops === 1 ? '' : 's'}`}
+          onClose={() => { if (!deleteRouteMut.isPending) setDeleting(null) }}
+          footer={
+            <div className="row gap8 jc-end">
+              <Btn variant="ghost" onClick={() => setDeleting(null)} disabled={deleteRouteMut.isPending}>Cancel</Btn>
+              <Btn variant="danger" icon="trash" onClick={() => void confirmDelete()} disabled={deleteRouteMut.isPending}>
+                {deleteRouteMut.isPending ? 'Deleting…' : 'Delete route'}
+              </Btn>
+            </div>
+          }
+        >
+          <div className="t-sm muted">
+            This permanently removes the route and its stops. If any bus is currently assigned to
+            this route, the delete will be blocked until you reassign them.
+          </div>
+        </Modal>
+      )}
       <CreateRouteModal open={createOpen} onClose={() => setCreateOpen(false)} />
     </div>
   )
@@ -437,13 +484,23 @@ function BusEditModal({
   const routes = useTransportRoutes()
   const driversQ = useStaff({ cat: 'all' })
   const busesQ = useTransportBuses()
+  const teachersQ = useTeachers()
+  const leadershipByEmail = useLeadershipRoleByEmail()
   const create = useCreateBus()
   const update = useUpdateBus()
+  const assignTeacher = useAssignBusTeacher()
+  const unassignTeacher = useUnassignBusTeacher()
+  const travelingTeachersQ = useTravelingTeachers(bus?.busId ?? '')
+  const addTravelingTeacher = useAddTravelingTeacher()
+  const removeTravelingTeacher = useRemoveTravelingTeacher()
   const isEdit = bus != null
   const [busNo, setBusNo] = useState('')
   const [routeId, setRouteId] = useState('')
   const [driverStaffId, setDriverStaffId] = useState('')
   const [conductorStaffId, setConductorStaffId] = useState('')
+  const [dutyTeacherId, setDutyTeacherId] = useState('')
+  const [travelingTeacherIds, setTravelingTeacherIds] = useState<string[]>([])
+  const [capacity, setCapacity] = useState('')
 
   useEffect(() => {
     if (!open) return
@@ -451,6 +508,8 @@ function BusEditModal({
     setRouteId(bus?.routeId ?? '')
     setDriverStaffId(bus?.driverStaffId ?? '')
     setConductorStaffId(bus?.conductorStaffId ?? '')
+    setDutyTeacherId(bus?.teacherUserId ?? '')
+    setCapacity(bus?.capacity != null ? String(bus.capacity) : '')
   }, [open, bus])
 
   // Staff already driving or conducting a *different* bus — a staff member can only be
@@ -465,6 +524,41 @@ function BusEditModal({
     return m
   }, [busesQ.data, isEdit, bus])
 
+  const seededTravelingTeachersFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (!open) { seededTravelingTeachersFor.current = null; return }
+    if (!travelingTeachersQ.isSuccess) return
+    // Seed exactly once per (open, busId) — travelingTeachersQ.data gets a new array
+    // reference on every refetch (window refocus, cache invalidation, etc.), and this
+    // must NOT re-run then or it clobbers the admin's in-progress checkbox edits.
+    const key = bus?.busId ?? 'new'
+    if (seededTravelingTeachersFor.current === key) return
+    seededTravelingTeachersFor.current = key
+    setTravelingTeacherIds((travelingTeachersQ.data ?? []).map((t) => t.teacherUserId))
+  }, [open, bus?.busId, travelingTeachersQ.isSuccess, travelingTeachersQ.data])
+
+  /** Bus Duty is its own PUT/DELETE endpoint, separate from the bus record itself —
+   *  apply it after the bus save succeeds, only if the selection actually changed. */
+  async function saveDutyTeacher(busId: string) {
+    const before = bus?.teacherUserId ?? ''
+    if (dutyTeacherId === before) return
+    if (dutyTeacherId) await assignTeacher.mutateAsync({ busId, teacherUserId: dutyTeacherId })
+    else await unassignTeacher.mutateAsync({ busId })
+  }
+
+  /** Traveling teachers are a many-to-many list — diff against what the bus already
+   *  has and apply only the additions/removals, mirroring saveDutyTeacher's pattern. */
+  async function saveTravelingTeachers(busId: string, before: string[]) {
+    const beforeSet = new Set(before)
+    const afterSet = new Set(travelingTeacherIds)
+    for (const id of travelingTeacherIds) {
+      if (!beforeSet.has(id)) await addTravelingTeacher.mutateAsync({ busId, teacherUserId: id })
+    }
+    for (const id of before) {
+      if (!afterSet.has(id)) await removeTravelingTeacher.mutateAsync({ busId, teacherUserId: id })
+    }
+  }
+
   async function save() {
     const trimmed = busNo.trim()
     if (!trimmed) { toast.danger('Bus number is required'); return }
@@ -476,6 +570,7 @@ function BusEditModal({
       toast.danger('Conductor already assigned', `This staff member already drives/conducts Bus ${busyElsewhere.get(conductorStaffId)}.`)
       return
     }
+    const capNum = capacity.trim() ? Number(capacity) : null
     try {
       if (isEdit) {
         await update.mutateAsync({
@@ -486,15 +581,22 @@ function BusEditModal({
           clearDriver: !driverStaffId,
           conductorStaffId: conductorStaffId || null,
           clearConductor: !conductorStaffId,
+          capacity: capNum,
+          clearCapacity: capNum == null,
         })
+        await saveDutyTeacher(bus!.busId)
+        await saveTravelingTeachers(bus!.busId, (travelingTeachersQ.data ?? []).map((t) => t.teacherUserId))
         toast.success('Bus updated')
       } else {
-        await create.mutateAsync({
+        const created = await create.mutateAsync({
           busNo: trimmed,
           routeId: routeId || null,
           driverStaffId: driverStaffId || null,
           conductorStaffId: conductorStaffId || null,
+          capacity: capNum,
         })
+        if (dutyTeacherId) await assignTeacher.mutateAsync({ busId: created.busId, teacherUserId: dutyTeacherId })
+        await saveTravelingTeachers(created.busId, [])
         toast.success('Bus added')
       }
       onClose()
@@ -505,7 +607,26 @@ function BusEditModal({
 
   const routeOpts = routes.data ?? []
   const driverOpts = (driversQ.data ?? []).filter((s) => !busyElsewhere.has(s.id))
-  const busy = create.isPending || update.isPending
+  // Bus duty / traveling-teacher access is authorized against the teacher's LOGIN (Users.Id),
+  // not their Teachers row id — a teacher who hasn't accepted their invite yet has no linked
+  // account to authorize against, so they can't be picked here at all.
+  const teacherOpts = (teachersQ.data ?? []).filter((t): t is Teacher & { userId: string } => !!t.userId)
+  const busy = create.isPending || update.isPending || assignTeacher.isPending || unassignTeacher.isPending
+    || addTravelingTeacher.isPending || removeTravelingTeacher.isPending
+
+  function toggleTravelingTeacher(teacherId: string) {
+    setTravelingTeacherIds((ids) => (ids.includes(teacherId) ? ids.filter((id) => id !== teacherId) : [...ids, teacherId]))
+  }
+  /** A teacher who was also separately invited to the CRM as Admin/Principal/Vice-Principal
+   *  shows that leadership role here instead of their teaching designation — same lookup
+   *  People uses for Suspend/Unsuspend, keyed by email since there's no other link. */
+  function teacherRoleLabel(t: Teacher): string {
+    return leadershipByEmail.get(t.email.trim().toLowerCase()) ?? t.desig ?? t.dept
+  }
+  const dutyTeacherSelectOptions = [
+    { value: '', label: teachersQ.isLoading ? 'Loading teachers…' : '— Unassigned —' },
+    ...teacherOpts.map((t) => ({ value: t.userId, label: `${t.name} · ${teacherRoleLabel(t)}` })),
+  ]
   const driverSelectOptions = [
     { value: '', label: driversQ.isLoading ? 'Loading staff…' : '— Unassigned —' },
     ...driverOpts.map((s) => ({
@@ -553,12 +674,50 @@ function BusEditModal({
             {busyElsewhere.size} staff member{busyElsewhere.size === 1 ? '' : 's'} hidden — already driving/conducting another bus.
           </div>
         )}
+        <Field label="Capacity" hint="Optional — leave blank for unlimited seats">
+          <Input type="number" min={1} value={capacity} onChange={(e) => setCapacity(e.target.value)} placeholder="e.g. 40" />
+        </Field>
+        <Field label="Bus duty teacher" hint={teachersQ.isError ? 'Could not load teacher list' : 'Teacher assigned to supervise this bus'}>
+          <Select value={dutyTeacherId} onChange={(e) => setDutyTeacherId(e.target.value)} options={dutyTeacherSelectOptions} disabled={teachersQ.isLoading} />
+        </Field>
+        <Field label="Traveling teachers" hint="Any number of teachers who can track this bus's route and live location, separate from the duty teacher">
+          {teachersQ.isLoading ? (
+            <div className="t-sm muted">Loading teachers…</div>
+          ) : teacherOpts.length === 0 ? (
+            <div className="t-sm muted">No teachers with an active app login yet — they must accept their invite first</div>
+          ) : (
+            <div className="col gap6" style={{ maxHeight: 160, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>
+              {teacherOpts.map((t) => (
+                <label key={t.userId} className="row gap8" style={{ alignItems: 'center' }}>
+                  <input
+                    type="checkbox"
+                    checked={travelingTeacherIds.includes(t.userId)}
+                    onChange={() => toggleTravelingTeacher(t.userId)}
+                  />
+                  <span className="t-sm">{t.name} · {teacherRoleLabel(t)}</span>
+                </label>
+              ))}
+            </div>
+          )}
+        </Field>
       </div>
     </Modal>
   )
 }
 
+/** Own component (not inlined in the table map) so the useTravelingTeachers hook call per
+ *  row stays rules-of-hooks legal — the list itself doesn't carry this data, so each row
+ *  fetches its own bus's traveling-teacher list. */
+function TravelingTeachersCell({ busId }: { busId: string }) {
+  const q = useTravelingTeachers(busId)
+  const rows = q.data ?? []
+  if (q.isLoading) return <span className="t-sm muted">…</span>
+  if (rows.length === 0) return <span>—</span>
+  return <span title={rows.map((t) => t.teacherName ?? 'Unknown').join(', ')}>{rows.length} teacher{rows.length === 1 ? '' : 's'}</span>
+}
+
 function TransportBusesBody() {
+  const app = useApp()
   const busesQ = useTransportBuses()
   const buses = busesQ.data ?? []
   const staffQ = useStaff()
@@ -580,7 +739,12 @@ function TransportBusesBody() {
   return (
     <div>
       <PageHead title="Buses" sub="Fleet vehicles, route assignment & drivers"
-        actions={<Btn variant="primary" icon="plus" onClick={() => setCreateOpen(true)}>Add bus</Btn>} />
+        actions={
+          <div className="row gap8">
+            <Btn variant="ghost" icon="arrowLeft" onClick={() => app.go('school.transport')}>Back to Transport</Btn>
+            <Btn variant="primary" icon="plus" onClick={() => setCreateOpen(true)}>Add bus</Btn>
+          </div>
+        } />
       <Card>
         {busesQ.isError ? (
           <div style={{ padding: 16 }}>
@@ -593,7 +757,7 @@ function TransportBusesBody() {
           <table className="sm-table">
             <thead>
               <tr>
-                <th>Bus</th><th>Route</th><th>Driver</th><th>Conductor</th><th>Stops</th><th>Students</th><th />
+                <th>Bus</th><th>Route</th><th>Driver</th><th>Conductor</th><th>Bus duty teacher</th><th>Traveling teachers</th><th>Stops</th><th>Students</th><th>Capacity</th><th />
               </tr>
             </thead>
             <tbody>
@@ -603,8 +767,11 @@ function TransportBusesBody() {
                   <td>{b.routeName ?? '—'}</td>
                   <td>{b.driver ?? '—'}{b.driverPhone ? ` · ${b.driverPhone}` : ''}</td>
                   <td>{b.conductorStaffId ? (staffById.get(b.conductorStaffId) ?? '—') : '—'}</td>
+                  <td>{b.teacherName ?? '—'}</td>
+                  <td><TravelingTeachersCell busId={b.busId} /></td>
                   <td>{b.stopCount}</td>
                   <td>{b.studentsAssigned}</td>
+                  <td>{b.studentsAssigned} / {b.capacity ?? '∞'}</td>
                   <td><IconBtn icon="edit" title="Edit" onClick={() => setEditBus(b)} /></td>
                 </tr>
               ))}
