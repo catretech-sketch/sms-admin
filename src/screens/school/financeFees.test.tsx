@@ -126,12 +126,15 @@ beforeEach(() => {
 
     if (u.includes('/fees/structures/')) {
       const rest = u.split('/fees/structures/')[1]
+      if (rest.endsWith('/unpublish') && method === 'POST') {
+        const id = rest.replace('/unpublish', '')
+        feeStructureHistory = feeStructureHistory.map((s) => (s.id === id ? { ...s, status: 'inactive' } : s))
+        return jsonOk({ data: { id, status: 'inactive' } })
+      }
       if (rest.endsWith('/publish') && method === 'POST') {
         const id = rest.replace('/publish', '')
-        feeStructureHistory = feeStructureHistory.map((s) => ({
-          ...s,
-          status: s.id === id ? 'active' : (s.status === 'active' ? 'inactive' : s.status),
-        }))
+        // No "only one Published row" rule — publishing one version never changes any other.
+        feeStructureHistory = feeStructureHistory.map((s) => (s.id === id ? { ...s, status: 'active' } : s))
         return jsonOk({ data: { id, status: 'active' } })
       }
       if (method === 'DELETE') {
@@ -189,9 +192,8 @@ beforeEach(() => {
           id: `struct-${feeStructureHistory.length + 1}`,
           created_at: new Date(2026, 0, feeStructureHistory.length + 1).toISOString(),
         }
-        if (body.status === 'active') {
-          feeStructureHistory = feeStructureHistory.map((s) => (s.status === 'active' ? { ...s, status: 'inactive' } : s))
-        }
+        // No "only one Published row" rule — saving another version as active never
+        // retires whichever version(s) were already active.
         feeStructureHistory = [...feeStructureHistory, saved]
         return jsonOk({ data: body })
       }

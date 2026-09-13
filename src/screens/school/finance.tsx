@@ -12,7 +12,7 @@ import { loadRazorpayScript } from '@/api/upgradeRequests'
 import { useFeeHeads, useCreateFeeHead, useDeleteFeeHead, useUpdateFeeHead } from '@/api/hooks/useFeeHeads'
 import {
   useFeeStructure, useSaveFeeStructure, useFeeStructureHistory, useFeeStructureVersion,
-  usePublishFeeStructureVersion, useDeleteFeeStructureVersion,
+  usePublishFeeStructureVersion, useUnpublishFeeStructureVersion, useDeleteFeeStructureVersion,
 } from '@/api/hooks/useFeeStructure'
 import type { FeeStructureDocument, FeeStructureStatus } from '@/api/feeStructure'
 import { useFeeInvoices, useGenerateFeeInvoices } from '@/api/hooks/useFeeInvoices'
@@ -1670,6 +1670,7 @@ function FeeStructureHistoryTab({ editable, onEdit }: { editable: boolean; onEdi
   const toast = useToast()
   const historyQ = useFeeStructureHistory()
   const publishVersion = usePublishFeeStructureVersion()
+  const unpublishVersion = useUnpublishFeeStructureVersion()
   const deleteVersion = useDeleteFeeStructureVersion()
   const [viewId, setViewId] = useState<string | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
@@ -1678,8 +1679,15 @@ function FeeStructureHistoryTab({ editable, onEdit }: { editable: boolean; onEdi
 
   const publish = (id: string, name: string) => {
     publishVersion.mutate(id, {
-      onSuccess: () => toast.success('Published', `${name} is now the live fee structure.`),
+      onSuccess: () => toast.success('Published', `${name} is now billed — every other published version stays billed too.`),
       onError: (e) => toast.danger('Could not publish', e instanceof Error ? e.message : 'Please try again.'),
+    })
+  }
+
+  const unpublish = (id: string, name: string) => {
+    unpublishVersion.mutate(id, {
+      onSuccess: () => toast.success('Unpublished', `${name} is no longer billed.`),
+      onError: (e) => toast.danger('Could not unpublish', e instanceof Error ? e.message : 'Please try again.'),
     })
   }
 
@@ -1695,7 +1703,7 @@ function FeeStructureHistoryTab({ editable, onEdit }: { editable: boolean; onEdi
     <Card pad={false}>
       <div style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
         <div className="fw6">Saved fee structure versions</div>
-        <div className="t-sm muted">Every save is kept as a draft here. Publishing a draft merges its fee heads into whatever is currently live — publish Transport, then later publish Exam, and both stay billed together (a head both versions set uses the newer rate). Total = each class's fee rate × students currently enrolled in that class.</div>
+        <div className="t-sm muted">Every save is kept as a draft here. Any number of versions can be Published at once — publishing one never unpublishes another, so publish Transport, then Exam, then a third, and all stay billed together (a fee head set by more than one Published version uses the newer rate, never double-billed). Unpublish a version explicitly when you want it to stop being billed. Total = each class's fee rate × students currently enrolled in that class.</div>
       </div>
       {historyQ.isLoading ? (
         <div className="t-sm muted" style={{ padding: 16 }}>Loading saved versions…</div>
@@ -1733,6 +1741,9 @@ function FeeStructureHistoryTab({ editable, onEdit }: { editable: boolean; onEdi
                 <td className="ta-right">
                   <div className="row gap6 jc-end">
                     <Btn size="sm" variant="ghost" icon="eye" onClick={() => setViewId(e.id)}>View</Btn>
+                    {editable && e.status === 'active' && (
+                      <Btn size="sm" variant="ghost" icon="x" disabled={unpublishVersion.isPending} onClick={() => unpublish(e.id, e.name)}>Unpublish</Btn>
+                    )}
                     {editable && e.status !== 'active' && (
                       <>
                         <Btn size="sm" variant="ghost" icon="edit" onClick={() => onEdit(e.id)}>Edit</Btn>
