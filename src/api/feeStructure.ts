@@ -222,6 +222,8 @@ export interface FeeStructureHeadAmount {
   headId: string | null
   headName: string
   amount: number
+  /** Per-student rate for this head (revenue ÷ enrolled students charged), e.g. ₹6,500. */
+  perStudentAmount: number
 }
 
 /** One saved version in the Fee Structure history list — metadata only, no per-class amounts
@@ -250,6 +252,7 @@ function toHeadAmount(row: Record<string, unknown>): FeeStructureHeadAmount {
     headId: row.head_id ? String(row.head_id) : null,
     headName: String(row.head_name ?? '').trim(),
     amount: Number(row.amount) || 0,
+    perStudentAmount: Number(row.per_student_amount) || 0,
   }
 }
 

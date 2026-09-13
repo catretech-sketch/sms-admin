@@ -152,15 +152,27 @@ beforeEach(() => {
         data: feeStructureHistory.map((s) => {
           const amounts = (s.amounts as Record<string, Record<string, number>> | undefined) ?? {}
           const byHeadTotals: Record<string, number> = {}
-          for (const byHead of Object.values(amounts)) {
-            for (const [headId, amount] of Object.entries(byHead)) {
-              byHeadTotals[headId] = (byHeadTotals[headId] ?? 0) + amount
+          const byHeadStudents: Record<string, number> = {}
+          for (const [classKey, byHead] of Object.entries(amounts)) {
+            const enrolled = students.filter(
+              (st) => String(st.class_label ?? '').trim().toLowerCase() === classKey.trim().toLowerCase(),
+            ).length
+            for (const [headId, rate] of Object.entries(byHead)) {
+              const revenue = enrolled > 0 ? rate * enrolled : rate
+              byHeadTotals[headId] = (byHeadTotals[headId] ?? 0) + revenue
+              if (enrolled > 0) byHeadStudents[headId] = (byHeadStudents[headId] ?? 0) + enrolled
             }
           }
           const total = Object.values(byHeadTotals).reduce((a, n) => a + n, 0)
-          const headAmounts = Object.entries(byHeadTotals).map(([headId, amount]) => ({
-            head_id: headId, head_name: feeHeads.find((h) => h.id === headId)?.name ?? headId, amount,
-          }))
+          const headAmounts = Object.entries(byHeadTotals).map(([headId, amount]) => {
+            const headStudents = byHeadStudents[headId] ?? 0
+            return {
+              head_id: headId,
+              head_name: feeHeads.find((h) => h.id === headId)?.name ?? headId,
+              amount,
+              per_student_amount: headStudents > 0 ? amount / headStudents : 0,
+            }
+          })
           return { ...s, amounts: undefined, amounts_json: undefined, total_amount: total, head_amounts: headAmounts }
         }),
         next_cursor: null,
@@ -930,5 +942,27 @@ describe('Fee structure', () => {
     })
     expect(within(container).getAllByText(/2 students/).length).toBeGreaterThan(0)
     expect(within(container).getByText(/Total.*1,000|Total.*1000/)).toBeInTheDocument()
+  })
+
+  it('shows both the per-student rate and the total for a fee head in the Saved versions list', async () => {
+    students = [
+      { id: 's1', admission_no: 'A1', class_label: 'X-A', name: 'Kid One', gender: 'M', grade: 'X', section: 'A', roll: 1, guardian_name: 'P1', guardian_phone: '9000000001', attendance_pct: 0, fee_status: 'due', fee_due: 0, status: 'active', house: '', avatar_hue: 1 },
+      { id: 's2', admission_no: 'A2', class_label: 'X-A', name: 'Kid Two', gender: 'F', grade: 'X', section: 'A', roll: 2, guardian_name: 'P2', guardian_phone: '9000000002', attendance_pct: 0, fee_status: 'due', fee_due: 0, status: 'active', house: '', avatar_hue: 2 },
+      { id: 's3', admission_no: 'A3', class_label: 'X-A', name: 'Kid Three', gender: 'M', grade: 'X', section: 'A', roll: 3, guardian_name: 'P3', guardian_phone: '9000000003', attendance_pct: 0, fee_status: 'due', fee_due: 0, status: 'active', house: '', avatar_hue: 3 },
+    ]
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+    await waitFor(() => expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0))
+    fireEvent.click(within(container).getByRole('button', { name: 'X' }))
+    await waitFor(() => expect(within(container).getAllByLabelText('X-A Academic amount').length).toBeGreaterThan(0))
+    const amountInput = within(container).getAllByLabelText('X-A Academic amount')[0] as HTMLInputElement
+    fireEvent.change(amountInput, { target: { value: '6500' } })
+    fireEvent.blur(amountInput)
+    fireEvent.click(within(container).getByText('Save only'))
+    await waitFor(() => expect(within(container).getByText(/Draft saved/i)).toBeInTheDocument())
+
+    clickTab('Saved versions')
+    await waitFor(() => expect(within(container).getAllByText(/19,500|19500/).length).toBeGreaterThan(0))
+    expect(within(container).getByText(/Academic.*6,500\/student.*Total.*19,500/)).toBeInTheDocument()
   })
 })

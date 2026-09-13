@@ -1668,7 +1668,13 @@ function FeeStructureHistoryTab({ editable, onEdit }: { editable: boolean; onEdi
                   <div className="fw6">{fmtMoney(e.totalAmount, e.currency)}</div>
                   {e.headAmounts.length > 0 && (
                     <div className="t-xs muted">
-                      {e.headAmounts.map((h) => `${h.headName} ${fmtMoney(h.amount, e.currency)}`).join(' · ')}
+                      {e.headAmounts
+                        .map((h) =>
+                          h.perStudentAmount > 0
+                            ? `${h.headName} ${fmtMoney(h.perStudentAmount, e.currency)}/student · Total ${fmtMoney(h.amount, e.currency)}`
+                            : `${h.headName} ${fmtMoney(h.amount, e.currency)}`,
+                        )
+                        .join(' · ')}
                     </div>
                   )}
                 </td>
