@@ -100,6 +100,47 @@ describe('notifyFeeAudience', () => {
     }))
   })
 
+  it('notifies parents when new invoices are generated, without needing a single student name', async () => {
+    const { createAnnouncement } = await import('@/api/announcements')
+    const res = await notifyFeeAudience({
+      kind: 'invoice_created',
+      schoolName: 'Demo',
+      channels: { email: true, sms: true, app: true },
+      emails: ['p1@x.com', 'p2@x.com'],
+      phones: ['9000000001'],
+      count: 4,
+      period: 'Term 1 · 2026-27',
+    })
+    expect(res.channels).toEqual(['email', 'sms', 'app'])
+    expect(res.emails).toBe(2)
+    expect(createAnnouncement).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'fee_invoice_created',
+      title: expect.stringMatching(/new fee invoices generated/i),
+      body: expect.stringContaining('Term 1 · 2026-27'),
+      emails: ['p1@x.com', 'p2@x.com'],
+      phones: ['9000000001'],
+    }))
+  })
+
+  it('sends a bulk reminder (no single studentName) mentioning the count and combined total due', async () => {
+    const { createAnnouncement } = await import('@/api/announcements')
+    await notifyFeeAudience({
+      kind: 'reminder',
+      schoolName: 'Demo',
+      amount: 15000,
+      currency: 'INR',
+      count: 3,
+      channels: { email: true, sms: false, app: true },
+      emails: ['p1@x.com'],
+      phones: [],
+    })
+    expect(createAnnouncement).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'fee_reminder',
+      title: 'Fee reminder',
+      body: expect.stringMatching(/3 outstanding fee payments.*15,000/),
+    }))
+  })
+
   it('rejects when no channel selected', async () => {
     await expect(notifyFeeAudience({
       kind: 'receipt',

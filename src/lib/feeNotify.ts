@@ -10,10 +10,11 @@ export interface FeeNotifyChannels {
 }
 
 export interface FeeNotifyInput {
-  kind: 'receipt' | 'reminder'
+  kind: 'receipt' | 'reminder' | 'invoice_created'
   schoolName: string
-  studentName: string
-  amount: number
+  /** Required for 'receipt' / 'reminder' — a single student's notice. Unused for 'invoice_created'. */
+  studentName?: string
+  amount?: number
   mode?: string
   dueDate?: string
   currency?: string
@@ -23,6 +24,11 @@ export interface FeeNotifyInput {
   phones?: string[]
   /** When set, attaches a downloadable receipt for email + parent/student app. */
   receipt?: FeeReceiptData
+  /** 'invoice_created': how many invoices were just generated, for which period.
+   *  'reminder' with no studentName (bulk send): how many invoices this reaches — amount
+   *  is then read as the combined outstanding total, not one student's due. */
+  count?: number
+  period?: string
 }
 
 export interface FeeNotifyResult {
@@ -50,14 +56,21 @@ export async function notifyFeeAudience(input: FeeNotifyInput): Promise<FeeNotif
     phones = phones ?? contacts.phones
   }
 
-  const amount = fmtMoney(input.amount, input.currency)
+  const amount = fmtMoney(input.amount ?? 0, input.currency)
+  const isBulkReminder = input.kind === 'reminder' && !input.studentName
   const title = input.kind === 'receipt'
     ? `Payment received — ${input.studentName}`
-    : `Fee reminder — ${input.studentName}`
+    : input.kind === 'reminder'
+      ? (isBulkReminder ? 'Fee reminder' : `Fee reminder — ${input.studentName}`)
+      : `New fee invoice${input.count && input.count > 1 ? 's' : ''} generated`
 
   const body = input.kind === 'receipt'
     ? `${input.schoolName}: We received a payment of ${amount} for ${input.studentName}${input.mode ? ` via ${input.mode}` : ''}. Thank you. Download the attached fee receipt, or open it in the parent / student app.`
-    : `${input.schoolName}: A fee payment of ${amount} is due for ${input.studentName}${input.dueDate ? ` by ${input.dueDate}` : ''}. Please pay at the earliest to avoid late fees.`
+    : input.kind === 'reminder'
+      ? (isBulkReminder
+        ? `${input.schoolName}: You have ${input.count ?? 'an'} outstanding fee payment${input.count === 1 ? '' : 's'}${input.amount ? ` totaling ${amount}` : ''}. Please pay at the earliest to avoid late fees.`
+        : `${input.schoolName}: A fee payment of ${amount} is due for ${input.studentName}${input.dueDate ? ` by ${input.dueDate}` : ''}. Please pay at the earliest to avoid late fees.`)
+      : `${input.schoolName}: A new fee has been published${input.period ? ` for ${input.period}` : ''}. Please check the parent app for your dues and pay at the earliest.`
 
   let attachmentBase64: string | undefined
   let attachmentFileName: string | undefined
@@ -70,16 +83,21 @@ export async function notifyFeeAudience(input: FeeNotifyInput): Promise<FeeNotif
   }
 
   /* App channel still needs contact targets when available. */
+  const eventKind = input.kind === 'receipt'
+    ? 'fee_receipt'
+    : input.kind === 'reminder'
+      ? 'fee_reminder'
+      : 'fee_invoice_created'
   const created = await createAnnouncement({
     title,
     body,
-    type: input.kind === 'receipt' ? 'fee_receipt' : 'fee_reminder',
+    type: eventKind,
     audience: input.audience ?? 'parents',
     emails: input.channels.email || input.channels.app ? emails : [],
     phones: input.channels.sms || input.channels.app ? phones : [],
     channels: channelList,
     schoolName: input.schoolName,
-    eventKind: input.kind === 'receipt' ? 'fee_receipt' : 'fee_reminder',
+    eventKind,
     attachmentBase64,
     attachmentFileName,
     attachmentContentType,

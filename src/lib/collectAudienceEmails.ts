@@ -88,3 +88,24 @@ export async function collectAudienceContacts(
 export async function collectAudienceEmails(audience: string): Promise<string[]> {
   return (await collectAudienceContacts(audience)).emails
 }
+
+/** Guardian contacts for a specific set of students only (e.g. the invoices a
+ *  reminder targets), rather than every parent in the school. */
+export async function contactsForStudentIds(studentIds: string[]): Promise<AudienceContacts> {
+  const emails = new Set<string>()
+  const phones = new Set<string>()
+  const ids = new Set(studentIds)
+  if (!ids.size) return { emails: [], phones: [] }
+  try {
+    for (const s of await listStudents()) {
+      if (!ids.has(s.id)) continue
+      addEmail(emails, s.guardianEmail)
+      addEmail(emails, s.father?.email)
+      addEmail(emails, s.mother?.email)
+      addPhone(phones, s.phone)
+      addPhone(phones, s.father?.phone)
+      addPhone(phones, s.mother?.phone)
+    }
+  } catch { /* best-effort */ }
+  return { emails: [...emails], phones: [...phones] }
+}

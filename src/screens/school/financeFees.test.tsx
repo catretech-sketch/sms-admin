@@ -281,6 +281,31 @@ describe('Fee collection tab', () => {
     expect(within(container).getByText('Rohan Iyer')).toBeInTheDocument()
   })
 
+  it('sends fee reminders to the guardians of every defaulter, via the real notify path', async () => {
+    students = [
+      { id: 's1', admission_no: 'A1', class_label: 'X-A', name: 'Asha Verma', gender: 'F', grade: 'X', section: 'A', roll: 1, guardian_name: 'P1', guardian_phone: '9111111111', guardian_email: 'asha.parent@x.com', attendance_pct: 0, fee_status: 'due', fee_due: 0, status: 'active', house: '', avatar_hue: 1 },
+    ]
+    const { container } = renderScreen()
+    await waitFor(() => {
+      expect(within(container).getByText('Asha Verma')).toBeInTheDocument()
+    })
+    fireEvent.click(within(container).getByRole('button', { name: 'Send reminders' }))
+    const dialog = within(container).getByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Send reminders' }))
+
+    await waitFor(() => {
+      expect(notifyFeeAudience).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'reminder',
+        emails: ['asha.parent@x.com'],
+        phones: ['9111111111'],
+        count: 1,
+      }))
+    })
+    await waitFor(() => {
+      expect(within(container).getByText(/Reminders sent/i)).toBeInTheDocument()
+    })
+  })
+
   it('shows the fee-head breakdown for a multi-line invoice, not just the lump total', async () => {
     feeInvoices = feeInvoices.map((inv) => inv.id === 'inv-1'
       ? {
@@ -655,6 +680,53 @@ describe('Fee structure', () => {
     await waitFor(() => {
       expect(within(container).getByText(/invoices generated/i)).toBeInTheDocument()
     })
+  })
+
+  it('auto-notifies parents of the newly billed classes once invoices are generated', async () => {
+    students = [
+      { id: 's1', admission_no: 'A1', class_label: 'X-A', name: 'Kid One', gender: 'M', grade: 'X', section: 'A', roll: 1, guardian_name: 'P1', guardian_phone: '9000000001', guardian_email: 'p1@x.com', attendance_pct: 0, fee_status: 'due', fee_due: 0, status: 'active', house: '', avatar_hue: 1 },
+    ]
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+    await waitFor(() => expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0))
+    fireEvent.click(within(container).getByRole('button', { name: 'X' }))
+    await waitFor(() => expect(within(container).getAllByLabelText('X-A Academic amount').length).toBeGreaterThan(0))
+    const firstAmount = within(container).getAllByLabelText('X-A Academic amount')[0] as HTMLInputElement
+    fireEvent.change(firstAmount, { target: { value: '12000' } })
+    fireEvent.blur(firstAmount)
+    fireEvent.click(within(container).getByRole('button', { name: 'Save & generate' }))
+
+    await waitFor(() => {
+      expect(within(container).getByText(/invoices generated/i)).toBeInTheDocument()
+    })
+    await waitFor(() => {
+      expect(notifyFeeAudience).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'invoice_created',
+        emails: ['p1@x.com'],
+        phones: ['9000000001'],
+      }))
+    })
+  })
+
+  it('does not auto-notify when Save & generate creates zero new invoices', async () => {
+    nextGenerateCreated = 0
+    students = [
+      { id: 's1', admission_no: 'A1', class_label: 'X-A', name: 'Kid One', gender: 'M', grade: 'X', section: 'A', roll: 1, guardian_name: 'P1', guardian_phone: '9000000001', guardian_email: 'p1@x.com', attendance_pct: 0, fee_status: 'due', fee_due: 0, status: 'active', house: '', avatar_hue: 1 },
+    ]
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+    await waitFor(() => expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0))
+    fireEvent.click(within(container).getByRole('button', { name: 'X' }))
+    await waitFor(() => expect(within(container).getAllByLabelText('X-A Academic amount').length).toBeGreaterThan(0))
+    const firstAmount = within(container).getAllByLabelText('X-A Academic amount')[0] as HTMLInputElement
+    fireEvent.change(firstAmount, { target: { value: '12000' } })
+    fireEvent.blur(firstAmount)
+    fireEvent.click(within(container).getByRole('button', { name: 'Save & generate' }))
+
+    await waitFor(() => {
+      expect(within(container).getByText(/no new invoices/i)).toBeInTheDocument()
+    })
+    expect(notifyFeeAudience).not.toHaveBeenCalled()
   })
 
   it('creates a fee head with the Transport flag checked', async () => {

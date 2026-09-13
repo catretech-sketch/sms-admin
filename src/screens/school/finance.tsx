@@ -21,12 +21,13 @@ import { useClasses } from '@/api/hooks/useClasses'
 import { useStudents } from '@/api/hooks/useStudents'
 import { useTeachers } from '@/api/hooks/useTeachers'
 import { useStaff } from '@/api/hooks/useStaff'
-import { useSendFeeReminders } from '@/api/hooks/useFeeReminders'
 import { buildUpiPayUri, upiQrImageUrl } from '@/lib/upiQr'
 import { downloadTextFile, invoicesToCsv } from '@/lib/feeExport'
 import { payrollRunToCsv, payrollCsvFileName, downloadPayslip } from '@/lib/payrollExport'
 import { downloadFeeReceipt } from '@/lib/feeReceipt'
 import { studentPhotoUrl } from '@/api/studentExtras'
+import { notifyFeeAudience } from '@/lib/feeNotify'
+import { collectAudienceContacts, contactsForStudentIds } from '@/lib/collectAudienceEmails'
 import { can } from '@/lib/gating'
 import { newIdempotencyKey } from '@/lib/idempotencyKey'
 import {
@@ -469,6 +470,7 @@ function FeeStructureTab({ cur, editable, onGenerated, loadVersionId, onDoneEdit
   loadVersionId?: string | null
   onDoneEditing?: () => void
 }) {
+  const app = useApp()
   const toast = useToast()
   const headsQ = useFeeHeads()
   const currentStructureQ = useFeeStructure()
@@ -833,6 +835,23 @@ function FeeStructureTab({ cur, editable, onGenerated, loadVersionId, onDoneEdit
           'Structure published · invoices generated',
           `${res.created} invoice(s) · ${classes.length} class(es) · ${genTerm} · ${doc.academicYear}${skipped ? ` · skipped ${skipped} with no amount` : ''}. Open Collection to record payment.`,
         )
+        try {
+          const contacts = await collectAudienceContacts('parents', { classLabels: classes })
+          if (contacts.emails.length || contacts.phones.length) {
+            await notifyFeeAudience({
+              kind: 'invoice_created',
+              schoolName: app.school.name,
+              channels: { email: true, sms: true, app: true },
+              audience: 'parents',
+              emails: contacts.emails,
+              phones: contacts.phones,
+              count: res.created,
+              period: `${genTerm} · ${doc.academicYear}`,
+            })
+          }
+        } catch {
+          /* Best-effort — a notify failure shouldn't undo the successful publish/generate. */
+        }
       } else {
         toast.info(
           'Structure published · no new invoices',
@@ -1506,32 +1525,57 @@ function FeeStructureTab({ cur, editable, onGenerated, loadVersionId, onDoneEdit
 }
 
 /* ---------- Send reminders modal ---------- */
-function RemindersModal({ dueInvoices, defaultersCount, onClose }: {
-  dueInvoices: FeeInvoice[]; defaultersCount: number; onClose: () => void
+function RemindersModal({ dueInvoices, allDueInvoices, defaultersCount, schoolName, currency, onClose }: {
+  /** Invoices matching the current search/status filters (the "Selected" audience). */
+  dueInvoices: FeeInvoice[]
+  /** Every due/partial invoice school-wide (the "Defaulters" audience). */
+  allDueInvoices: FeeInvoice[]
+  defaultersCount: number
+  schoolName: string
+  currency: string
+  onClose: () => void
 }) {
   const toast = useToast()
-  const sendReminders = useSendFeeReminders()
   const [email, setEmail] = useState(true)
   const [sms, setSms] = useState(true)
   const [appCh, setAppCh] = useState(true)
   const [audience, setAudience] = useState<'defaulters' | 'selected'>('defaulters')
-  const [payLink, setPayLink] = useState(true)
+  const [sending, setSending] = useState(false)
 
-  const selectedIds = useMemo(() => dueInvoices.map((i) => i.id), [dueInvoices])
+  const targetInvoices = audience === 'defaulters' ? allDueInvoices : dueInvoices
+  const selectedIds = useMemo(() => targetInvoices.map((i) => i.id), [targetInvoices])
 
-  const submit = () => {
-    const channels = [email ? 'email' : '', sms ? 'sms' : '', appCh ? 'app' : ''].filter(Boolean)
-    if (!channels.length) { toast.danger('Pick a channel', 'Enable Email, SMS, and/or App.'); return }
-    if (audience === 'selected' && !selectedIds.length) { toast.danger('No invoices selected', 'No due/partial invoices match the current view.'); return }
-    sendReminders.mutate({
-      audience,
-      channels,
-      includePayLink: payLink,
-      ...(audience === 'selected' ? { invoiceIds: selectedIds } : {}),
-    }, {
-      onSuccess: (res) => { toast.success('Reminders sent', `Reached ${fmtNum(res.reach)} parent(s) via ${channels.join(' · ')}.`); onClose() },
-      onError: (err) => { toast.danger('Could not send reminders', err instanceof Error ? err.message : 'Please try again.') },
-    })
+  const submit = async () => {
+    const channels = { email, sms, app: appCh }
+    if (!email && !sms && !appCh) { toast.danger('Pick a channel', 'Enable Email, SMS, and/or App.'); return }
+    if (!targetInvoices.length) { toast.danger('No invoices selected', 'No due/partial invoices match the current view.'); return }
+    setSending(true)
+    try {
+      const studentIds = [...new Set(targetInvoices.map((i) => i.studentId))]
+      const contacts = await contactsForStudentIds(studentIds)
+      if (!contacts.emails.length && !contacts.phones.length) {
+        toast.danger('No contacts found', 'None of the targeted students have a guardian email or phone on file.')
+        return
+      }
+      const totalDue = targetInvoices.reduce((sum, i) => sum + i.due, 0)
+      const res = await notifyFeeAudience({
+        kind: 'reminder',
+        schoolName,
+        currency,
+        amount: totalDue,
+        count: targetInvoices.length,
+        channels,
+        audience: 'parents',
+        emails: contacts.emails,
+        phones: contacts.phones,
+      })
+      toast.success('Reminders sent', `Reached ${fmtNum(res.reach)} parent(s) via ${res.channels.join(' · ')}.`)
+      onClose()
+    } catch (err) {
+      toast.danger('Could not send reminders', err instanceof Error ? err.message : 'Please try again.')
+    } finally {
+      setSending(false)
+    }
   }
 
   return (
@@ -1542,14 +1586,14 @@ function RemindersModal({ dueInvoices, defaultersCount, onClose }: {
       footer={
         <div className="row gap8 jc-end">
           <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn variant="primary" icon="bell" disabled={sendReminders.isPending} onClick={submit}>
-            {sendReminders.isPending ? 'Sending…' : 'Send reminders'}
+          <Btn variant="primary" icon="bell" disabled={sending} onClick={() => { void submit() }}>
+            {sending ? 'Sending…' : 'Send reminders'}
           </Btn>
         </div>
       }
     >
       <div className="col gap16">
-        <Field label="Audience" hint="Defaulters are resolved by the server; Selected uses invoices matching the current search/status filters.">
+        <Field label="Audience" hint="Defaulters is every due/partial invoice school-wide; Selected uses invoices matching the current search/status filters.">
           <div className="row gap8 wrap">
             <Btn type="button" size="sm" variant={audience === 'defaulters' ? 'primary' : 'secondary'} onClick={() => setAudience('defaulters')}>Defaulters (all)</Btn>
             <Btn type="button" size="sm" variant={audience === 'selected' ? 'primary' : 'secondary'} onClick={() => setAudience('selected')}>Selected (current view)</Btn>
@@ -1562,7 +1606,6 @@ function RemindersModal({ dueInvoices, defaultersCount, onClose }: {
             <Checkbox checked={sms} onChange={setSms} label="SMS" />
           </div>
         </Field>
-        <Checkbox checked={payLink} onChange={setPayLink} label="Include pay link" />
       </div>
     </Modal>
   )
@@ -2085,7 +2128,10 @@ function FeesScreen() {
       {remindOpen && (
         <RemindersModal
           dueInvoices={rows.filter((r) => r.due > 0)}
+          allDueInvoices={invoices.filter((r) => r.due > 0)}
           defaultersCount={summary?.defaulters ?? 0}
+          schoolName={app.school.name}
+          currency={cur}
           onClose={() => setRemindOpen(false)}
         />
       )}
