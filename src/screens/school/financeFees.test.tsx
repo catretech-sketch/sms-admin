@@ -334,6 +334,28 @@ describe('Fee collection tab', () => {
     expect(within(container).getByText(/Tuition Fee.*Transport Fee/)).toBeInTheDocument()
   })
 
+  it('shows the term/period on each row, so two same-amount invoices for the same student are not mistaken for duplicates', async () => {
+    feeInvoices = [
+      ...feeInvoices,
+      {
+        id: 'inv-3', student_id: 's1', student_name: 'Asha Verma', cls: 'X-A', grade: 'X',
+        academic_year: '2025-26', term: 'Term 2', lines: [{ head_id: 'h2', head_name: 'Transport', amount: 21000 }],
+        total: 21000, paid: 0, waived: 0, due: 21000, status: 'due',
+      },
+      {
+        id: 'inv-4', student_id: 's1', student_name: 'Asha Verma', cls: 'X-A', grade: 'X',
+        academic_year: '2025-26', term: 'Term 3', lines: [{ head_id: 'h2', head_name: 'Transport', amount: 21000 }],
+        total: 21000, paid: 0, waived: 0, due: 21000, status: 'due',
+      },
+    ]
+    const { container } = renderScreen()
+    await waitFor(() => {
+      expect(within(container).getAllByText('Asha Verma').length).toBeGreaterThan(0)
+    })
+    expect(within(container).getByText('Term 2')).toBeInTheDocument()
+    expect(within(container).getByText('Term 3')).toBeInTheDocument()
+  })
+
   it('shows KPIs and live cue from useFeeReportSummary (not student math)', async () => {
     const { container } = renderScreen()
     await waitFor(() => {

@@ -1975,6 +1975,7 @@ function FeesScreen() {
       key: 'term', label: 'Term fee', align: 'right', sortValue: (r) => r.total,
       render: (r) => (
         <div>
+          {r.term && <div className="t-xs fw6 muted">{r.term}</div>}
           <div>{fmtMoney(r.total, cur)}</div>
           {r.lines.length > 0 && (
             <div className="t-xs muted">
