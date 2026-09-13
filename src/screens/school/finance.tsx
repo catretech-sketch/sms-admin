@@ -828,10 +828,17 @@ function FeeStructureTab({ cur, editable, onGenerated, loadVersionId, onDoneEdit
         term: genTerm,
         ...(genDue.trim() ? { dueDate: genDue.trim() } : {}),
       })
-      toast.success(
-        'Structure published · invoices generated',
-        `${res.created} invoice(s) · ${classes.length} class(es) · ${genTerm} · ${doc.academicYear}${skipped ? ` · skipped ${skipped} with no amount` : ''}. Open Collection to record payment.`,
-      )
+      if (res.created > 0) {
+        toast.success(
+          'Structure published · invoices generated',
+          `${res.created} invoice(s) · ${classes.length} class(es) · ${genTerm} · ${doc.academicYear}${skipped ? ` · skipped ${skipped} with no amount` : ''}. Open Collection to record payment.`,
+        )
+      } else {
+        toast.info(
+          'Structure published · no new invoices',
+          `Every selected student already has an invoice for ${genTerm} · ${doc.academicYear} — existing invoices never change. Pick a different term/period above to bill this structure.`,
+        )
+      }
       onDoneEditing?.()
       onGenerated?.()
     } catch (e) {

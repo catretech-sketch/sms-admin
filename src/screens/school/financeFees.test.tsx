@@ -28,6 +28,7 @@ let feeInvoices: Record<string, unknown>[] = []
 let feeStructureHistory: Record<string, unknown>[] = []
 let students: Record<string, unknown>[] = []
 let feePayments: Record<string, unknown>[] = []
+let nextGenerateCreated = 4
 let schoolIntegrations: Record<string, unknown> = {}
 let razorpayOrderWire: Record<string, unknown> = { order_id: 'order_abc', amount: 36000, currency: 'INR', key_id: 'rzp_test_1' }
 let failNextPay = false
@@ -70,6 +71,7 @@ beforeEach(() => {
   ]
   feeStructureHistory = []
   students = []
+  nextGenerateCreated = 4
   feeInvoices = [
     {
       id: 'inv-1', student_id: 's1', student_name: 'Asha Verma', cls: 'X-A', grade: 'X',
@@ -197,7 +199,7 @@ beforeEach(() => {
     }
 
     if (u.includes('/fees/invoices/generate')) {
-      return jsonOk({ data: { created: 4 } })
+      return jsonOk({ data: { created: nextGenerateCreated } })
     }
 
     if (u.includes('/razorpay/order') && method === 'POST') {
@@ -964,5 +966,24 @@ describe('Fee structure', () => {
     clickTab('Saved versions')
     await waitFor(() => expect(within(container).getAllByText(/19,500|19500/).length).toBeGreaterThan(0))
     expect(within(container).getByText(/Academic.*6,500\/student.*Total.*19,500/)).toBeInTheDocument()
+  })
+
+  it('tells the user no new invoices were made when everyone already has one for that term, instead of implying success', async () => {
+    nextGenerateCreated = 0
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+    await waitFor(() => expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0))
+    fireEvent.click(within(container).getByRole('button', { name: 'X' }))
+    await waitFor(() => expect(within(container).getAllByLabelText('X-A Academic amount').length).toBeGreaterThan(0))
+    const amountInput = within(container).getAllByLabelText('X-A Academic amount')[0] as HTMLInputElement
+    fireEvent.change(amountInput, { target: { value: '19000' } })
+    fireEvent.blur(amountInput)
+    fireEvent.click(within(container).getByText('Save & generate'))
+
+    await waitFor(() => {
+      expect(within(container).getByText(/no new invoices/i)).toBeInTheDocument()
+    })
+    expect(within(container).queryByText(/invoices generated/i)).not.toBeInTheDocument()
+    expect(within(container).getByText(/already has an invoice/i)).toBeInTheDocument()
   })
 })
