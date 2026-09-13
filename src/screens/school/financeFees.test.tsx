@@ -111,6 +111,7 @@ beforeEach(() => {
         const created = {
           id: `h${feeHeads.length + 1}`, name: body.name, code: body.code, active: true,
           is_transport_fee_head: !!body.is_transport_fee_head,
+          description: body.description ?? null,
         }
         feeHeads = [...feeHeads, created]
         return jsonOk({ data: created })
@@ -761,6 +762,30 @@ describe('Fee structure', () => {
     })
     await waitFor(() => {
       expect(within(container).getAllByText('🚌 Transport').length).toBeGreaterThan(0)
+    })
+  })
+
+  it('creates a fee head with a description that shows as a tooltip on its chip', async () => {
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+    await waitFor(() => {
+      expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0)
+    })
+
+    fireEvent.change(within(container).getByPlaceholderText(/Type fee name|e\.g\. Library|Custom head|Add another/i), { target: { value: 'Trip' } })
+    fireEvent.change(within(container).getByPlaceholderText(/Annual educational trip to Mumbai/i), { target: { value: 'Annual educational trip to Mumbai, Nov 2026' } })
+    fireEvent.click(within(container).getByRole('button', { name: /Add fee type/i }))
+
+    await waitFor(() => {
+      const fetchMock = vi.mocked(fetch)
+      const postCall = fetchMock.mock.calls.find(([url, opts]) => opts?.method === 'POST' && String(url).includes('/fees/heads'))
+      expect(postCall).toBeDefined()
+      const body = JSON.parse((postCall?.[1] as RequestInit).body as string)
+      expect(body.description).toBe('Annual educational trip to Mumbai, Nov 2026')
+    })
+    await waitFor(() => {
+      const chip = within(container).getAllByText('Trip')[0].closest('[title]')
+      expect(chip).toHaveAttribute('title', 'Annual educational trip to Mumbai, Nov 2026')
     })
   })
 

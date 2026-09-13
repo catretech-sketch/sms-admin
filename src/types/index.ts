@@ -27,12 +27,15 @@ export interface FeeHead {
   code?: string
   active: boolean
   isSystem?: boolean
+  isTransportFeeHead?: boolean
+  description?: string
 }
 
 export interface FeeInvoiceLine {
   headId: string
   headName: string
   amount: number
+  description?: string
 }
 
 export interface FeeInvoice {
@@ -247,6 +250,10 @@ export interface Teacher {
   id: string
   /** Human teacher id, e.g. scc-TCH-0001 (Guid stays in id for API). */
   code?: string
+  /** Linked login account (Users.Id) — null until this teacher accepts their invite.
+   *  Distinct from `id` (the Teachers row's own key): anything that authorizes against a
+   *  real login (bus duty/traveling-teacher assignment, etc.) must use this, not `id`. */
+  userId?: string | null
   name: string
   gender: 'M' | 'F'
   dept: string

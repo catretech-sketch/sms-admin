@@ -19,6 +19,8 @@ function toHead(wire: Record<string, unknown>): FeeHead {
     code: h.code ? String(h.code) : undefined,
     active: h.active !== false,
     isSystem: Boolean(h.isSystem),
+    isTransportFeeHead: Boolean(h.isTransportFeeHead),
+    description: h.description ? String(h.description).trim() : undefined,
   }
 }
 
@@ -33,18 +35,23 @@ export async function listFeeHeads(): Promise<FeeHead[]> {
   return rows
 }
 
-export async function createFeeHead(input: { name: string; code?: string }): Promise<FeeHead> {
+export async function createFeeHead(input: { name: string; code?: string; isTransportFeeHead?: boolean; description?: string }): Promise<FeeHead> {
   const name = input.name.trim()
   if (!name) throw new Error('Fee type name is required')
   const wire = await request<Record<string, unknown>>('/fees/heads', {
     method: 'POST',
-    body: camelToSnake({ name, ...(input.code?.trim() ? { code: input.code.trim() } : {}) }),
+    body: camelToSnake({
+      name,
+      ...(input.code?.trim() ? { code: input.code.trim() } : {}),
+      isTransportFeeHead: input.isTransportFeeHead ?? false,
+      ...(input.description?.trim() ? { description: input.description.trim() } : {}),
+    }),
   })
   clearLegacy()
   return toHead(wire)
 }
 
-export async function updateFeeHead(id: string, patch: Partial<Pick<FeeHead, 'name' | 'code' | 'active'>>): Promise<FeeHead> {
+export async function updateFeeHead(id: string, patch: Partial<Pick<FeeHead, 'name' | 'code' | 'active' | 'isTransportFeeHead' | 'description'>>): Promise<FeeHead> {
   const wire = await request<Record<string, unknown>>(`/fees/heads/${id}`, {
     method: 'PATCH',
     body: camelToSnake(patch),

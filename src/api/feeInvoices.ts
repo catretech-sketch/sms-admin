@@ -31,6 +31,7 @@ function toFeeInvoice(row: Record<string, unknown>): FeeInvoice {
         headId: String(line.headId ?? ''),
         headName: String(line.headName ?? ''),
         amount: Number(line.amount) || 0,
+        description: line.description ? String(line.description).trim() : undefined,
       }
     })
     : []

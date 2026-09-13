@@ -520,6 +520,7 @@ function FeeStructureTab({ cur, editable, onGenerated, loadVersionId, onDoneEdit
   })
   const [newHead, setNewHead] = useState('')
   const [newHeadTransport, setNewHeadTransport] = useState(false)
+  const [newHeadDescription, setNewHeadDescription] = useState('')
   const [toggleHead, setToggleHead] = useState<FeeHead | null>(null)
   const [draft, setDraft] = useState<Record<string, Record<string, number>>>({})
   const [hydrated, setHydrated] = useState(false)
@@ -642,8 +643,8 @@ function FeeStructureTab({ cur, editable, onGenerated, loadVersionId, onDoneEdit
     const name = properName(newHead.trim())
     if (!name) { toast.danger('Name required', 'Enter a fee type name.'); return }
     if (heads.some((h) => h.name.toLowerCase() === name.toLowerCase())) { toast.danger('Already exists', `${name} is already a fee type.`); return }
-    createHead.mutate({ name, isTransportFeeHead: newHeadTransport }, {
-      onSuccess: () => { setNewHead(''); setNewHeadTransport(false) },
+    createHead.mutate({ name, isTransportFeeHead: newHeadTransport, description: newHeadDescription.trim() || undefined }, {
+      onSuccess: () => { setNewHead(''); setNewHeadTransport(false); setNewHeadDescription('') },
       onError: (err) => { toast.danger('Could not add fee type', err instanceof Error ? err.message : 'Please try again.') },
     })
   }
@@ -1079,6 +1080,15 @@ function FeeStructureTab({ cur, editable, onGenerated, loadVersionId, onDoneEdit
                     Add fee type
                   </Btn>
                 </div>
+                <div style={{ width: '100%' }}>
+                  <Field label="Description (optional)" hint="Shown wherever this fee is billed, e.g. to parents">
+                    <Input
+                      value={newHeadDescription}
+                      placeholder="e.g. Annual educational trip to Mumbai"
+                      onChange={(e) => setNewHeadDescription(e.target.value)}
+                    />
+                  </Field>
+                </div>
               </div>
             ) : undefined}
           />
@@ -1102,6 +1112,16 @@ function FeeStructureTab({ cur, editable, onGenerated, loadVersionId, onDoneEdit
                         />
                       </Field>
                     </div>
+                    <div style={{ flex: '1 1 220px' }}>
+                      <Field label="Description (optional)" hint="Shown wherever this fee is billed">
+                        <Input
+                          value={newHeadDescription}
+                          placeholder="e.g. Annual educational trip to Mumbai"
+                          onChange={(e) => setNewHeadDescription(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addHead() } }}
+                        />
+                      </Field>
+                    </div>
                     <Checkbox
                       checked={newHeadTransport}
                       onChange={setNewHeadTransport}
@@ -1114,7 +1134,7 @@ function FeeStructureTab({ cur, editable, onGenerated, loadVersionId, onDoneEdit
                 )}
                 <div className="row gap6 wrap">
                   {heads.map((h) => (
-                    <div key={h.id} className="row ai-center gap4">
+                    <div key={h.id} className="row ai-center gap4" title={h.description || undefined}>
                       <Badge tone="brand">
                         {h.name}
                         {editable && (
