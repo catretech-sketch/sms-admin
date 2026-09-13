@@ -178,14 +178,14 @@ function academicReports(
       avgOf(list.map((s) => s.attendance || 0)),
     ]),
   }
-  const weak = students.filter((s) => (s.attendance ?? 100) < 75).sort((a, b) => a.attendance - b.attendance)
+  const weak = students.filter((s) => (s.attendance ?? 100) < 75).sort((a, b) => (a.attendance ?? 0) - (b.attendance ?? 0))
   const weakSpec: ReportSpec = {
     title: 'Weak-student tracker',
     subtitle: 'Students below 75% attendance flagged for remedial follow-up.',
     columns: ['Admission', 'Student', 'Class', 'Attendance %', 'Fee status'],
     align: ['l', 'l', 'l', 'r', 'l'],
     summary: [{ label: 'Flagged', value: String(weak.length) }],
-    rows: weak.map((s) => [s.adm, s.name, s.cls, s.attendance, s.feeStatus]),
+    rows: weak.map((s) => [s.adm, s.name, s.cls, s.attendance ?? 0, s.feeStatus]),
   }
   return [
     { name: 'Consolidated mark sheet', desc: markSheet ? markSheet.subtitle! : 'Subject-wise marks & grades — no exam marks entered yet.', spec: markSheet },
@@ -201,7 +201,7 @@ function attendanceReports(students: Student[], teacherRows: Teacher[], staffRow
     subtitle: 'Per-student attendance % for the period.',
     columns: ['Admission', 'Student', 'Class', 'Attendance %', 'Status'],
     align: ['l', 'l', 'l', 'r', 'l'],
-    rows: students.map((s) => [s.adm, s.name, s.cls, s.attendance, s.status]),
+    rows: students.map((s) => [s.adm, s.name, s.cls, s.attendance ?? 0, s.status]),
   }
   const classes = groupByClass(students)
   const overview: ReportSpec = {
@@ -213,14 +213,14 @@ function attendanceReports(students: Student[], teacherRows: Teacher[], staffRow
     chart: classes.map(([c, l]) => ({ label: c, value: avgOf(l.map((s) => s.attendance || 0)) })),
     rows: classes.map(([c, l]) => [c, l.length, avgOf(l.map((s) => s.attendance || 0))]),
   }
-  const chronic = students.filter((s) => (s.attendance ?? 100) < 75).sort((a, b) => a.attendance - b.attendance)
+  const chronic = students.filter((s) => (s.attendance ?? 100) < 75).sort((a, b) => (a.attendance ?? 0) - (b.attendance ?? 0))
   const chronicSpec: ReportSpec = {
     title: 'Chronic absentee list',
     subtitle: 'Students under 75% attendance — contact guardians.',
     columns: ['Admission', 'Student', 'Class', 'Attendance %', 'Guardian', 'Phone'],
     align: ['l', 'l', 'l', 'r', 'l', 'l'],
     summary: [{ label: 'Students', value: String(chronic.length) }],
-    rows: chronic.map((s) => [s.adm, s.name, s.cls, s.attendance, s.guardian, s.phone]),
+    rows: chronic.map((s) => [s.adm, s.name, s.cls, s.attendance ?? 0, s.guardian, s.phone]),
   }
   const staffSpec: ReportSpec = {
     title: 'Staff attendance report',

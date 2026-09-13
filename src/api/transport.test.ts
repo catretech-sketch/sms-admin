@@ -204,7 +204,7 @@ describe('bus trip GPS', () => {
 })
 
 describe('student transport mapping API', () => {
-  afterEach(() => { vi.unstubAllGlobals() })
+  afterEach(() => vi.unstubAllGlobals())
 
   it('setStudentTransport sends snake_case body and maps a pending response', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = []
@@ -244,6 +244,6 @@ describe('student transport mapping API', () => {
     }))
     await listTransportStudents({ status: 'pending', routeId: 'r1' })
     expect(calls[0]).toContain('status=pending')
-    expect(calls[0]).toContain('route_id=r1')
+    expect(calls[0]).toContain('routeId=r1')
   })
 })

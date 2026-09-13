@@ -34,7 +34,7 @@ import { gradeRank } from '@/lib/defaultClasses'
 import { shouldPublishGps } from '@/lib/gpsThrottle'
 import {
   useTransportSummary, useTransportFleet,
-  useBusStudents, useAssignStudentToBus, useUnassignStudentFromBus,
+  useBusStudents, useAssignStudentToBus, useUnassignStudentFromBus, useTransportStudentsList,
   useCreateBus, useTransportRoutes, useCreateRoute, useRouteStops,
   useHostelSummary, useHostelBlocks, useHostelRooms,
   useCreateHostelBlock, useCreateHostelRoom, useCreateHostelResident,
@@ -1388,6 +1388,7 @@ function BusRidersModal({ bus, onClose }: { bus: FleetBus; onClose: () => void }
   const ridersQ = useBusStudents(bus.busId)
   const { data: studentsData } = useStudents()
   const stopsQ = useRouteStops(bus.routeId ?? null)
+  const mappedQ = useTransportStudentsList()
   const assign = useAssignStudentToBus()
   const unassign = useUnassignStudentFromBus()
   const [pick, setPick] = useState('')
@@ -1396,16 +1397,33 @@ function BusRidersModal({ bus, onClose }: { bus: FleetBus; onClose: () => void }
   const riders = ridersQ.data ?? []
   const stops: RouteStop[] = stopsQ.data ?? []
   const assignedIds = useMemo(() => new Set(riders.map((r) => r.studentId)), [riders])
+  // Map of studentId -> the bus number they're currently mapped to elsewhere (any bus but this one),
+  // so a student can't be silently moved off another bus by picking them here.
+  const mappedElsewhere = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const row of mappedQ.data ?? []) {
+      if (row.busId && row.busId !== bus.busId) m.set(row.studentId, row.busNo || 'another bus')
+    }
+    return m
+  }, [mappedQ.data, bus.busId])
   const available = useMemo(
-    () => (studentsData ?? []).filter((s) => !assignedIds.has(s.id)).sort((a, b) => a.name.localeCompare(b.name)),
-    [studentsData, assignedIds],
+    () => (studentsData ?? [])
+      .filter((s) => !assignedIds.has(s.id) && !mappedElsewhere.has(s.id))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    [studentsData, assignedIds, mappedElsewhere],
   )
+  const hiddenCount = mappedElsewhere.size
   const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Please try again.')
 
   useEffect(() => { setPickStop('') }, [pick])
 
   const add = () => {
     if (!pick) return
+    const otherBus = mappedElsewhere.get(pick)
+    if (otherBus) {
+      toast.danger('Already mapped', `This student is already mapped to Bus ${otherBus}. Unassign them there first.`)
+      return
+    }
     assign.mutate({ busId: bus.busId, studentId: pick, stopId: pickStop || null }, {
       onSuccess: () => { toast.success('Rider added', 'Student assigned to this bus.'); setPick(''); setPickStop('') },
       onError: (e) => toast.danger('Could not assign', errMsg(e)),
@@ -1431,6 +1449,11 @@ function BusRidersModal({ bus, onClose }: { bus: FleetBus; onClose: () => void }
                 ...available.map((s) => ({ value: s.id, label: `${s.name}${s.cls ? ` · ${s.cls}` : ''}` })),
               ]} />
           </Field>
+          {hiddenCount > 0 && (
+            <div className="t-xs muted3">
+              {hiddenCount} student{hiddenCount === 1 ? '' : 's'} hidden — already mapped to another bus. Unassign them there first to move them here.
+            </div>
+          )}
           {stops.length > 0 && (
             <Field label="Boarding / alighting stop" hint="The stop this student uses">
               <Select value={pickStop} onChange={(e) => setPickStop(e.target.value)}

@@ -54,6 +54,7 @@ const VIEWS: Record<string, ViewMeta> = {
   'school.transport': { title: 'Transport', sub: 'Routes, buses & live GPS', phase: 3 },
   'school.transport.routes': { title: 'Transport routes', sub: 'Route builder', phase: 3 },
   'school.transport.buses': { title: 'Buses', sub: 'Fleet, routes & drivers', phase: 3 },
+  'school.transport.students': { title: 'Transport students', sub: 'Mapping status & bus assignment', phase: 3 },
   'school.gps': { title: 'Live bus tracking', phase: 3 },
 
   // Administration (Phase 5)

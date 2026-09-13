@@ -2,14 +2,14 @@
    SchoolMate — Students (SIS) list + Student 360 profile.
    Phase 1 flagship screen. Live /students list + create.
    ============================================================ */
-import { useEffect, useMemo, useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
 import {
   PageHead, Card, CardHead, Btn, Badge, Avatar, Search, Select,
   Drawer, Tabs, Icon, Empty, Progress, Spark, Bars, DataTable,
   type Column, type BadgeTone,
 } from '@/components/ui'
-import { gateRole } from '@/lib/gating'
+import { gateRole, tierIncludes } from '@/lib/gating'
 import { useStudents, useStudentsPage, useStudent } from '@/api/hooks/useStudents'
 import { useExams } from '@/api/hooks/useExams'
 import { useExamPapers } from '@/api/hooks/useExamPapers'
@@ -33,7 +33,21 @@ import { useFeePayments } from '@/api/hooks/useFeePayments'
 import { buildStudentTimeline } from '@/lib/studentTimeline'
 import { monthlyBreakdown, monthlySeriesForKeys, academicYearMonthKeys, academicYearStart, monthDailyGrid } from '@/api/studentAttendance'
 import { type AttendanceStatus } from '@/api/attendance'
-import type { Student, FeeStatus, Role, Exam } from '@/types'
+import { parseCsvText, parseXlsxBuffer, type ParsedFile, type ParsedRow } from '@/lib/importFileParse'
+import { BULK_IMPORT_FIELDS, suggestColumnMapping } from '@/lib/importColumnMapping'
+import { validateStudentForm } from '@/lib/studentValidation'
+import { isDuplicateValue, normalizePhoneDigits, normalizeEmailKey } from '@/lib/validation'
+import { errorRowsToCsv, csvHeaderOnly, type ErrorReportRow } from '@/lib/importErrorReport'
+import { downloadTextFile } from '@/lib/feeExport'
+import { toDateInputValue } from '@/lib/dateInput'
+import { buildStudentFromRow, toBulkImportRowPayload, parseBulkGender, type BulkStudentRow, type BulkImportRowPayload } from '@/lib/studentMapping'
+import { useBulkImportStudents, isTransportFailedRow, BATCH_SIZE } from '@/api/hooks/useBulkImportStudents'
+import type { BulkImportRowResult } from '@/api/bulkImportStudents'
+import { useTransportRoutes, useRouteStopsByRoute } from '@/api/hooks/useOperations'
+import { useFeeHeads } from '@/api/hooks/useFeeHeads'
+import { useSchoolHouses } from '@/api/hooks/useSchoolHouses'
+import type { Student, FeeStatus, Role, Exam, FeeHead } from '@/types'
+import type { TransportRoute, RouteStop } from '@/api/transport'
 import type { SchoolClass } from '@/api/classes'
 import { DEFAULT_GRADES } from '@/lib/defaultClasses'
 
@@ -69,27 +83,514 @@ export function canEdit(role: Role): boolean {
   return gateRole(role) === 'admin' || role === 'principal' || role === 'vice_principal'
 }
 
+/** Stricter than canEdit(): POST /students/bulk-import/batch is guarded by the backend's
+ *  Principal-tier policy, whereas POST /students only needs the broader staff check that
+ *  also admits vice_principal. Gating the menu entry on the real requirement stops an
+ *  unauthorized admin from completing the entire 4-step wizard only to eat a 403 on Start
+ *  Import. (The hook ALSO handles a 403 as non-retryable — this gate is the first line,
+ *  never the only one, since the server stays the authority.) */
+export function canBulkImport(role: Role): boolean {
+  return gateRole(role) === 'admin' || role === 'principal'
+}
+
 /* ============================================================
    Bulk-import wizard (upload → map → done)
    ============================================================ */
-function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const toast = useToast()
-  const [step, setStep] = useState(0)
-  const steps = ['Upload', 'Map columns', 'Done']
+const IMPORT_ROW_CAP = 10000
 
-  const reset = () => { setStep(0); onClose() }
-  const finish = () => { toast.success('Import complete', '36 students imported, 0 errors.'); reset() }
+/** Reads a File as text via FileReader (works in jsdom test envs too, unlike File.prototype.text()). */
+function readFileAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read file'))
+    reader.readAsText(file)
+  })
+}
+
+/** Reads a File as an ArrayBuffer via FileReader (works in jsdom test envs too, unlike File.prototype.arrayBuffer()). */
+function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as ArrayBuffer)
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read file'))
+    reader.readAsArrayBuffer(file)
+  })
+}
+
+/** Same class-name lookup studentAdd.tsx's resolveClass() uses, kept local since it isn't
+ *  exported — bulk rows resolve their raw "Class + Section" cell against live classes the
+ *  same way a single Add/Edit save does. */
+function resolveImportClass(classes: SchoolClass[], classKey: string): { grade: string; section: string; cls: string } {
+  const key = classKey.trim()
+  const match = classes.find((c) => (c.name || `${c.grade}-${c.section}`).trim() === key)
+  if (match) {
+    return { grade: match.grade || key, section: match.section || '', cls: match.name || `${match.grade}-${match.section}` }
+  }
+  const dash = key.lastIndexOf('-')
+  if (dash > 0) return { grade: key.slice(0, dash), section: key.slice(dash + 1), cls: key }
+  return { grade: key, section: '', cls: key }
+}
+
+/** True only when the row's raw class cell resolves to a REAL class in the fetched roster of
+ *  classes (same match rule resolveImportClass's first branch uses) — a garbage class string
+ *  like "99-Z" or "Grade Five" that merely gets dash-split into a display label does not
+ *  count as existing. Blank input is treated as non-existent (the required-field check on
+ *  `cls` already flags blank separately). */
+function importClassExists(classes: SchoolClass[], classKey: string): boolean {
+  const key = classKey.trim()
+  if (!key) return false
+  return classes.some((c) => (c.name || `${c.grade}-${c.section}`).trim() === key)
+}
+
+/* ---------- reference-data resolution (spec §6: Class / House / Route / Stop) ----------
+   A real admin's spreadsheet holds NAMES ("Route 4 — North", "Ruby", "Gandhi Chowk"), not
+   GUIDs, and the wizard's own column labels ("Transport Route", "Pickup Stop", "House")
+   promise exactly that. Every one of these resolvers therefore accepts either the raw id
+   or the display name, case/whitespace-insensitively, and returns null when the cell
+   matches NOTHING in the already-loaded reference list — which Preview turns into a row
+   Error instead of shipping unresolvable text to the server as if it were an ID. */
+function refKey(value: string): string {
+  return (value ?? '').trim().toLowerCase()
+}
+
+export function resolveImportHouse(houses: string[], value: string): string | null {
+  const key = refKey(value)
+  if (!key) return null
+  return houses.find((h) => refKey(h) === key) ?? null
+}
+
+export function resolveImportRoute(routes: TransportRoute[], value: string): TransportRoute | null {
+  const key = refKey(value)
+  if (!key) return null
+  return routes.find((r) => refKey(r.id) === key) ?? routes.find((r) => refKey(r.name) === key) ?? null
+}
+
+/** Stops are only ever looked up WITHIN one already-resolved route's stop list, so a stop
+ *  that exists on a different route can never satisfy a row — that is the
+ *  "stop-belongs-to-route" half of spec §6. */
+export function resolveImportStop(stops: RouteStop[], value: string): RouteStop | null {
+  const key = refKey(value)
+  if (!key) return null
+  return stops.find((s) => refKey(s.id) === key) ?? stops.find((s) => refKey(s.name) === key) ?? null
+}
+
+export function resolveImportFeeHead(feeHeads: FeeHead[], value: string): FeeHead | null {
+  const key = refKey(value)
+  if (!key) return null
+  return feeHeads.find((f) => refKey(f.id) === key)
+    ?? feeHeads.find((f) => refKey(f.name) === key)
+    ?? feeHeads.find((f) => refKey(f.code ?? '') === key)
+    ?? null
+}
+
+/** Every reference list the Preview step validates against and the payload builder resolves
+ *  IDs from — all already loaded by the drawer's own queries, none fetched per row. */
+export interface BulkImportRefs {
+  classes: SchoolClass[]
+  houses: string[]
+  routes: TransportRoute[]
+  stopsByRoute: Record<string, RouteStop[]>
+  feeHeads: FeeHead[]
+}
+
+export const EMPTY_BULK_IMPORT_REFS: BulkImportRefs = {
+  classes: [], houses: [], routes: [], stopsByRoute: {}, feeHeads: [],
+}
+
+/** Every non-rowNumber field of BulkStudentRow (studentMapping.ts) — used so
+ *  buildBulkRowRecord always returns a FULL BulkStudentRow-shaped record (every key present,
+ *  defaulting to '' when the admin didn't map a column to it) rather than a sparse partial
+ *  object. buildStudentFromRow dereferences these fields unguarded (e.g. row.phone.trim()),
+ *  so a missing key would throw once Task 15 wires this record into it. */
+const BULK_ROW_FIELD_KEYS: (keyof Omit<BulkStudentRow, 'rowNumber'>)[] = [
+  'admissionNo', 'firstName', 'lastName', 'section', 'gender', 'dob', 'phone', 'email',
+  'fatherName', 'fatherPhone', 'fatherEmail', 'fatherOccupation',
+  'motherName', 'motherPhone', 'motherEmail', 'motherOccupation',
+  'bloodGroup', 'house', 'religion', 'category', 'caste', 'motherTongue', 'languages',
+  'lastSchool', 'address', 'academicYear', 'admissionDate', 'status',
+  'transportOptedIn', 'transportRouteId', 'transportStopId', 'transportFeeHeadId',
+]
+
+/** Builds one row's field-key → cell-value record from a raw parsed row + the index-keyed
+ *  column mapping (Task 13). Starts from a FULL BulkStudentRow-shaped record (every field
+ *  defaulted to '') so every row shares the same key set (needed so errorRowsToCsv's header
+ *  row is consistent, and so any field the admin didn't map is still safely present as ''
+ *  rather than absent). */
+export function buildBulkRowRecord(cells: string[], mapping: Record<number, string | null>): Record<string, string> {
+  const rec: Record<string, string> = {}
+  for (const key of BULK_ROW_FIELD_KEYS) rec[key] = ''
+  cells.forEach((cell, index) => {
+    const key = mapping[index]
+    if (key) rec[key] = (cell ?? '').trim()
+  })
+  return rec
+}
+
+/** Groups rows by phone+email so duplicate entries within the SAME uploaded file (not the
+ *  live roster — that's a separate check) get flagged. Rows with neither phone nor email
+ *  never match each other (blank key), so they don't falsely collide. */
+function bulkFileDuplicateKey(record: Record<string, string>): string {
+  const phone = normalizePhoneDigits(record.phone)
+  const email = normalizeEmailKey(record.email)
+  if (!phone && !email) return ''
+  return `${phone}|${email}`
+}
+
+/** Normalizes a bulk-file "transport opted in" cell to the exact 'yes' string
+ *  validateStudentForm's `f.transportOptedIn === 'yes'` check expects — CSV data commonly
+ *  spells this 'Yes', 'TRUE', 'Y', or with stray whitespace, none of which the shared
+ *  validator (also used by single Add Student, which must stay behavior-identical) will
+ *  recognize on its own. Only affects the copy of the value passed into validation, not the
+ *  row's original record. */
+function normalizeBulkTransportOptedIn(value: string): string {
+  const v = (value ?? '').trim().toLowerCase()
+  return (v === 'yes' || v === 'y' || v === 'true' || v === '1') ? 'yes' : value
+}
+
+export interface BulkPreviewRow {
+  rowNumber: number
+  record: Record<string, string>
+  errors: Record<string, string>
+}
+
+export interface BulkPreview {
+  rows: BulkPreviewRow[]
+  validRows: BulkPreviewRow[]
+  errorRows: BulkPreviewRow[]
+}
+
+/** Runs the same field validation single Add Student uses (validateStudentForm), plus bulk-only
+ *  checks it has no concept of: an admission-number conflict (both against the live roster and
+ *  within the same uploaded file), a duplicate-within-the-uploaded-file check (same phone+email
+ *  on more than one row), reference-existence checks for Class / House / Route / Stop /
+ *  Transport Fee Head (spec §6), and stricter parses for the free-text dob and gender cells
+ *  than a bare "is it non-empty" required check can give. Exported for direct unit testing —
+ *  pure/computation-only, never calls a create or transport API. */
+export function buildBulkPreview(
+  parsedRows: ParsedRow[],
+  columnMapping: Record<number, string | null>,
+  refs: BulkImportRefs,
+  roster: Student[],
+  opsEnabled: boolean,
+): BulkPreview {
+  const records = parsedRows.map((row) => buildBulkRowRecord(row.cells, columnMapping))
+  const validationRoster = roster.map((s) => ({ id: s.id, email: s.email, phone: s.phone }))
+  const admRoster = roster.map((s) => ({ id: s.id, value: s.adm }))
+  const fileKeys = records.map(bulkFileDuplicateKey)
+  // Map (not Set) so the collision message can name the earlier row it duplicates.
+  const seenFileKeys = new Map<string, number>()
+  const seenAdmissionNos = new Map<string, number>()
+
+  const rows: BulkPreviewRow[] = records.map((record, i) => {
+    // The ORIGINAL file line number (header counted as line 1), threaded through the parser
+    // — never a sequential index over the already-header/blank-filtered rows, which would
+    // point the admin's error report at the wrong line of their own spreadsheet (spec §9).
+    const rowNumber = parsedRows[i].lineNumber
+    const form: Record<string, string> = {
+      ...record,
+      cls: record.section ?? '',
+      transportOptedIn: normalizeBulkTransportOptedIn(record.transportOptedIn ?? ''),
+    }
+    const errors = validateStudentForm({
+      form,
+      files: {},
+      roster: validationRoster,
+      existingId: undefined,
+      transportEnabled: opsEnabled,
+    })
+
+    const admissionNo = (record.admissionNo ?? '').trim()
+    if (admissionNo) {
+      const admKey = admissionNo.toUpperCase()
+      if (isDuplicateValue(admissionNo, admRoster, (v) => (v ?? '').trim().toUpperCase())) {
+        errors.admissionNo = 'Another student already uses this admission number'
+      } else if (seenAdmissionNos.has(admKey)) {
+        errors.admissionNo = `Duplicate admission number — same as row ${seenAdmissionNos.get(admKey)}`
+      } else {
+        seenAdmissionNos.set(admKey, rowNumber)
+      }
+    }
+
+    const sectionValue = (record.section ?? '').trim()
+    if (sectionValue && !errors.cls && !importClassExists(refs.classes, sectionValue)) {
+      errors.cls = 'Class not found — check spelling or add it in Academics first'
+    }
+
+    // dob: `required()` alone only proves the cell is non-empty. Anything that does not
+    // actually parse becomes '' in toDateInputValue() downstream and is sent as dob: null,
+    // which the server then rejects — Preview would have said "Valid" and the final counts
+    // would not add up. Validate with the SAME parser the payload uses, so the two agree.
+    const dobValue = (record.dob ?? '').trim()
+    if (dobValue && !errors.dob && !toDateInputValue(dobValue)) {
+      errors.dob = 'Invalid date of birth — use a real date such as 2015-04-23'
+    }
+
+    // gender: an uninterpretable cell must never be silently guessed (a "Female" that lands
+    // as Male is real, unnoticed data corruption).
+    const genderValue = (record.gender ?? '').trim()
+    if (genderValue && !errors.gender && !parseBulkGender(genderValue)) {
+      errors.gender = 'Invalid gender — use Male or Female'
+    }
+
+    const houseValue = (record.house ?? '').trim()
+    if (houseValue && !errors.house && !resolveImportHouse(refs.houses, houseValue)) {
+      errors.house = 'House not found — check spelling or add it in Academics → Houses first'
+    }
+
+    // Transport reference checks (spec §6). Only meaningful for a row that actually opted
+    // in, and only on the Platinum/operations tier where routes/stops exist at all.
+    if (opsEnabled && form.transportOptedIn === 'yes') {
+      const routeValue = (record.transportRouteId ?? '').trim()
+      const stopValue = (record.transportStopId ?? '').trim()
+      const feeHeadValue = (record.transportFeeHeadId ?? '').trim()
+      const route = resolveImportRoute(refs.routes, routeValue)
+      if (routeValue && !route && !errors.transportRouteId) {
+        errors.transportRouteId = 'Route not found — check spelling or add it in Transport first'
+      }
+      // A stop is only checked once its route resolved: with an unresolved/blank route
+      // there is no stop list to check against, and transportRouteId already carries the
+      // actionable error, so a second cascading message would just be noise.
+      if (stopValue && route && !errors.transportStopId
+        && !resolveImportStop(refs.stopsByRoute[route.id] ?? [], stopValue)) {
+        errors.transportStopId = 'Stop not found on this route — check spelling or add it in Transport first'
+      }
+      if (feeHeadValue && !errors.transportFeeHeadId && !resolveImportFeeHead(refs.feeHeads, feeHeadValue)) {
+        errors.transportFeeHeadId = 'Transport fee head not found — check spelling or add it in Finance first'
+      }
+    }
+
+    const key = fileKeys[i]
+    if (key) {
+      if (seenFileKeys.has(key)) {
+        errors._duplicateInFile = `Duplicate row in this file — same phone & email as row ${seenFileKeys.get(key)}`
+      } else {
+        seenFileKeys.set(key, rowNumber)
+      }
+    }
+
+    return { rowNumber, record, errors }
+  })
+
+  const validRows = rows.filter((r) => Object.keys(r.errors).length === 0)
+  const errorRows = rows.filter((r) => Object.keys(r.errors).length > 0)
+  return { rows, validRows, errorRows }
+}
+
+/** Original mapped columns + a trailing Error Reason column, for errorRowsToCsv. */
+function bulkErrorReportRows(errorRows: BulkPreviewRow[]): ErrorReportRow[] {
+  return errorRows.map((r) => ({
+    Row: String(r.rowNumber),
+    ...r.record,
+    'Error Reason': Object.values(r.errors).join('; '),
+  }))
+}
+
+/** Shapes Preview's validated rows into the exact BulkImportRowPayload[] the batch endpoint
+ *  expects. Each row's `record` is already a FULL BulkStudentRow-shaped Record<string,string>
+ *  (buildBulkRowRecord defaults every field to ''), so it's safe to spread directly into a
+ *  BulkStudentRow.
+ *
+ *  Transport is only sent as opted-in when the row's normalized transportOptedIn cell reads
+ *  'yes', and route/stop/fee-head are sent as the RESOLVED reference IDs — never the raw
+ *  cell text. A real CSV holds names, so shipping the cell verbatim as if it were a GUID
+ *  was the root cause of the batch failing server-side on data Preview had called valid.
+ *  Every row reaching here has already passed Preview's reference checks, so a resolution
+ *  miss can only mean a blank (opted-out-of-that-detail) cell, which becomes null on the
+ *  wire exactly as the single-Add save does. House is canonicalized the same way, so the
+ *  stored value matches the school's House catalog rather than the file's spelling. */
+export function buildBulkImportPayloads(validRows: BulkPreviewRow[], refs: BulkImportRefs): BulkImportRowPayload[] {
+  return validRows.map((r) => {
+    const raw = { rowNumber: r.rowNumber, ...r.record } as BulkStudentRow
+    const row: BulkStudentRow = { ...raw, house: resolveImportHouse(refs.houses, raw.house) ?? raw.house }
+    const classInfo = resolveImportClass(refs.classes, row.section)
+    const student = buildStudentFromRow(row, classInfo)
+    const optedIn = normalizeBulkTransportOptedIn(row.transportOptedIn) === 'yes'
+    let transport: { routeId: string; stopId: string; feeHeadId: string } | null = null
+    if (optedIn) {
+      const route = resolveImportRoute(refs.routes, row.transportRouteId)
+      const stop = route ? resolveImportStop(refs.stopsByRoute[route.id] ?? [], row.transportStopId) : null
+      const feeHead = resolveImportFeeHead(refs.feeHeads, row.transportFeeHeadId)
+      transport = { routeId: route?.id ?? '', stopId: stop?.id ?? '', feeHeadId: feeHead?.id ?? '' }
+    }
+    return toBulkImportRowPayload(student, transport, row.rowNumber)
+  })
+}
+
+/** Header-only CSV template matching the wizard's own mappable column labels, so a file built
+ *  from it auto-maps end to end with no manual column matching. Omits Admission Number — like
+ *  Roll Number, it's server-auto-generated; the column stays mappable for schools migrating
+ *  legacy data with existing admission numbers, but a fresh template shouldn't invite filling it. */
+export function bulkImportTemplateCsv(): string {
+  const labels = BULK_IMPORT_FIELDS.filter((f) => f.key !== 'admissionNo').map((f) => f.label)
+  return `${csvHeaderOnly(labels)}\n`
+}
+
+function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const app = useApp()
+  const [step, setStep] = useState(0)
+  const steps = ['Upload', 'Map columns', 'Preview', 'Import']
+  const [upload, setUpload] = useState<{ fileName: string; parsed: ParsedFile } | null>(null)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  // Keyed by column INDEX (not header text) so two uploaded columns that share the
+  // same literal header name still get independent mapping entries instead of
+  // silently collapsing onto one.
+  const [columnMapping, setColumnMapping] = useState<Record<number, string | null>>({})
+
+  const opsEnabled = tierIncludes(app.plan, 'operations')
+  const classesQ = useClasses()
+  const rosterQ = useStudents({ enabled: open })
+  const housesQ = useSchoolHouses()
+  // Transport/fee reference data for the Route / Stop / Transport Fee Head columns. These
+  // are the SAME hooks the single Add Student form uses to populate its own route/stop/fee
+  // dropdowns — bulk import validates against exactly what single Add would let you pick.
+  const routesQ = useTransportRoutes()
+  const feeHeadsQ = useFeeHeads()
+  const routeIds = useMemo(() => (routesQ.data ?? []).map((r) => r.id), [routesQ.data])
+  const { stopsByRoute, isReady: stopsReady } = useRouteStopsByRoute(routeIds)
+
+  const refs = useMemo<BulkImportRefs>(() => ({
+    classes: classesQ.data ?? [],
+    houses: housesQ.data ?? [],
+    routes: routesQ.data ?? [],
+    stopsByRoute,
+    feeHeads: feeHeadsQ.data ?? [],
+  }), [classesQ.data, housesQ.data, routesQ.data, stopsByRoute, feeHeadsQ.data])
+
+  // Transport reference queries only run on the operations tier (useTransportRoutes is
+  // `enabled: ops`), so off-tier they never reach isSuccess — treat them as ready there,
+  // since no transport validation runs either.
+  const transportRefsReady = !opsEnabled || (routesQ.isSuccess && feeHeadsQ.isSuccess && stopsReady)
+  const refsReady = rosterQ.isSuccess && classesQ.isSuccess && housesQ.isSuccess && transportRefsReady
+  const refsError = rosterQ.isError || classesQ.isError || housesQ.isError
+    || (opsEnabled && (routesQ.isError || feeHeadsQ.isError))
+  const retryRefs = () => {
+    if (rosterQ.isError) void rosterQ.refetch()
+    if (classesQ.isError) void classesQ.refetch()
+    if (housesQ.isError) void housesQ.refetch()
+    if (opsEnabled && routesQ.isError) void routesQ.refetch()
+    if (opsEnabled && feeHeadsQ.isError) void feeHeadsQ.refetch()
+  }
+
+  // Gated on rosterQ.isSuccess (not just rosterQ.data ?? []) so Preview never computes counts
+  // against a still-loading roster — this drawer's useStudents({ enabled: open }) uses a
+  // different query key than the parent list's useStudentsPage, so it's genuinely cold when
+  // the drawer opens; without this gate every row would silently pass as Valid (roster-based
+  // duplicate/admission checks skipped) during that window.
+  // Also gated on classesQ.isSuccess for the same reason: an empty/not-yet-loaded classes
+  // array reads as "no classes match" to importClassExists, which would falsely flag every
+  // row's class as not found while classes are still loading (or leave that false-invalid
+  // state permanently if the classes query ever errors).
+  // The same gate now also covers the House / Route / Stop / Fee-head reference lists that
+  // Preview validates against: an empty-because-still-loading reference list reads as
+  // "nothing matches", which would falsely flag every row.
+  const preview = useMemo<BulkPreview | null>(() => {
+    if (step !== 2 || !upload || !refsReady) return null
+    return buildBulkPreview(upload.parsed.rows, columnMapping, refs, rosterQ.data ?? [], opsEnabled)
+  }, [step, upload, columnMapping, refs, refsReady, rosterQ.data, opsEnabled])
+
+  const bulkImport = useBulkImportStudents()
+  // Snapshot of the SUBMITTED rows' original mapped-column data, keyed by rowNumber, captured
+  // at startImport (from preview.validRows — the only rows ever sent to the batch endpoint).
+  // Needed because `preview` itself goes back to null once step advances past 2 (its useMemo
+  // is gated on step === 2), so by the time Complete renders in step 3 the original row data
+  // would otherwise be unrecoverable for the final error report / skipped-row list.
+  const importedRowRecordsRef = useRef<Map<number, Record<string, string>>>(new Map())
+  const [showSkippedList, setShowSkippedList] = useState(false)
+
+  // True only while the hook's import loop is actively iterating batches (its own explicit
+  // isRunning signal) — never inferred from a processed/total count comparison, since a
+  // short/partial server response (processed < rows sent) would otherwise leave that
+  // comparison stuck true forever with no outstanding request, permanently locking the UI.
+  // Matches the initial (not running) state as "not in flight" so the drawer stays closable
+  // before Start Import is clicked, and also covers the retry() round-trip so Retry can't be
+  // double-clicked into two concurrent runs.
+  const importInFlight = bulkImport.isRunning
+  const totalBatches = Math.max(1, Math.ceil(bulkImport.progress.total / BATCH_SIZE))
+
+  // Resets wizard state and returns to Step 1 WITHOUT closing the drawer — used by both the
+  // drawer's own close/backdrop (which also calls onClose, via `reset` below) and the
+  // Complete screen's "Import Another File" action (which must NOT close the drawer).
+  const resetToUpload = () => {
+    setStep(0); setUpload(null); setUploadError(null); setColumnMapping({})
+    bulkImport.resetImport()
+    importedRowRecordsRef.current = new Map()
+    setShowSkippedList(false)
+  }
+  const reset = () => { resetToUpload(); onClose() }
+
+  const startImport = () => {
+    if (!preview || preview.validRows.length === 0) return
+    importedRowRecordsRef.current = new Map(preview.validRows.map((r) => [r.rowNumber, r.record]))
+    const rows = buildBulkImportPayloads(preview.validRows, refs)
+    setStep(3)
+    void bulkImport.runImport(rows)
+  }
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setUploadError(null)
+    try {
+      const isXlsx = /\.xlsx$/i.test(file.name)
+      // NOTE: parseXlsxBuffer relies on ExcelJS's eachRow with the default
+      // includeEmpty:false — a worksheet whose literal row 1 is blank will
+      // shift its real header row into the data set. We can't detect that
+      // case reliably here, so we guard the visible symptom instead: zero
+      // detected headers surfaces as an upload error below rather than
+      // silently treating data rows as headerless columns.
+      const parsed = isXlsx
+        ? await parseXlsxBuffer(await readFileAsArrayBuffer(file))
+        : parseCsvText(await readFileAsText(file))
+      if (parsed.headers.length === 0) {
+        setUploadError('Could not detect column headers in this file. Check that the first row contains column names and try again.')
+      } else if (parsed.rows.length > IMPORT_ROW_CAP) {
+        setUploadError(`This file exceeds the maximum of 10,000 rows (found ${parsed.rows.length.toLocaleString()}). Split it into smaller files and try again.`)
+      }
+      setUpload({ fileName: file.name, parsed })
+      const suggestedByHeader = suggestColumnMapping(parsed.headers)
+      const suggestedByIndex: Record<number, string | null> = {}
+      parsed.headers.forEach((header, index) => { suggestedByIndex[index] = suggestedByHeader[header] ?? null })
+      setColumnMapping(suggestedByIndex)
+    } catch {
+      setUpload(null)
+      setUploadError('Could not read this file. Check that it is a valid CSV or XLSX file and try again.')
+    }
+  }
+
+  const requiredFields = BULK_IMPORT_FIELDS.filter((f) => f.required)
+  const missingRequired = requiredFields.some((f) => !Object.values(columnMapping).includes(f.key))
+  const canContinue = step === 0 ? (!!upload && !uploadError) : step === 1 ? !missingRequired : true
+  const canStartImport = !!preview && preview.validRows.length > 0
+
+  // Done means the loop actually finished running (isRunning is the real, explicit signal —
+  // see the importInFlight comment above) without pausing on a failure. Deliberately not
+  // `processed >= total`: that comparison can under-count forever on a short/partial batch
+  // response even though the loop itself is finished, which would leave the drawer showing
+  // neither a Retry nor a Done control.
+  const importDone = bulkImport.progress.total > 0 && !bulkImport.isRunning && bulkImport.pausedAtBatch == null
 
   return (
     <Drawer
-      open={open} onClose={reset} icon="upload"
+      // Genuinely un-closable (not just visually dimmed) while a batch round-trip is in
+      // flight: onClose is omitted entirely, so the header's X button doesn't render, Esc
+      // is a no-op, and a backdrop click is a no-op too.
+      open={open} onClose={importInFlight ? undefined : reset} icon="upload"
       title="Bulk import students" sub={`Step ${step + 1} of ${steps.length} · ${steps[step]}`}
       footer={
         <div className="row gap8 jc-between">
-          <Btn variant="ghost" disabled={step === 0} onClick={() => setStep((s) => Math.max(0, s - 1))}>Back</Btn>
-          {step < steps.length - 1
-            ? <Btn variant="primary" iconRight="arrowRight" onClick={() => setStep((s) => s + 1)}>Continue</Btn>
-            : <Btn variant="primary" icon="check" onClick={finish}>Finish import</Btn>}
+          <Btn variant="ghost" disabled={step === 0 || step === 3} onClick={() => setStep((s) => Math.max(0, s - 1))}>Back</Btn>
+          {step < 2 && (
+            <Btn variant="primary" iconRight="arrowRight" disabled={!canContinue} onClick={() => setStep((s) => s + 1)}>Continue</Btn>
+          )}
+          {step === 2 && (
+            <Btn variant="primary" icon="check" disabled={!canStartImport || importInFlight} onClick={startImport}>Start Import</Btn>
+          )}
+          {/* No Retry after an authorization failure — retrying a 403 can only fail again. */}
+          {step === 3 && bulkImport.canRetry && (
+            <Btn variant="primary" icon="refresh" disabled={importInFlight} onClick={() => void bulkImport.retry()}>Retry Import</Btn>
+          )}
         </div>
       }
     >
@@ -104,35 +605,277 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
 
       {step === 0 && (
         <div className="col gap12">
-          <div className="sm-empty" style={{ border: '1px dashed var(--border)', borderRadius: 12 }}>
+          <label className="sm-empty" style={{ border: '1px dashed var(--border)', borderRadius: 12, cursor: 'pointer', position: 'relative' }}>
+            <input
+              type="file"
+              accept=".csv,.xlsx"
+              onChange={handleFile}
+              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+            />
             <div className="sm-empty-ic"><Icon name="upload" size={26} /></div>
             <div className="sm-empty-title">Drop your CSV / XLSX here</div>
-            <div className="sm-empty-body">Or use our template (Name, Class, Guardian, Phone…). Max 5,000 rows.</div>
-            <div style={{ marginTop: 16 }}><Btn variant="secondary" icon="download">Download template</Btn></div>
+            <div className="sm-empty-body">Or use our template (Name, Class, Guardian, Phone…). Max 10,000 rows.</div>
+          </label>
+          {/* Deliberately OUTSIDE the <label>: inside it, a click was swallowed by the
+              label's default behaviour and just reopened the file picker — the button
+              looked wired but downloaded nothing. */}
+          <div className="row jc-center">
+            <Btn
+              variant="secondary"
+              icon="download"
+              onClick={() => downloadTextFile('student-import-template.csv', bulkImportTemplateCsv())}
+            >
+              Download template
+            </Btn>
           </div>
-          <div className="row ai-center gap8 t-sm muted"><Icon name="doc" size={14} />students_2026.csv · 36 rows detected</div>
+          {upload && (
+            <div className="row ai-center gap8 t-sm muted">
+              <Icon name="doc" size={14} />
+              <span>{upload.fileName}</span>
+              <span>Rows detected: {upload.parsed.rows.length}</span>
+            </div>
+          )}
+          {uploadError && (
+            <div className="sm-err row ai-center gap8"><Icon name="alert" size={14} />{uploadError}</div>
+          )}
         </div>
       )}
 
-      {step === 1 && (
+      {step === 1 && upload && (
         <div className="col gap10">
           <div className="muted t-sm">Match spreadsheet columns to SchoolMate fields.</div>
-          {[['Column A', 'Name'], ['Column B', 'Class'], ['Column C', 'Guardian'], ['Column D', 'Phone']].map(([col, field]) => (
-            <div key={col} className="row ai-center gap12">
-              <Badge tone="neutral">{col}</Badge>
-              <Icon name="arrowRight" size={14} />
-              <Select style={{ flex: 1 }} options={['Name', 'Class', 'Guardian', 'Phone', 'Admission no', 'Ignore']} defaultValue={field} />
-            </div>
-          ))}
+          {upload.parsed.headers.map((header, index) => {
+            const mappedKey = columnMapping[index] ?? ''
+            const mappedField = BULK_IMPORT_FIELDS.find((f) => f.key === mappedKey)
+            return (
+              <div key={index} className="row ai-center gap12">
+                <Badge tone="neutral">{header}</Badge>
+                <Icon name="arrowRight" size={14} />
+                <Select
+                  style={{ flex: 1 }}
+                  options={[
+                    { value: '', label: 'Ignore' },
+                    ...BULK_IMPORT_FIELDS.map((f) => ({ value: f.key, label: f.label })),
+                  ]}
+                  value={mappedKey}
+                  onChange={(e) => setColumnMapping((prev) => ({ ...prev, [index]: e.target.value || null }))}
+                />
+                {mappedField && (
+                  <Badge tone={mappedField.required ? 'brand' : 'neutral'}>{mappedField.required ? 'Required' : 'Optional'}</Badge>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
 
       {step === 2 && (
-        <Empty
-          icon="checkCircle"
-          title="Ready to import"
-          body="36 valid rows · 0 errors · 0 duplicates. Click Finish to enrol all students."
-        />
+        // Error branch FIRST: without it, a failed roster/classes/reference query left this
+        // step showing "Preparing preview…" forever, with no message and no way out.
+        refsError ? (
+          <div className="col gap12">
+            <div className="sm-err col gap4">
+              <div className="row ai-center gap8">
+                <Icon name="alert" size={14} />
+                <span className="fw6">Could not load the data needed to check this file</span>
+              </div>
+              <div className="t-xs">
+                Preview compares every row against your live students, classes, houses and transport
+                routes. One of those could not be loaded, so the file cannot be checked yet.
+              </div>
+            </div>
+            <div className="row"><Btn variant="secondary" icon="refresh" onClick={retryRefs}>Retry</Btn></div>
+          </div>
+        ) : rosterQ.isLoading ? (
+          <div className="t-sm muted">Loading roster…</div>
+        ) : classesQ.isLoading ? (
+          <div className="t-sm muted">Loading classes…</div>
+        ) : preview === null ? (
+          <div className="t-sm muted">Preparing preview…</div>
+        ) : (
+          <div className="col gap16">
+            <div className="row gap12 wrap">
+              <Badge tone="neutral">{`Total Rows: ${preview.rows.length}`}</Badge>
+              <Badge tone="success">{`Valid: ${preview.validRows.length}`}</Badge>
+              <Badge tone="danger">{`Errors: ${preview.errorRows.length}`}</Badge>
+              {/* No Warnings badge: warnings were never implemented, so the badge could
+                  only ever read "Warnings: 0" — a fake control, removed rather than faked. */}
+            </div>
+
+            {preview.errorRows.length > 0 && (
+              <div className="col gap10">
+                <div className="row ai-center jc-between gap12">
+                  <span className="fw6 t-sm">Rows with errors</span>
+                  <Btn
+                    variant="secondary"
+                    size="sm"
+                    icon="download"
+                    onClick={() => {
+                      const csv = errorRowsToCsv(bulkErrorReportRows(preview.errorRows))
+                      downloadTextFile('bulk-import-errors.csv', csv)
+                    }}
+                  >
+                    Download Error Report
+                  </Btn>
+                </div>
+                <div className="col gap8" style={{ maxHeight: 260, overflowY: 'auto' }}>
+                  {preview.errorRows.map((r) => {
+                    const cls = resolveImportClass(refs.classes, r.record.section ?? '').cls
+                    const name = [r.record.firstName, r.record.lastName].filter(Boolean).join(' ') || `Row ${r.rowNumber}`
+                    return (
+                      <div key={r.rowNumber} className="sm-err col gap4">
+                        <div className="row ai-center gap8">
+                          <Icon name="alert" size={14} />
+                          <span className="fw6">Row {r.rowNumber} · {name}{cls ? ` · ${cls}` : ''}</span>
+                        </div>
+                        <div className="t-xs">{Object.values(r.errors).join('; ')}</div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {preview.errorRows.length === 0 && (
+              <Empty
+                icon="checkCircle"
+                title="Ready to import"
+                body={`${preview.validRows.length} valid row(s) · 0 errors. Click Start Import to enrol all students.`}
+              />
+            )}
+          </div>
+        )
+      )}
+
+      {step === 3 && (
+        <div className="col gap16">
+          <div className="t-sm fw6">{`Processed ${bulkImport.progress.processed} / ${bulkImport.progress.total}`}</div>
+          <Progress
+            value={bulkImport.progress.total > 0 ? (bulkImport.progress.processed / bulkImport.progress.total) * 100 : 0}
+          />
+          <div className="row gap12 wrap">
+            <Badge tone="success">{`Created: ${bulkImport.progress.created}`}</Badge>
+            <Badge tone="neutral">{`Skipped: ${bulkImport.progress.skipped}`}</Badge>
+            <Badge tone="warning">{`Transport pending: ${bulkImport.progress.transportPending}`}</Badge>
+            {/* Only rendered when there really are any — a permanent "Transport issues: 0"
+                would be the same fake badge the Warnings count used to be. */}
+            {bulkImport.progress.transportFailed > 0 && (
+              <Badge tone="danger">{`Transport issues: ${bulkImport.progress.transportFailed}`}</Badge>
+            )}
+          </div>
+
+          {bulkImport.pausedAtBatch != null && (
+            <div className="sm-err col gap4">
+              <div className="row ai-center gap8">
+                <Icon name="alert" size={14} />
+                <span className="fw6">
+                  {bulkImport.permissionDenied
+                    ? 'Import stopped — permission denied'
+                    : `Import paused at batch ${bulkImport.pausedAtBatch + 1} / ${totalBatches}`}
+                </span>
+              </div>
+              <div className="t-xs">
+                {bulkImport.lastError || 'This batch failed after several attempts. Check your connection and click Retry Import.'}
+              </div>
+            </div>
+          )}
+
+          {importDone && (() => {
+            const { total, created, skipped } = bulkImport.progress
+            const skippedResults = bulkImport.progress.rowResults.filter((r) => r.status === 'skipped')
+            // A row the server CREATED whose transport mapping failed outright. Not a skip
+            // (the student exists) and not "pending" (nothing is awaiting a bus) — it used
+            // to be dropped on the floor by the `status === 'skipped'` filter, taking its
+            // real explanatory `error` with it. Surfaced as its own class of problem.
+            const transportIssueResults = bulkImport.progress.rowResults.filter(isTransportFailedRow)
+            const problemResults = [...skippedResults, ...transportIssueResults]
+              .sort((a, b) => a.rowNumber - b.rowNumber)
+            const reasonFor = (r: BulkImportRowResult): string => (
+              r.status === 'skipped'
+                ? (r.error || 'Row was skipped during import.')
+                : `Student created, but transport was not assigned: ${r.error || 'transport mapping failed.'}`
+            )
+            const message = skipped === 0
+              ? `${total.toLocaleString()} students imported successfully.`
+              : `${created.toLocaleString()} students imported. ${skipped.toLocaleString()} rows were skipped.`
+            return (
+              <div className="col gap16">
+                <Empty icon="checkCircle" title={skipped === 0 ? 'Import complete' : 'Import completed with some skipped rows'} body={message} />
+                {transportIssueResults.length > 0 && (
+                  <div className="sm-err col gap4">
+                    <div className="row ai-center gap8">
+                      <Icon name="alert" size={14} />
+                      <span className="fw6">
+                        {`${transportIssueResults.length.toLocaleString()} student(s) were created but could not be mapped to transport`}
+                      </span>
+                    </div>
+                    <div className="t-xs">
+                      These students are enrolled. Assign their route and stop from Transport → Students,
+                      or re-check the route/stop values in your file. Use View Errors for the per-row reason.
+                    </div>
+                  </div>
+                )}
+                <div className="row gap8 wrap">
+                  <Btn
+                    variant="primary"
+                    icon="users"
+                    onClick={() => { app.go('school.sis'); reset() }}
+                  >
+                    View Imported Students
+                  </Btn>
+                  <Btn
+                    variant="secondary"
+                    icon="alert"
+                    disabled={problemResults.length === 0}
+                    onClick={() => setShowSkippedList((v) => !v)}
+                  >
+                    View Errors
+                  </Btn>
+                  <Btn
+                    variant="secondary"
+                    icon="download"
+                    disabled={problemResults.length === 0}
+                    onClick={() => {
+                      const rows: ErrorReportRow[] = problemResults.map((r) => ({
+                        Row: String(r.rowNumber),
+                        ...(importedRowRecordsRef.current.get(r.rowNumber) ?? {}),
+                        Outcome: r.status === 'skipped' ? 'Skipped' : 'Created — transport not assigned',
+                        'Error Reason': reasonFor(r),
+                      }))
+                      const csv = errorRowsToCsv(rows)
+                      downloadTextFile('bulk-import-final-errors.csv', csv)
+                    }}
+                  >
+                    Download Error Report
+                  </Btn>
+                  <Btn variant="secondary" icon="refresh" onClick={resetToUpload}>Import Another File</Btn>
+                  <Btn variant="ghost" onClick={reset}>Close</Btn>
+                </div>
+
+                {showSkippedList && problemResults.length > 0 && (
+                  <div className="col gap8" style={{ maxHeight: 260, overflowY: 'auto' }}>
+                    {problemResults.map((r) => {
+                      const record = importedRowRecordsRef.current.get(r.rowNumber)
+                      const name = record ? [record.firstName, record.lastName].filter(Boolean).join(' ') : ''
+                      return (
+                        <div key={`${r.status}-${r.rowNumber}`} className="sm-err col gap4">
+                          <div className="row ai-center gap8">
+                            <Icon name="alert" size={14} />
+                            <span className="fw6">Row {r.rowNumber}{name ? ` · ${name}` : ''}</span>
+                            <Badge tone={r.status === 'skipped' ? 'neutral' : 'warning'}>
+                              {r.status === 'skipped' ? 'Skipped' : 'Transport issue'}
+                            </Badge>
+                          </div>
+                          <div className="t-xs">{reasonFor(r)}</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          })()}
+        </div>
       )}
     </Drawer>
   )
@@ -339,6 +1082,7 @@ function StudentsScreen() {
   const [prevCursors, setPrevCursors] = useState<string[]>([])
 
   const editable = canEdit(app.role)
+  const bulkImportable = canBulkImport(app.role)
   const classesQ = useClasses()
 
   useEffect(() => {
@@ -450,8 +1194,12 @@ function StudentsScreen() {
         sub={sub}
         actions={editable ? (
           <>
-            <Btn variant="primary" icon="plus" onClick={() => app.go('school.sis.add')}>Add student</Btn>
-            <Btn variant="secondary" icon="upload" onClick={() => setImportOpen(true)}>Import</Btn>
+            <Btn variant="primary" icon="plus" onClick={() => app.go('school.sis.add')}>Add Student</Btn>
+            {/* Bulk import needs a stricter role than single Add (see canBulkImport):
+                showing it to a role the server will 403 is a working-looking dead end. */}
+            {bulkImportable && (
+              <Btn variant="secondary" icon="upload" onClick={() => setImportOpen(true)}>Bulk Import</Btn>
+            )}
             <Btn variant="secondary" icon="arrowRight" onClick={() => toast.info('Promote class', 'Open the year-end promotion wizard to advance students.')}>Promote class</Btn>
           </>
         ) : <Badge tone="neutral" icon="eye">View only</Badge>}

@@ -188,7 +188,7 @@ export function GeoFencePanel() {
             {loading ? (
               <span className="t-sm muted">Loading…</span>
             ) : people.length === 0 ? (
-              <Empty icon="users" title="No teachers or staff" note="Add people in SIS to monitor geo check-ins." />
+              <Empty icon="users" title="No teachers or staff" body="Add people in SIS to monitor geo check-ins." />
             ) : (
               people.map((p) => <GeoPersonRow key={p.id} person={p} />)
             )}

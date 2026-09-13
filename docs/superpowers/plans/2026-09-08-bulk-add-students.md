@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **Branch dependency:** this feature uses `IStudentTransportService`, `FeeHeads.IsTransportFeeHead`, and the Transport section of `studentAdd.tsx` — all of which exist only on the `feat/student-transport-mapping` branch/worktree in both `sms-admin` and `sms-backend`, not yet on `main`. Create this feature's worktree **from `feat/student-transport-mapping`** in both repos (not from `main`) until that branch merges; rebase onto `main` afterward.
+- **Branch dependency (resolved):** `feat/student-transport-mapping` has since been merged into `sms-backend`'s `phase-0-foundation` branch (commit `78ddc5b`, pushed to origin) — `IStudentTransportService`, `FeeHeads.IsTransportFeeHead`, and the Transport section of `studentAdd.tsx` are all present there and on `sms-admin`'s `main`. Work directly on `sms-backend`'s `phase-0-foundation` and `sms-admin`'s `main` — no separate worktree is needed for this dependency anymore.
 - Do NOT modify single Student Add, Transport, Fleet, Bus assignment, Finance, Teacher, or Attendance behavior — only extract shared functions out of `studentAdd.tsx` (behavior-preserving), never change their logic.
 - No new admission-number or roll-number algorithm — both reused byte-for-byte from `dbo.Student_Create`/`dbo.Student_RenumberClass`. Roll Number is never a bulk-import mapping target field.
 - No background-job subsystem, no new SignalR wiring. Progress comes only from real batch HTTP responses.
@@ -715,7 +715,7 @@ Every existing Add Student field except Roll Number (never mappable)."
 ### Task 5: `BulkImportBatches` migration
 
 **Files:**
-- Create: `db/Sms.Migrations/M0187_BulkImportBatches_Table.cs` (verify this number is still free in your base branch before applying — `feat/student-transport-mapping` is at M0186; bump if another migration has landed since)
+- Create: `db/Sms.Migrations/M0200_BulkImportBatches_Table.cs` (verify this number is still free before applying — `phase-0-foundation` is at M0199 as of this writing; bump if another migration has landed since)
 
 **Interfaces:**
 - Produces: table `dbo.BulkImportBatches (Id, TenantId, ImportId, BatchIndex, ResultJson, CreatedAt)`, unique index `(TenantId, ImportId, BatchIndex)` — consumed by Task 6's repository.
@@ -723,13 +723,13 @@ Every existing Add Student field except Roll Number (never mappable)."
 - [ ] **Step 1: Write the migration**
 
 ```csharp
-// db/Sms.Migrations/M0187_BulkImportBatches_Table.cs
+// db/Sms.Migrations/M0200_BulkImportBatches_Table.cs
 using FluentMigrator;
 
 namespace Sms.Migrations;
 
-[Migration(187, "Students: BulkImportBatches table for idempotent bulk-import batch processing")]
-public sealed class M0187_BulkImportBatches_Table : Migration
+[Migration(200, "Students: BulkImportBatches table for idempotent bulk-import batch processing")]
+public sealed class M0200_BulkImportBatches_Table : Migration
 {
     public override void Up()
     {
@@ -767,7 +767,7 @@ Expected: the table definition prints, and `UX_BulkImportBatches_Tenant_Import_B
 - [ ] **Step 3: Commit**
 
 ```bash
-git add db/Sms.Migrations/M0187_BulkImportBatches_Table.cs
+git add db/Sms.Migrations/M0200_BulkImportBatches_Table.cs
 git commit -m "feat(students): add BulkImportBatches table for bulk-import idempotency"
 ```
 

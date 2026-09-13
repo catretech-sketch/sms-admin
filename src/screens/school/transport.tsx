@@ -16,8 +16,9 @@ import {
 import { useStaff } from '@/api/hooks/useStaff'
 import type { TransportRoute, RouteStop, TransportBus } from '@/api/operations'
 import { RouteBuilderMap } from '@/components/maps/RouteBuilderMap'
-import { normalizeStaffCategory, staffCategoryLabel } from '@/lib/staffCategory'
+import { staffCategoryLabel } from '@/lib/staffCategory'
 import { routeMetrics } from '@/lib/routeMetrics'
+import { TransportStudentsScreen } from './transportStudents'
 
 const OPEN_ROUTE_KEY = 'sm.transport.openRouteId'
 const OPEN_BUS_KEY = 'sm.transport.openBusId'
@@ -155,6 +156,7 @@ function TransportDashboardBody() {
             <div className="row gap10 wrap" style={{ marginTop: 12 }}>
               <Btn variant="secondary" icon="pin" onClick={() => app.go('school.transport.routes')}>Route builder</Btn>
               <Btn variant="secondary" icon="bus" onClick={() => app.go('school.transport.buses')}>Fleet list</Btn>
+              <Btn variant="secondary" icon="users" onClick={() => app.go('school.transport.students')}>Students</Btn>
               {tierIncludes(app.plan, 'transport.gps') && (
                 <Btn variant="secondary" icon="zap" onClick={() => app.go('school.gps')}>Live tracking</Btn>
               )}
@@ -434,6 +436,7 @@ function BusEditModal({
   const toast = useToast()
   const routes = useTransportRoutes()
   const driversQ = useStaff({ cat: 'all' })
+  const busesQ = useTransportBuses()
   const create = useCreateBus()
   const update = useUpdateBus()
   const isEdit = bus != null
@@ -450,9 +453,29 @@ function BusEditModal({
     setConductorStaffId(bus?.conductorStaffId ?? '')
   }, [open, bus])
 
+  // Staff already driving or conducting a *different* bus — a staff member can only be
+  // committed to one bus at a time, in either role, so they're not offered here.
+  const busyElsewhere = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const b of busesQ.data ?? []) {
+      if (isEdit && b.busId === bus!.busId) continue
+      if (b.driverStaffId) m.set(b.driverStaffId, b.busNo)
+      if (b.conductorStaffId) m.set(b.conductorStaffId, b.busNo)
+    }
+    return m
+  }, [busesQ.data, isEdit, bus])
+
   async function save() {
     const trimmed = busNo.trim()
     if (!trimmed) { toast.danger('Bus number is required'); return }
+    if (driverStaffId && busyElsewhere.has(driverStaffId)) {
+      toast.danger('Driver already assigned', `This staff member already drives/conducts Bus ${busyElsewhere.get(driverStaffId)}.`)
+      return
+    }
+    if (conductorStaffId && busyElsewhere.has(conductorStaffId)) {
+      toast.danger('Conductor already assigned', `This staff member already drives/conducts Bus ${busyElsewhere.get(conductorStaffId)}.`)
+      return
+    }
     try {
       if (isEdit) {
         await update.mutateAsync({
@@ -481,7 +504,7 @@ function BusEditModal({
   }
 
   const routeOpts = routes.data ?? []
-  const driverOpts = driversQ.data ?? []
+  const driverOpts = (driversQ.data ?? []).filter((s) => !busyElsewhere.has(s.id))
   const busy = create.isPending || update.isPending
   const driverSelectOptions = [
     { value: '', label: driversQ.isLoading ? 'Loading staff…' : '— Unassigned —' },
@@ -525,6 +548,11 @@ function BusEditModal({
         <Field label="Conductor / helper (staff)" hint="Optional — a second staff member assigned to this bus">
           <Select value={conductorStaffId} onChange={(e) => setConductorStaffId(e.target.value)} options={conductorSelectOptions} disabled={driversQ.isLoading} />
         </Field>
+        {busyElsewhere.size > 0 && (
+          <div className="t-xs muted3">
+            {busyElsewhere.size} staff member{busyElsewhere.size === 1 ? '' : 's'} hidden — already driving/conducting another bus.
+          </div>
+        )}
       </div>
     </Modal>
   )
@@ -598,8 +626,17 @@ function TransportBuses() {
   )
 }
 
+function TransportStudents() {
+  return (
+    <TierGate feature="operations" title="Transport students" blurb="Student mapping status requires the Platinum Operations module.">
+      <TransportStudentsScreen />
+    </TierGate>
+  )
+}
+
 export const transportScreens: Record<string, ComponentType> = {
   'school.transport': TransportDashboard,
   'school.transport.routes': TransportRoutes,
   'school.transport.buses': TransportBuses,
+  'school.transport.students': TransportStudents,
 }

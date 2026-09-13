@@ -886,7 +886,7 @@ function FeeStructureTab({ cur, editable, onGenerated, loadVersionId, onDoneEdit
     try {
       for (const name of STARTER_FEE_HEADS) {
         if (heads.some((h) => h.name.toLowerCase() === name.toLowerCase())) continue
-        await createHead.mutateAsync({ name })
+        await createHead.mutateAsync({ name, isTransportFeeHead: name === 'Transport' })
         added += 1
       }
       toast.success(
@@ -1101,16 +1101,21 @@ function FeeStructureTab({ cur, editable, onGenerated, loadVersionId, onDoneEdit
               </div>
               <div className="col gap16" style={{ padding: 16 }}>
                 {editable && (
-                  <div className="row ai-end gap12 wrap">
-                    <div style={{ flex: '1 1 200px' }}>
-                      <Field label="Fee type" required hint="e.g. Academic, Transport, Exam">
-                        <Input
-                          value={newHead}
-                          placeholder="Type fee name…"
-                          onChange={(e) => setNewHead(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addHead() } }}
-                        />
-                      </Field>
+                  <div className="col gap8">
+                    <div className="row ai-end gap12 wrap">
+                      <div style={{ flex: '1 1 200px' }}>
+                        <Field label="Fee type" required hint="e.g. Academic, Transport, Exam">
+                          <Input
+                            value={newHead}
+                            placeholder="Type fee name…"
+                            onChange={(e) => setNewHead(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addHead() } }}
+                          />
+                        </Field>
+                      </div>
+                      <Btn variant="secondary" icon="plus" disabled={createHead.isPending || !newHead.trim()} onClick={addHead}>
+                        Add fee type
+                      </Btn>
                     </div>
                     <div style={{ flex: '1 1 220px' }}>
                       <Field label="Description (optional)" hint="Shown wherever this fee is billed">
@@ -1127,9 +1132,6 @@ function FeeStructureTab({ cur, editable, onGenerated, loadVersionId, onDoneEdit
                       onChange={setNewHeadTransport}
                       label="Mark as Transport Fee"
                     />
-                    <Btn variant="secondary" icon="plus" disabled={createHead.isPending || !newHead.trim()} onClick={addHead}>
-                      Add fee type
-                    </Btn>
                   </div>
                 )}
                 <div className="row gap6 wrap">

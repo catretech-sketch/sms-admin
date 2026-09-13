@@ -6,6 +6,7 @@
    ============================================================ */
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
+import { tierIncludes } from '@/lib/gating'
 import { useCreateStudent, useUpdateStudent } from '@/api/hooks/useStudentMutations'
 import { useStudent, useStudents } from '@/api/hooks/useStudents'
 import { nextPersonCode, personCodePrefix } from '@/lib/personCodes'
@@ -20,10 +21,7 @@ import type { SchoolClass } from '@/api/classes'
 import { listSchoolHouses } from '@/api/schoolHouses'
 import { useTransportRoutes, useRouteStops, useStudentTransport, useSetStudentTransport } from '@/api/hooks/useOperations'
 import { useFeeHeads } from '@/api/hooks/useFeeHeads'
-import {
-  required, validateAadhaar, validateEmail, validatePhone, validateFile,
-  isDuplicateValue, normalizePhoneDigits, normalizeEmailKey,
-} from '@/lib/validation'
+import { validateStudentForm } from '@/lib/studentValidation'
 import { properName, properPlace } from '@/lib/properCase'
 import { toDateInputValue } from '@/lib/dateInput'
 import { predictStudentRoll } from '@/lib/studentRoll'
@@ -57,8 +55,6 @@ const RELIGIONS = ['', 'Hindu', 'Muslim', 'Christian', 'Sikh', 'Buddhist', 'Jain
 const CATEGORIES = ['', 'General', 'OBC', 'SC', 'ST', 'EWS']
 const GENDERS = [{ value: '', label: 'Select…' }, { value: 'M', label: 'Male' }, { value: 'F', label: 'Female' }]
 const STATUSES = [{ value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }]
-
-const REQUIRED_FIELDS = ['firstName', 'lastName', 'cls', 'dob', 'gender', 'phone', 'email'] as const
 
 type Form = Record<string, string>
 type Files = Record<string, File | null>
@@ -213,6 +209,10 @@ async function persistExtras(studentId: string, student: Student, files: Files):
 function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
   const app = useApp()
   const toast = useToast()
+  /** Transport is a Platinum-only surface — every hook it feeds (useTransportRoutes,
+   *  useRouteStops, useStudentTransport, useSetStudentTransport's callers) must stay inert
+   *  for non-Platinum tenants, matching every other transport surface in this codebase. */
+  const opsEnabled = tierIncludes(app.plan, 'operations')
   const [f, setForm] = useState<Form>(INITIAL_FORM)
   const [files, setFiles] = useState<Files>(INITIAL_FILES)
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -232,22 +232,15 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
   const classNames = useClassNames()
   const [houses, setHouses] = useState<string[]>([])
 
-  useEffect(() => {
-    let cancelled = false
-    const sync = () => {
-      void listSchoolHouses()
-        .then((list) => { if (!cancelled) setHouses(list) })
-        .catch(() => { /* keep prior list */ })
-    }
-    sync()
-    window.addEventListener('focus', sync)
-    return () => {
-      cancelled = true
-      window.removeEventListener('focus', sync)
-    }
-  }, [])
-
   const transportQ = useStudentTransport(mode === 'edit' && existing ? existing.id : null)
+  /* Edit mode's transport checkbox starts at '' (falsy) and only gets its real value once
+   * transportQ resolves. If Save fires before that, f.transportOptedIn is still falsy and a
+   * real opted-in student would be sent optedIn:false — silently deleting their bus mapping.
+   * transportHydrated gates both the Save button and the save flow's transport call so that
+   * "we don't know yet" is never treated as "the admin chose No". Add mode has nothing to
+   * hydrate, and a non-Platinum tenant never queries transport at all (the query is disabled),
+   * so both count as immediately ready. */
+  const transportHydrated = mode === 'add' || !opsEnabled || transportQ.isSuccess || transportQ.isError
   const feeHeadsQ = useFeeHeads()
   const routesQ = useTransportRoutes()
   const stopsQ = useRouteStops(f.transportRouteId || null)
@@ -281,6 +274,21 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
     { value: '', label: 'Select stop…' },
     ...(stopsQ.data ?? []).map((s) => ({ value: s.id, label: s.name })),
   ], [stopsQ.data])
+
+  useEffect(() => {
+    let cancelled = false
+    const sync = () => {
+      void listSchoolHouses()
+        .then((list) => { if (!cancelled) setHouses(list) })
+        .catch(() => { /* keep prior list */ })
+    }
+    sync()
+    window.addEventListener('focus', sync)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', sync)
+    }
+  }, [])
 
   const suggestedAdm = useMemo(() => {
     const prefix = personCodePrefix(app.school.slug, 'STU')
@@ -403,37 +411,14 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
     return [{ value: '', label: houses.length ? 'Select house…' : 'No houses — add in Academics' }, ...opts]
   }, [houses, f.house])
 
-  const validate = (): Record<string, string> => {
-    const e: Record<string, string> = {}
-    for (const key of REQUIRED_FIELDS) {
-      const msg = required(f[key])
-      if (msg) e[key] = msg
-    }
-    if (!f.fatherName.trim() && !f.motherName.trim()) {
-      e.fatherName = 'Enter father or mother name'
-    }
-    const roster = rosterQ.data ?? []
-    const checks: [string, string | null][] = [
-      ['aadhaar', validateAadhaar(f.aadhaar)],
-      ['fatherAadhaar', validateAadhaar(f.fatherAadhaar)],
-      ['email', e.email ? null : validateEmail(f.email)
-        || (isDuplicateValue(f.email, roster.map((s) => ({ id: s.id, value: s.email })), normalizeEmailKey, existing?.id)
-          ? 'Another student already uses this email' : null)],
-      ['fatherEmail', validateEmail(f.fatherEmail)],
-      ['motherEmail', validateEmail(f.motherEmail)],
-      ['phone', e.phone ? null : validatePhone(f.phone)
-        || (isDuplicateValue(f.phone, roster.map((s) => ({ id: s.id, value: s.phone })), normalizePhoneDigits, existing?.id)
-          ? 'Another student already uses this phone number' : null)],
-      ['fatherPhone', validatePhone(f.fatherPhone)],
-      ['motherPhone', validatePhone(f.motherPhone)],
-    ]
-    for (const [key, msg] of checks) if (msg) e[key] = msg
-    for (const key of Object.keys(files)) {
-      const msg = validateFile(files[key])
-      if (msg) e[key] = msg
-    }
-    return e
-  }
+  const validate = (): Record<string, string> =>
+    validateStudentForm({
+      form: f,
+      files,
+      roster: (rosterQ.data ?? []).map((s) => ({ id: s.id, email: s.email, phone: s.phone })),
+      existingId: existing?.id,
+      transportEnabled: opsEnabled,
+    })
 
   const save = async () => {
     const e = validate()
@@ -458,30 +443,43 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
         return
       }
 
-      try {
-        const optedIn = f.transportOptedIn === 'yes'
-        const result = await setTransport.mutateAsync({
-          studentId: saved.id,
-          input: {
-            optedIn,
-            routeId: optedIn ? f.transportRouteId || null : null,
-            stopId: optedIn ? f.transportStopId || null : null,
-            feeHeadId: optedIn ? f.transportFeeHeadId || null : null,
-          },
-        })
-        if (optedIn && !result.assigned) {
-          toast.info(
-            'Student added. Bus assignment is pending.',
-            result.pendingReason?.message ?? 'No bus currently has available capacity on this route.',
+      if (opsEnabled) {
+        if (mode === 'edit' && !transportHydrated) {
+          // The Save button is disabled in this state (see below), so this branch is a
+          // belt-and-suspenders guard, not the primary defence. We genuinely don't know the
+          // student's prior transport status yet — sending optedIn:false here would silently
+          // delete a real StudentBusAssignments row, so skip the call entirely and tell the admin.
+          toast.danger(
+            'Student saved, transport unchanged',
+            'Could not confirm current transport status — please open Edit again to update transport.',
           )
+        } else {
+          try {
+            const optedIn = f.transportOptedIn === 'yes'
+            const result = await setTransport.mutateAsync({
+              studentId: saved.id,
+              input: {
+                optedIn,
+                routeId: optedIn ? f.transportRouteId || null : null,
+                stopId: optedIn ? f.transportStopId || null : null,
+                feeHeadId: optedIn ? f.transportFeeHeadId || null : null,
+              },
+            })
+            if (optedIn && !result.assigned) {
+              toast.info(
+                'Student added. Bus assignment is pending.',
+                result.pendingReason?.message ?? 'No bus currently has available capacity on this route.',
+              )
+            }
+          } catch (err) {
+            toast.danger(
+              'Student saved, transport failed',
+              err instanceof Error ? err.message : 'Transport mapping could not be saved to the server.',
+            )
+            app.go('school.student', { focus: saved.id })
+            return
+          }
         }
-      } catch (err) {
-        toast.danger(
-          'Student saved, transport failed',
-          err instanceof Error ? err.message : 'Transport mapping could not be saved to the server.',
-        )
-        app.go('school.student', { focus: saved.id })
-        return
       }
 
       toast.success(
@@ -649,42 +647,47 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
           </div>
         </Card>
 
-        <Card>
-          <CardHead title="Transport" icon="bus" />
-          <div className="col gap12" style={{ marginTop: 12 }}>
-            <Checkbox
-              checked={f.transportOptedIn === 'yes'}
-              onChange={(checked) => setForm((prev) => ({ ...prev, transportOptedIn: checked ? 'yes' : 'no' }))}
-              label="Uses School Transport"
-            />
-            {f.transportOptedIn === 'yes' && (
-              <>
-                <Field label="Transport Fee Head">
-                  <Select
-                    options={transportFeeHeadOptions}
-                    value={f.transportFeeHeadId}
-                    onChange={(e) => setForm((prev) => ({ ...prev, transportFeeHeadId: e.target.value }))}
-                  />
-                </Field>
-                <Field label="Route">
-                  <Select
-                    options={transportRouteOptions}
-                    value={f.transportRouteId}
-                    onChange={(e) => setForm((prev) => ({ ...prev, transportRouteId: e.target.value, transportStopId: '' }))}
-                  />
-                </Field>
-                <Field label="Pickup Stop">
-                  <Select
-                    options={transportStopOptions}
-                    value={f.transportStopId}
-                    onChange={(e) => setForm((prev) => ({ ...prev, transportStopId: e.target.value }))}
-                    disabled={!f.transportRouteId}
-                  />
-                </Field>
-              </>
-            )}
-          </div>
-        </Card>
+        {opsEnabled && (
+          <Card>
+            <CardHead title="Transport" icon="bus" />
+            <div className="col gap12" style={{ marginTop: 12 }}>
+              <Checkbox
+                checked={f.transportOptedIn === 'yes'}
+                onChange={(checked) => setForm((prev) => ({ ...prev, transportOptedIn: checked ? 'yes' : 'no' }))}
+                label="Uses School Transport"
+              />
+              {f.transportOptedIn === 'yes' && (
+                <>
+                  <Field label="Transport Fee Head">
+                    <Select
+                      options={transportFeeHeadOptions}
+                      value={f.transportFeeHeadId}
+                      onChange={(e) => setForm((prev) => ({ ...prev, transportFeeHeadId: e.target.value }))}
+                    />
+                  </Field>
+                  <Field label="Route" required error={errors.transportRouteId}>
+                    <Select
+                      options={transportRouteOptions}
+                      value={f.transportRouteId}
+                      onChange={(e) => setForm((prev) => ({ ...prev, transportRouteId: e.target.value, transportStopId: '' }))}
+                    />
+                  </Field>
+                  <Field label="Pickup Stop">
+                    <Select
+                      options={transportStopOptions}
+                      value={f.transportStopId}
+                      onChange={(e) => setForm((prev) => ({ ...prev, transportStopId: e.target.value }))}
+                      disabled={!f.transportRouteId}
+                    />
+                  </Field>
+                </>
+              )}
+              {mode === 'edit' && !transportHydrated && (
+                <div className="t-xs muted">Loading current transport status…</div>
+              )}
+            </div>
+          </Card>
+        )}
       </div>
 
       <div
@@ -695,8 +698,16 @@ function StudentFormScreen({ mode }: { mode: 'add' | 'edit' }) {
         }}
       >
         <Btn variant="ghost" onClick={back}>Cancel</Btn>
-        <Btn variant="primary" icon="check" disabled={saving} onClick={() => { void save() }}>
-          {saving ? 'Saving…' : mode === 'edit' ? 'Save changes' : 'Save student'}
+        <Btn
+          variant="primary" icon="check"
+          disabled={saving || (mode === 'edit' && opsEnabled && !transportHydrated)}
+          onClick={() => { void save() }}
+        >
+          {saving
+            ? 'Saving…'
+            : mode === 'edit' && opsEnabled && !transportHydrated
+              ? 'Loading transport status…'
+              : mode === 'edit' ? 'Save changes' : 'Save student'}
         </Btn>
       </div>
     </div>
