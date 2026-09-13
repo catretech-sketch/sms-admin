@@ -664,6 +664,14 @@ function FeeStructureTab({ cur, editable, onGenerated, loadVersionId, onDoneEdit
   }, [studentsQ.data])
   const studentsInRow = (row: StructureClassRow) => studentCountByClass.get(row.label.trim().toLowerCase()) ?? 0
 
+  /* Total students across every class currently shown (respecting the grade/section/search
+     filters) — used to preview "rate × students" for the bulk "Same fee for all shown classes"
+     panel, before the admin even clicks Apply. */
+  const shownStudentsTotal = useMemo(
+    () => structureClasses.reduce((sum, row) => sum + studentsInRow(row), 0),
+    [structureClasses, studentCountByClass],
+  )
+
   /* Per-student fee for a set of rows. Sections of a grade share the same fee,
      so we report the range (min–max) instead of summing sections together. */
   const perStudentFee = (rows: StructureClassRow[]) => {
@@ -1183,42 +1191,52 @@ function FeeStructureTab({ cur, editable, onGenerated, loadVersionId, onDoneEdit
                             gap: 10,
                           }}
                         >
-                          {heads.map((h) => (
-                            <div key={h.id} className="row ai-end gap8">
-                              <div style={{ flex: 1, minWidth: 0 }}>
-                                <Field label={h.name}>
-                                  <Input
-                                    type="number"
-                                    min={0}
-                                    max={MAX_FEE_AMOUNT}
-                                    inputMode="numeric"
-                                    icon="rupee"
-                                    placeholder="0"
-                                    value={bulkByHead[h.id] ?? ''}
-                                    onChange={(e) => setBulkByHead((b) => ({ ...b, [h.id]: e.target.value }))}
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter') {
-                                        e.preventDefault()
-                                        applyHeadToAllShown(h.id, bulkByHead[h.id] ?? '')
-                                      }
-                                    }}
-                                    aria-label={`Same ${h.name} amount for all shown classes`}
-                                  />
-                                </Field>
+                          {heads.map((h) => {
+                            const rate = parseFeeAmount(bulkByHead[h.id] ?? '')
+                            const studentTotal = rate * shownStudentsTotal
+                            return (
+                              <div key={h.id} className="col gap4">
+                                <div className="row ai-end gap8">
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <Field label={h.name}>
+                                      <Input
+                                        type="number"
+                                        min={0}
+                                        max={MAX_FEE_AMOUNT}
+                                        inputMode="numeric"
+                                        icon="rupee"
+                                        placeholder="0"
+                                        value={bulkByHead[h.id] ?? ''}
+                                        onChange={(e) => setBulkByHead((b) => ({ ...b, [h.id]: e.target.value }))}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') {
+                                            e.preventDefault()
+                                            applyHeadToAllShown(h.id, bulkByHead[h.id] ?? '')
+                                          }
+                                        }}
+                                        aria-label={`Same ${h.name} amount for all shown classes`}
+                                      />
+                                    </Field>
+                                  </div>
+                                  <Btn
+                                    type="button"
+                                    size="sm"
+                                    variant="secondary"
+                                    icon="check"
+                                    disabled={!structureClasses.length}
+                                    onClick={() => applyHeadToAllShown(h.id, bulkByHead[h.id] ?? '')}
+                                    title={`Apply ${h.name} to all ${structureClasses.length} shown class(es)`}
+                                  >
+                                    All
+                                  </Btn>
+                                </div>
+                                <div className="t-xs muted">
+                                  Fee {fmtMoney(rate, meta.currency || cur)}/student · {shownStudentsTotal} student{shownStudentsTotal === 1 ? '' : 's'} ·
+                                  {' '}Total {fmtMoney(studentTotal, meta.currency || cur)}
+                                </div>
                               </div>
-                              <Btn
-                                type="button"
-                                size="sm"
-                                variant="secondary"
-                                icon="check"
-                                disabled={!structureClasses.length}
-                                onClick={() => applyHeadToAllShown(h.id, bulkByHead[h.id] ?? '')}
-                                title={`Apply ${h.name} to all ${structureClasses.length} shown class(es)`}
-                              >
-                                All
-                              </Btn>
-                            </div>
-                          ))}
+                            )
+                          })}
                         </div>
                       </div>
                     )}

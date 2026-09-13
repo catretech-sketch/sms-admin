@@ -26,6 +26,7 @@ afterEach(() => { vi.mocked(notifyFeeAudience).mockClear() })
 let feeHeads: Record<string, unknown>[] = []
 let feeInvoices: Record<string, unknown>[] = []
 let feeStructureHistory: Record<string, unknown>[] = []
+let students: Record<string, unknown>[] = []
 let feePayments: Record<string, unknown>[] = []
 let schoolIntegrations: Record<string, unknown> = {}
 let razorpayOrderWire: Record<string, unknown> = { order_id: 'order_abc', amount: 36000, currency: 'INR', key_id: 'rzp_test_1' }
@@ -68,6 +69,7 @@ beforeEach(() => {
     { id: 'h3', name: 'Other', active: true },
   ]
   feeStructureHistory = []
+  students = []
   feeInvoices = [
     {
       id: 'inv-1', student_id: 's1', student_name: 'Asha Verma', cls: 'X-A', grade: 'X',
@@ -229,6 +231,10 @@ beforeEach(() => {
         ],
         next_cursor: null,
       })
+    }
+
+    if (u.includes('/students')) {
+      return jsonOk({ data: students, next_cursor: null })
     }
 
     return jsonOk({ data: [], next_cursor: null })
@@ -903,5 +909,26 @@ describe('Fee structure', () => {
     clickTab('Saved versions')
     await waitFor(() => expect(within(container).getAllByText(/4,200|4200/).length).toBeGreaterThan(0))
     expect(within(container).getByText(/Academic.*4,200|Academic.*4200/)).toBeInTheDocument()
+  })
+
+  it('previews fee-per-student and total-for-shown-students as you type in the bulk "Same fee" panel', async () => {
+    students = [
+      { id: 's1', admission_no: 'A1', class_label: 'X-A', name: 'Kid One', gender: 'M', grade: 'X', section: 'A', roll: 1, guardian_name: 'P1', guardian_phone: '9000000001', attendance_pct: 0, fee_status: 'due', fee_due: 0, status: 'active', house: '', avatar_hue: 1 },
+      { id: 's2', admission_no: 'A2', class_label: 'X-A', name: 'Kid Two', gender: 'F', grade: 'X', section: 'A', roll: 2, guardian_name: 'P2', guardian_phone: '9000000002', attendance_pct: 0, fee_status: 'due', fee_due: 0, status: 'active', house: '', avatar_hue: 2 },
+    ]
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+    await waitFor(() => expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0))
+    fireEvent.click(within(container).getByRole('button', { name: 'X' }))
+    await waitFor(() => expect(within(container).getAllByText(/students?$/i).length).toBeGreaterThan(0))
+
+    const bulkAcademicInput = within(container).getByLabelText('Same Academic amount for all shown classes') as HTMLInputElement
+    fireEvent.change(bulkAcademicInput, { target: { value: '500' } })
+
+    await waitFor(() => {
+      expect(within(container).getByText(/Fee.*500\/student/)).toBeInTheDocument()
+    })
+    expect(within(container).getAllByText(/2 students/).length).toBeGreaterThan(0)
+    expect(within(container).getByText(/Total.*1,000|Total.*1000/)).toBeInTheDocument()
   })
 })
