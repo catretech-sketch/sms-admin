@@ -25,6 +25,7 @@ afterEach(() => { vi.mocked(notifyFeeAudience).mockClear() })
 
 let feeHeads: Record<string, unknown>[] = []
 let feeInvoices: Record<string, unknown>[] = []
+let feeStructureHistory: Record<string, unknown>[] = []
 let feePayments: Record<string, unknown>[] = []
 let schoolIntegrations: Record<string, unknown> = {}
 let razorpayOrderWire: Record<string, unknown> = { order_id: 'order_abc', amount: 36000, currency: 'INR', key_id: 'rzp_test_1' }
@@ -66,6 +67,7 @@ beforeEach(() => {
     { id: 'h2', name: 'Transport', active: true },
     { id: 'h3', name: 'Other', active: true },
   ]
+  feeStructureHistory = []
   feeInvoices = [
     {
       id: 'inv-1', student_id: 's1', student_name: 'Asha Verma', cls: 'X-A', grade: 'X',
@@ -118,9 +120,25 @@ beforeEach(() => {
       return jsonOk({ data: feeHeads, next_cursor: null })
     }
 
+    if (u.includes('/fees/structures/')) {
+      const id = u.split('/fees/structures/')[1]
+      const found = feeStructureHistory.find((s) => s.id === id)
+      return found ? jsonOk({ data: found }) : new Response(JSON.stringify({ error: { message: 'not found' } }), { status: 404, headers: { 'Content-Type': 'application/json' } })
+    }
+
+    if (u.includes('/fees/structures')) {
+      return jsonOk({ data: feeStructureHistory.map((s) => ({ ...s, amounts_json: undefined })), next_cursor: null })
+    }
+
     if (u.includes('/fees/structure')) {
       if (method === 'PUT') {
         const body = JSON.parse((opts?.body as string) ?? '{}')
+        const saved = {
+          ...body,
+          id: `struct-${feeStructureHistory.length + 1}`,
+          created_at: new Date(2026, 0, feeStructureHistory.length + 1).toISOString(),
+        }
+        feeStructureHistory = [...feeStructureHistory, saved]
         return jsonOk({ data: body })
       }
       return jsonOk({ data: {} })
@@ -686,6 +704,70 @@ describe('Fee structure', () => {
     })
     await waitFor(() => {
       expect(within(container).getByText(/marked as Regular/i)).toBeInTheDocument()
+    })
+  })
+
+  it('lists saved fee structure versions and can view one’s amounts', async () => {
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+
+    await waitFor(() => {
+      expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0)
+    })
+    fireEvent.click(within(container).getByRole('button', { name: 'X' }))
+    await waitFor(() => {
+      expect(within(container).getAllByLabelText('X-A Academic amount').length).toBeGreaterThan(0)
+    })
+    const firstAmount = within(container).getAllByLabelText('X-A Academic amount')[0] as HTMLInputElement
+    fireEvent.change(firstAmount, { target: { value: '12000' } })
+    fireEvent.blur(firstAmount)
+    fireEvent.click(within(container).getByText('Save only'))
+    await waitFor(() => {
+      expect(within(container).getByText(/Fee structure saved/i)).toBeInTheDocument()
+    })
+
+    clickTab('Saved versions')
+    await waitFor(() => {
+      expect(within(container).getAllByRole('button', { name: /view/i }).length).toBeGreaterThan(0)
+    })
+
+    fireEvent.click(within(container).getAllByRole('button', { name: /view/i })[0])
+    await waitFor(() => {
+      expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0)
+    })
+    expect(within(container).getAllByText(/12,000|12000/).length).toBeGreaterThan(0)
+  })
+
+  it('saving twice keeps both versions in the Saved versions list instead of overwriting', async () => {
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+
+    await waitFor(() => {
+      expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0)
+    })
+    fireEvent.click(within(container).getByRole('button', { name: 'X' }))
+    await waitFor(() => {
+      expect(within(container).getAllByLabelText('X-A Academic amount').length).toBeGreaterThan(0)
+    })
+    const amountInput = () => within(container).getAllByLabelText('X-A Academic amount')[0] as HTMLInputElement
+
+    fireEvent.change(amountInput(), { target: { value: '1000' } })
+    fireEvent.blur(amountInput())
+    fireEvent.click(within(container).getByText('Save only'))
+    await waitFor(() => expect(within(container).getByText(/Fee structure saved/i)).toBeInTheDocument())
+
+    fireEvent.change(amountInput(), { target: { value: '2000' } })
+    fireEvent.blur(amountInput())
+    fireEvent.click(within(container).getByText('Save only'))
+    await waitFor(() => {
+      const fetchMock = vi.mocked(fetch)
+      const putCalls = fetchMock.mock.calls.filter(([url, opts]) => opts?.method === 'PUT' && String(url).includes('/fees/structure'))
+      expect(putCalls.length).toBeGreaterThanOrEqual(2)
+    })
+
+    clickTab('Saved versions')
+    await waitFor(() => {
+      expect(within(container).getAllByRole('button', { name: /view/i }).length).toBe(2)
     })
   })
 })

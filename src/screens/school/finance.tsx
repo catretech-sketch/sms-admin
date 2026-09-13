@@ -10,7 +10,7 @@ import { useFeePayments, usePayInvoice, useCreateFeeRazorpayOrder, useVerifyFeeR
 import { useSchoolIntegrations } from '@/api/hooks/useSchoolIntegrations'
 import { loadRazorpayScript } from '@/api/upgradeRequests'
 import { useFeeHeads, useCreateFeeHead, useDeleteFeeHead, useUpdateFeeHead } from '@/api/hooks/useFeeHeads'
-import { useFeeStructure, useSaveFeeStructure } from '@/api/hooks/useFeeStructure'
+import { useFeeStructure, useSaveFeeStructure, useFeeStructureHistory, useFeeStructureVersion } from '@/api/hooks/useFeeStructure'
 import type { FeeStructureDocument, FeeStructureStatus } from '@/api/feeStructure'
 import { useFeeInvoices, useGenerateFeeInvoices } from '@/api/hooks/useFeeInvoices'
 import { useFeeReportSummary } from '@/api/hooks/useFeeReports'
@@ -1528,6 +1528,104 @@ function RemindersModal({ dueInvoices, defaultersCount, onClose }: {
   )
 }
 
+/** Read-only view of one saved Fee Structure version's class-wise amounts, resolving
+ *  fee-head ids to names via the current Fee Head list (a version's amounts are keyed by
+ *  head id, but head names can change later — this always shows the CURRENT name, since the
+ *  amount itself, not the head's name, is what a structure version snapshots). */
+function FeeStructureVersionModal({ id, onClose }: { id: string; onClose: () => void }) {
+  const versionQ = useFeeStructureVersion(id)
+  const headsQ = useFeeHeads()
+  const headNameById = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const h of headsQ.data ?? []) m.set(h.id, h.name)
+    return m
+  }, [headsQ.data])
+
+  const doc = versionQ.data
+  const rows = useMemo(() => {
+    if (!doc) return []
+    return Object.entries(doc.amounts).map(([classKey, byHead]) => ({
+      classKey,
+      total: Object.values(byHead).reduce((a, n) => a + n, 0),
+      lines: Object.entries(byHead).map(([headId, amount]) => ({
+        headId, amount, headName: headNameById.get(headId) || headId,
+      })),
+    }))
+  }, [doc, headNameById])
+
+  return (
+    <Modal open onClose={onClose} icon="doc" size="lg" title={doc?.name || 'Fee structure version'} sub={doc ? `${doc.academicYear} · ${doc.status === 'active' ? 'Active' : 'Inactive'}` : undefined}>
+      {versionQ.isLoading ? (
+        <div className="t-sm muted">Loading…</div>
+      ) : !doc ? (
+        <Empty icon="doc" title="Not found" body="This fee structure version could not be loaded." />
+      ) : (
+        <div className="col gap12">
+          {rows.length === 0 ? (
+            <div className="t-sm muted">No class amounts were saved on this version.</div>
+          ) : rows.map((row) => (
+            <div key={row.classKey} className="col gap6" style={{ padding: 12, border: '1px solid var(--border)', borderRadius: 10 }}>
+              <div className="row ai-center jc-between">
+                <div className="fw6">{row.classKey}</div>
+                <div className="fw6">{fmtMoney(row.total, doc.currency)}</div>
+              </div>
+              {row.lines.map((l) => (
+                <div key={l.headId} className="row ai-center jc-between t-sm muted">
+                  <span>{l.headName}</span>
+                  <span>{fmtMoney(l.amount, doc.currency)}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+function FeeStructureHistoryTab() {
+  const historyQ = useFeeStructureHistory()
+  const [viewId, setViewId] = useState<string | null>(null)
+  const entries = historyQ.data ?? []
+
+  return (
+    <Card pad={false}>
+      <div style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
+        <div className="fw6">Saved fee structure versions</div>
+        <div className="t-sm muted">Every time a fee structure is saved, it's kept here — nothing is silently overwritten.</div>
+      </div>
+      {historyQ.isLoading ? (
+        <div className="t-sm muted" style={{ padding: 16 }}>Loading saved versions…</div>
+      ) : entries.length === 0 ? (
+        <div style={{ padding: 16 }}>
+          <Empty icon="doc" title="No saved versions yet" body="Save a fee structure under the Structure tab to see it appear here." />
+        </div>
+      ) : (
+        <table className="sm-table">
+          <thead>
+            <tr><th>Name</th><th>Academic year</th><th>Class</th><th>Status</th><th>Saved</th><th /></tr>
+          </thead>
+          <tbody>
+            {entries.map((e) => (
+              <tr key={e.id}>
+                <td className="fw6">{e.name}</td>
+                <td>{e.academicYear}</td>
+                <td className="muted">{[e.classGrade, e.section].filter(Boolean).join('-') || 'All classes'}</td>
+                <td><Badge tone={e.status === 'active' ? 'success' : 'neutral'} dot>{e.status === 'active' ? 'Active' : 'Inactive'}</Badge></td>
+                <td className="muted">{e.createdAt ? new Date(e.createdAt).toLocaleString() : '—'}</td>
+                <td className="ta-right">
+                  <Btn size="sm" variant="ghost" icon="eye" onClick={() => setViewId(e.id)}>View</Btn>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {viewId && <FeeStructureVersionModal id={viewId} onClose={() => setViewId(null)} />}
+    </Card>
+  )
+}
+
 function FeesScreen() {
   const app = useApp()
   const cur = app.school.currency
@@ -1744,10 +1842,16 @@ function FeesScreen() {
       />
 
       <div style={{ marginBottom: 16 }}>
-        <Tabs value={tab} onChange={setTab} tabs={[{ value: 'collection', label: 'Collection', icon: 'wallet' }, { value: 'history', label: 'History', icon: 'clock' }, { value: 'structure', label: 'Structure', icon: 'rupee' }]} />
+        <Tabs value={tab} onChange={setTab} tabs={[
+          { value: 'collection', label: 'Collection', icon: 'wallet' },
+          { value: 'history', label: 'History', icon: 'clock' },
+          { value: 'structure', label: 'Structure', icon: 'rupee' },
+          { value: 'structure-versions', label: 'Saved versions', icon: 'doc' },
+        ]} />
       </div>
 
       {tab === 'history' && <FeeHistoryTab cur={cur} />}
+      {tab === 'structure-versions' && <FeeStructureHistoryTab />}
       {tab === 'structure' && (
         <FeeStructureTab
           cur={cur}

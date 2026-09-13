@@ -104,7 +104,11 @@ export const queryKeys = {
     all: ['feePayments'] as const,
   },
   feeHeads: { all: ['feeHeads'] as const },
-  feeStructure: { all: ['feeStructure'] as const },
+  feeStructure: {
+    all: ['feeStructure'] as const,
+    history: ['feeStructure', 'history'] as const,
+    version: (id: string) => ['feeStructure', 'version', id] as const,
+  },
   feeInvoices: {
     all: ['feeInvoices'] as const,
     list: (opts: Record<string, string> = {}) => ['feeInvoices', 'list', opts] as const,

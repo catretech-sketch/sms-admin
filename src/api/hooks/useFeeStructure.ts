@@ -1,5 +1,8 @@
 import { useQuery, useMutation, useQueryClient, type UseQueryResult, type UseMutationResult } from '@tanstack/react-query'
-import { getFeeStructure, saveFeeStructure, type FeeStructureDocument } from '../feeStructure'
+import {
+  getFeeStructure, saveFeeStructure, listFeeStructureHistory, getFeeStructureVersion,
+  type FeeStructureDocument, type FeeStructureHistoryEntry,
+} from '../feeStructure'
 import { queryKeys } from '../queryKeys'
 import { useApp } from '@/lib/hooks'
 
@@ -16,6 +19,21 @@ export function useSaveFeeStructure(): UseMutationResult<FeeStructureDocument, E
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (doc: FeeStructureDocument) => saveFeeStructure(doc),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.feeStructure.all }) },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.feeStructure.all })
+      qc.invalidateQueries({ queryKey: queryKeys.feeStructure.history })
+    },
+  })
+}
+
+export function useFeeStructureHistory(): UseQueryResult<FeeStructureHistoryEntry[]> {
+  return useQuery({ queryKey: queryKeys.feeStructure.history, queryFn: () => listFeeStructureHistory() })
+}
+
+export function useFeeStructureVersion(id: string | null): UseQueryResult<FeeStructureDocument> {
+  return useQuery({
+    queryKey: queryKeys.feeStructure.version(id ?? ''),
+    queryFn: () => getFeeStructureVersion(id as string),
+    enabled: !!id,
   })
 }

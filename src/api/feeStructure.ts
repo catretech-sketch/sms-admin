@@ -1,4 +1,4 @@
-import { request, ApiError } from './client'
+import { request, listRequest, ApiError } from './client'
 import { snakeToCamel } from './mapper'
 import { tokenStore } from './auth/tokenStore'
 
@@ -214,4 +214,45 @@ export async function saveFeeStructure(doc: FeeStructureDocument): Promise<FeeSt
 export function amountsOnly(doc: FeeStructureDocument | FeeStructureMatrix): FeeStructureMatrix {
   if (doc && typeof doc === 'object' && 'amounts' in doc) return (doc as FeeStructureDocument).amounts
   return coerceAmounts(doc)
+}
+
+/** One saved version in the Fee Structure history list — metadata only, no amounts (kept light). */
+export interface FeeStructureHistoryEntry {
+  id: string
+  name: string
+  academicYear: string
+  classGrade: string
+  section: string
+  currency: string
+  status: FeeStructureStatus
+  createdAt: string
+}
+
+interface ListEnvelope { data: Record<string, unknown>[]; next_cursor: string | null }
+
+function toHistoryEntry(row: Record<string, unknown>): FeeStructureHistoryEntry {
+  return {
+    id: String(row.id ?? ''),
+    name: String(row.name ?? '').trim(),
+    academicYear: String(row.academic_year ?? '').trim(),
+    classGrade: String(row.class ?? '').trim(),
+    section: String(row.section ?? '').trim(),
+    currency: String(row.currency ?? 'INR').trim(),
+    status: String(row.status ?? 'active').toLowerCase() === 'inactive' ? 'inactive' : 'active',
+    createdAt: String(row.created_at ?? '').trim(),
+  }
+}
+
+/** Every version ever saved, newest first — every explicit Save creates a new one instead of
+ *  overwriting the last, so nothing here ever silently disappears. */
+export async function listFeeStructureHistory(): Promise<FeeStructureHistoryEntry[]> {
+  const env = await listRequest<ListEnvelope>('/fees/structures')
+  return env.data.map(toHistoryEntry).filter((h) => h.id)
+}
+
+/** A specific past version's full document (including amounts), read-only by convention —
+ *  there is no update-by-id endpoint; editing always creates a new version via saveFeeStructure. */
+export async function getFeeStructureVersion(id: string): Promise<FeeStructureDocument> {
+  const wire = await request<unknown>(`/fees/structures/${id}`)
+  return fromApiWire(wire)
 }
