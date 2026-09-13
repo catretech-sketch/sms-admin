@@ -946,6 +946,61 @@ describe('Fee structure', () => {
     await waitFor(() => expect(within(container).getAllByText('Published').length).toBeGreaterThan(0))
   })
 
+  it('offers to bill immediately after publishing, since Publish alone never creates invoices', async () => {
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+    await waitFor(() => expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0))
+    fireEvent.click(within(container).getByRole('button', { name: 'X' }))
+    await waitFor(() => expect(within(container).getAllByLabelText('X-A Academic amount').length).toBeGreaterThan(0))
+    const amountInput = within(container).getAllByLabelText('X-A Academic amount')[0] as HTMLInputElement
+    fireEvent.change(amountInput, { target: { value: '1500' } })
+    fireEvent.blur(amountInput)
+    fireEvent.click(within(container).getByText('Save only'))
+    await waitFor(() => expect(within(container).getByText(/Draft saved/i)).toBeInTheDocument())
+
+    clickTab('Saved versions')
+    await waitFor(() => expect(within(container).getByRole('button', { name: /^publish$/i })).toBeInTheDocument())
+    fireEvent.click(within(container).getByRole('button', { name: /^publish$/i }))
+
+    await waitFor(() => expect(within(container).getByText('Bill this now?')).toBeInTheDocument())
+    const dialog = within(container).getByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: /^bill now$/i }))
+
+    await waitFor(() => {
+      const fetchMock = vi.mocked(fetch)
+      const generateCall = fetchMock.mock.calls.find(([url, opts]) => opts?.method === 'POST' && String(url).includes('/fees/invoices/generate'))
+      expect(generateCall).toBeDefined()
+      const body = JSON.parse((generateCall?.[1] as RequestInit).body as string)
+      expect(Array.isArray(body.classes)).toBe(true)
+      expect(body.classes.length).toBeGreaterThan(0)
+    })
+    await waitFor(() => expect(within(container).getByText(/^Billed$/i)).toBeInTheDocument())
+  })
+
+  it('lets the user skip billing right after publish without generating anything', async () => {
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+    await waitFor(() => expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0))
+    fireEvent.click(within(container).getByRole('button', { name: 'X' }))
+    await waitFor(() => expect(within(container).getAllByLabelText('X-A Academic amount').length).toBeGreaterThan(0))
+    const amountInput = within(container).getAllByLabelText('X-A Academic amount')[0] as HTMLInputElement
+    fireEvent.change(amountInput, { target: { value: '1500' } })
+    fireEvent.blur(amountInput)
+    fireEvent.click(within(container).getByText('Save only'))
+    await waitFor(() => expect(within(container).getByText(/Draft saved/i)).toBeInTheDocument())
+
+    clickTab('Saved versions')
+    await waitFor(() => expect(within(container).getByRole('button', { name: /^publish$/i })).toBeInTheDocument())
+    fireEvent.click(within(container).getByRole('button', { name: /^publish$/i }))
+
+    await waitFor(() => expect(within(container).getByText('Bill this now?')).toBeInTheDocument())
+    fireEvent.click(within(container).getByRole('button', { name: /skip for now/i }))
+
+    const fetchMock = vi.mocked(fetch)
+    expect(fetchMock.mock.calls.find(([url, opts]) => opts?.method === 'POST' && String(url).includes('/fees/invoices/generate'))).toBeUndefined()
+    expect(within(container).queryByText('Bill this now?')).not.toBeInTheDocument()
+  })
+
   it('deleting a draft removes it after confirming, but the published version has no delete action', async () => {
     const { container, clickTab } = renderScreen()
     clickTab('Structure')
