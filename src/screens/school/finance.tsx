@@ -1695,7 +1695,7 @@ function FeeStructureHistoryTab({ editable, onEdit }: { editable: boolean; onEdi
     <Card pad={false}>
       <div style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
         <div className="fw6">Saved fee structure versions</div>
-        <div className="t-sm muted">Every save is kept as a draft here. Publish one to make it the live structure — publishing retires whichever version was live before. Total = each class's fee rate × students currently enrolled in that class.</div>
+        <div className="t-sm muted">Every save is kept as a draft here. Publishing a draft merges its fee heads into whatever is currently live — publish Transport, then later publish Exam, and both stay billed together (a head both versions set uses the newer rate). Total = each class's fee rate × students currently enrolled in that class.</div>
       </div>
       {historyQ.isLoading ? (
         <div className="t-sm muted" style={{ padding: 16 }}>Loading saved versions…</div>
