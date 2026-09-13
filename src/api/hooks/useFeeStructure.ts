@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient, type UseQueryResult, type UseMutationResult } from '@tanstack/react-query'
 import {
   getFeeStructure, saveFeeStructure, listFeeStructureHistory, getFeeStructureVersion,
+  publishFeeStructureVersion, deleteFeeStructureVersion,
   type FeeStructureDocument, type FeeStructureHistoryEntry,
 } from '../feeStructure'
 import { queryKeys } from '../queryKeys'
@@ -35,5 +36,24 @@ export function useFeeStructureVersion(id: string | null): UseQueryResult<FeeStr
     queryKey: queryKeys.feeStructure.version(id ?? ''),
     queryFn: () => getFeeStructureVersion(id as string),
     enabled: !!id,
+  })
+}
+
+export function usePublishFeeStructureVersion(): UseMutationResult<void, Error, string> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => publishFeeStructureVersion(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.feeStructure.all })
+      qc.invalidateQueries({ queryKey: queryKeys.feeStructure.history })
+    },
+  })
+}
+
+export function useDeleteFeeStructureVersion(): UseMutationResult<void, Error, string> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => deleteFeeStructureVersion(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.feeStructure.history }) },
   })
 }

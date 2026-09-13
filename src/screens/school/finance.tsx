@@ -10,7 +10,10 @@ import { useFeePayments, usePayInvoice, useCreateFeeRazorpayOrder, useVerifyFeeR
 import { useSchoolIntegrations } from '@/api/hooks/useSchoolIntegrations'
 import { loadRazorpayScript } from '@/api/upgradeRequests'
 import { useFeeHeads, useCreateFeeHead, useDeleteFeeHead, useUpdateFeeHead } from '@/api/hooks/useFeeHeads'
-import { useFeeStructure, useSaveFeeStructure, useFeeStructureHistory, useFeeStructureVersion } from '@/api/hooks/useFeeStructure'
+import {
+  useFeeStructure, useSaveFeeStructure, useFeeStructureHistory, useFeeStructureVersion,
+  usePublishFeeStructureVersion, useDeleteFeeStructureVersion,
+} from '@/api/hooks/useFeeStructure'
 import type { FeeStructureDocument, FeeStructureStatus } from '@/api/feeStructure'
 import { useFeeInvoices, useGenerateFeeInvoices } from '@/api/hooks/useFeeInvoices'
 import { useFeeReportSummary } from '@/api/hooks/useFeeReports'
@@ -439,10 +442,6 @@ const TERM_OPTIONS = ['Term 1', 'Term 2', 'Annual']
 const CURRENCY_OPTIONS = ['₹', 'INR', 'USD', 'AED', 'EUR']
 /** Soft cap so desk typos don't become INR 1,00,00,00,00,00,00,000. */
 const MAX_FEE_AMOUNT = 9_999_999
-const STATUS_OPTIONS: { value: FeeStructureStatus; label: string }[] = [
-  { value: 'active', label: 'Active' },
-  { value: 'inactive', label: 'Inactive' },
-]
 
 function parseFeeAmount(raw: string): number {
   const trimmed = raw.trim()
@@ -461,14 +460,20 @@ function defaultAcademicYear(d = new Date()): string {
 
 type StructureClassRow = { key: string; label: string; grade: string; section: string }
 
-function FeeStructureTab({ cur, editable, onGenerated }: {
+function FeeStructureTab({ cur, editable, onGenerated, loadVersionId, onDoneEditing }: {
   cur: string
   editable: boolean
   onGenerated?: () => void
+  /** When set, edit this specific saved (draft) version instead of the current live one —
+   *  set by clicking "Edit" on a draft in the Saved versions tab. */
+  loadVersionId?: string | null
+  onDoneEditing?: () => void
 }) {
   const toast = useToast()
   const headsQ = useFeeHeads()
-  const structureQ = useFeeStructure()
+  const currentStructureQ = useFeeStructure()
+  const editingVersionQ = useFeeStructureVersion(loadVersionId ?? null)
+  const structureQ = loadVersionId ? editingVersionQ : currentStructureQ
   const classesQ = useClasses()
   const studentsQ = useStudents()
   const createHead = useCreateFeeHead()
@@ -517,6 +522,10 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
   const [viewGrade, setViewGrade] = useState('') /* '' = all grades */
   const [viewSection, setViewSection] = useState('') /* '' = all sections */
   const [classQ, setClassQ] = useState('')
+
+  /* Switching which version we're editing (or back to the live one) means re-hydrating
+     meta/draft from that version's data, not keeping whatever was on screen before. */
+  useEffect(() => { setHydrated(false) }, [loadVersionId])
 
   useEffect(() => {
     if (!structureQ.data || hydrated) return
@@ -681,7 +690,7 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
     return { revenue, billedStudents }
   }, [allClasses, heads, draft, studentCountByClass])
 
-  const buildDocument = (): FeeStructureDocument => {
+  const buildDocument = (status: FeeStructureStatus): FeeStructureDocument => {
     /* Keep amounts for classes not on screen (other grades). */
     const amounts: Record<string, Record<string, number>> = { ...draft }
     allClasses.forEach((row) => {
@@ -703,7 +712,7 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
       section: meta.section.trim(),
       currency: meta.currency.trim() || cur || 'INR',
       effectiveFrom: meta.effectiveFrom.trim(),
-      status: meta.status,
+      status,
       description: meta.description.trim(),
       amounts,
     }
@@ -775,12 +784,17 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
   const selectedRows = structureClasses.filter((c) => genClasses.has(c.key))
   const selectedWithAmount = selectedRows.filter((c) => rowTotal(c) > 0)
 
+  /* "Save only" always keeps a draft — it never touches which version is live, so it can
+     never accidentally change what students are invoiced against. "Save & generate" is the
+     only action that publishes: it makes this version the one live structure (retiring
+     whichever was live before) and immediately generates invoices from it. */
   const save = () => {
     const err = validateMeta()
     if (err) { toast.danger('Missing fields', err); return }
-    saveStructure.mutate(buildDocument(), {
+    saveStructure.mutate(buildDocument('inactive'), {
       onSuccess: (doc) => {
-        toast.success('Fee structure saved', `${doc.name} · ${structureClasses.length} class(es) · ${heads.length} head(s).`)
+        toast.success('Draft saved', `${doc.name} · ${structureClasses.length} class(es) · ${heads.length} head(s). Publish it from Saved versions when ready.`)
+        onDoneEditing?.()
       },
       onError: (e) => { toast.danger('Save failed', e instanceof Error ? e.message : 'Please try again.') },
     })
@@ -795,10 +809,9 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
       return
     }
     if (grandTotal <= 0) { toast.danger('Fill amounts', 'Enter fee amounts for at least one class / head.'); return }
-    if (meta.status !== 'active') { toast.danger('Inactive structure', 'Set Status to Active before generating invoices.'); return }
     setBusy(true)
     try {
-      const doc = await saveStructure.mutateAsync(buildDocument())
+      const doc = await saveStructure.mutateAsync(buildDocument('active'))
       const skipped = selectedRows.length - selectedWithAmount.length
       const classes = selectedWithAmount.map((r) => r.key)
       const res = await generateInvoices.mutateAsync({
@@ -808,9 +821,10 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
         ...(genDue.trim() ? { dueDate: genDue.trim() } : {}),
       })
       toast.success(
-        'Structure saved · invoices generated',
+        'Structure published · invoices generated',
         `${res.created} invoice(s) · ${classes.length} class(es) · ${genTerm} · ${doc.academicYear}${skipped ? ` · skipped ${skipped} with no amount` : ''}. Open Collection to record payment.`,
       )
+      onDoneEditing?.()
       onGenerated?.()
     } catch (e) {
       toast.danger('Could not generate', e instanceof Error ? e.message : 'Please try again.')
@@ -884,6 +898,17 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
 
   return (
     <div className="col gap16">
+      {loadVersionId && (
+        <Card style={{ borderColor: 'var(--brand-600)' }}>
+          <div className="row ai-center jc-between gap12 wrap">
+            <div className="row ai-center gap8">
+              <Icon name="doc" size={16} />
+              <span className="t-sm">Editing draft <b>{meta.name}</b> — saving creates a new version; this one is unchanged unless deleted.</span>
+            </div>
+            <Btn variant="ghost" size="sm" onClick={() => onDoneEditing?.()}>Cancel</Btn>
+          </div>
+        </Card>
+      )}
       <Card pad={false}>
         <div className="row ai-center jc-between gap12 wrap" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
           <div>
@@ -968,16 +993,6 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
                   value={meta.effectiveFrom}
                   disabled={!editable}
                   onChange={(e) => patchMeta('effectiveFrom', e.target.value)}
-                />
-              </Field>
-            </div>
-            <div style={{ flex: '1 1 120px' }}>
-              <Field label="Status" required>
-                <Select
-                  options={STATUS_OPTIONS}
-                  value={meta.status}
-                  disabled={!editable}
-                  onChange={(e) => patchMeta('status', e.target.value as FeeStructureStatus)}
                 />
               </Field>
             </div>
@@ -1350,7 +1365,7 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
         <Card>
           <CardHead
             title="Save & generate invoices"
-            sub={`${meta.name || 'Fee structure'} · ${meta.academicYear} · ${meta.status}`}
+            sub={`${meta.name || 'Fee structure'} · ${meta.academicYear} · publishes this version`}
             icon="rupee"
           />
           <div className="col gap16" style={{ marginTop: 12 }}>
@@ -1448,7 +1463,7 @@ function FeeStructureTab({ cur, editable, onGenerated }: {
               <Btn
                 variant="primary"
                 icon="arrowRight"
-                disabled={busy || generateInvoices.isPending || selectedWithAmount.length === 0 || meta.status !== 'active'}
+                disabled={busy || generateInvoices.isPending || selectedWithAmount.length === 0}
                 onClick={() => { void generate() }}
               >
                 {busy ? 'Working…' : 'Save & generate'}
@@ -1583,16 +1598,36 @@ function FeeStructureVersionModal({ id, onClose }: { id: string; onClose: () => 
   )
 }
 
-function FeeStructureHistoryTab() {
+function FeeStructureHistoryTab({ editable, onEdit }: { editable: boolean; onEdit: (id: string) => void }) {
+  const toast = useToast()
   const historyQ = useFeeStructureHistory()
+  const publishVersion = usePublishFeeStructureVersion()
+  const deleteVersion = useDeleteFeeStructureVersion()
   const [viewId, setViewId] = useState<string | null>(null)
+  const [deleteId, setDeleteId] = useState<string | null>(null)
   const entries = historyQ.data ?? []
+  const deleteTarget = entries.find((e) => e.id === deleteId) ?? null
+
+  const publish = (id: string, name: string) => {
+    publishVersion.mutate(id, {
+      onSuccess: () => toast.success('Published', `${name} is now the live fee structure.`),
+      onError: (e) => toast.danger('Could not publish', e instanceof Error ? e.message : 'Please try again.'),
+    })
+  }
+
+  const confirmDelete = () => {
+    if (!deleteTarget) return
+    deleteVersion.mutate(deleteTarget.id, {
+      onSuccess: () => { toast.success('Draft deleted', deleteTarget.name); setDeleteId(null) },
+      onError: (e) => { toast.danger('Could not delete', e instanceof Error ? e.message : 'Please try again.'); setDeleteId(null) },
+    })
+  }
 
   return (
     <Card pad={false}>
       <div style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
         <div className="fw6">Saved fee structure versions</div>
-        <div className="t-sm muted">Every time a fee structure is saved, it's kept here — nothing is silently overwritten.</div>
+        <div className="t-sm muted">Every save is kept as a draft here. Publish one to make it the live structure — publishing retires whichever version was live before.</div>
       </div>
       {historyQ.isLoading ? (
         <div className="t-sm muted" style={{ padding: 16 }}>Loading saved versions…</div>
@@ -1611,10 +1646,19 @@ function FeeStructureHistoryTab() {
                 <td className="fw6">{e.name}</td>
                 <td>{e.academicYear}</td>
                 <td className="muted">{[e.classGrade, e.section].filter(Boolean).join('-') || 'All classes'}</td>
-                <td><Badge tone={e.status === 'active' ? 'success' : 'neutral'} dot>{e.status === 'active' ? 'Active' : 'Inactive'}</Badge></td>
+                <td><Badge tone={e.status === 'active' ? 'success' : 'neutral'} dot>{e.status === 'active' ? 'Published' : 'Draft'}</Badge></td>
                 <td className="muted">{e.createdAt ? new Date(e.createdAt).toLocaleString() : '—'}</td>
                 <td className="ta-right">
-                  <Btn size="sm" variant="ghost" icon="eye" onClick={() => setViewId(e.id)}>View</Btn>
+                  <div className="row gap6 jc-end">
+                    <Btn size="sm" variant="ghost" icon="eye" onClick={() => setViewId(e.id)}>View</Btn>
+                    {editable && e.status !== 'active' && (
+                      <>
+                        <Btn size="sm" variant="ghost" icon="edit" onClick={() => onEdit(e.id)}>Edit</Btn>
+                        <Btn size="sm" variant="secondary" icon="check" disabled={publishVersion.isPending} onClick={() => publish(e.id, e.name)}>Publish</Btn>
+                        <Btn size="sm" variant="ghost" icon="trash" onClick={() => setDeleteId(e.id)}>Delete</Btn>
+                      </>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
@@ -1622,6 +1666,20 @@ function FeeStructureHistoryTab() {
         </table>
       )}
       {viewId && <FeeStructureVersionModal id={viewId} onClose={() => setViewId(null)} />}
+      {deleteTarget && (
+        <Modal
+          open onClose={() => setDeleteId(null)} icon="trash" size="sm"
+          title="Delete this draft?" sub={deleteTarget.name}
+          footer={
+            <div className="row gap8 jc-end">
+              <Btn variant="ghost" onClick={() => setDeleteId(null)}>Cancel</Btn>
+              <Btn variant="danger" icon="trash" disabled={deleteVersion.isPending} onClick={confirmDelete}>Delete</Btn>
+            </div>
+          }
+        >
+          <div className="t-sm">This draft was never published, so nothing was ever billed against it. This cannot be undone.</div>
+        </Modal>
+      )}
     </Card>
   )
 }
@@ -1638,6 +1696,7 @@ function FeesScreen() {
   const [waiveRow, setWaiveRow] = useState<FeeInvoice | null>(null)
   const [remindOpen, setRemindOpen] = useState(false)
   const [tab, setTab] = useState('collection')
+  const [editVersionId, setEditVersionId] = useState<string | null>(null)
 
   const invoicesQ = useFeeInvoices()
   const studentsQ = useStudents()
@@ -1851,12 +1910,19 @@ function FeesScreen() {
       </div>
 
       {tab === 'history' && <FeeHistoryTab cur={cur} />}
-      {tab === 'structure-versions' && <FeeStructureHistoryTab />}
+      {tab === 'structure-versions' && (
+        <FeeStructureHistoryTab
+          editable={canRecord}
+          onEdit={(id) => { setEditVersionId(id); setTab('structure') }}
+        />
+      )}
       {tab === 'structure' && (
         <FeeStructureTab
           cur={cur}
           editable={canRecord}
-          onGenerated={() => setTab('collection')}
+          onGenerated={() => { setEditVersionId(null); setTab('collection') }}
+          loadVersionId={editVersionId}
+          onDoneEditing={() => setEditVersionId(null)}
         />
       )}
 

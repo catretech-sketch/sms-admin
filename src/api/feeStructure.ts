@@ -256,3 +256,15 @@ export async function getFeeStructureVersion(id: string): Promise<FeeStructureDo
   const wire = await request<unknown>(`/fees/structures/${id}`)
   return fromApiWire(wire)
 }
+
+/** Publishes this draft — it becomes the one version invoice generation and the rest of the
+ *  app actually use, retiring whichever version was published before. */
+export async function publishFeeStructureVersion(id: string): Promise<void> {
+  await request<void>(`/fees/structures/${id}/publish`, { method: 'POST' })
+}
+
+/** Deletes a draft outright. The backend refuses (409) to delete the currently published
+ *  version — publish something else first. */
+export async function deleteFeeStructureVersion(id: string): Promise<void> {
+  await request<void>(`/fees/structures/${id}`, { method: 'DELETE' })
+}

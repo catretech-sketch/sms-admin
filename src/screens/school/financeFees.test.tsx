@@ -121,8 +121,27 @@ beforeEach(() => {
     }
 
     if (u.includes('/fees/structures/')) {
-      const id = u.split('/fees/structures/')[1]
-      const found = feeStructureHistory.find((s) => s.id === id)
+      const rest = u.split('/fees/structures/')[1]
+      if (rest.endsWith('/publish') && method === 'POST') {
+        const id = rest.replace('/publish', '')
+        feeStructureHistory = feeStructureHistory.map((s) => ({
+          ...s,
+          status: s.id === id ? 'active' : (s.status === 'active' ? 'inactive' : s.status),
+        }))
+        return jsonOk({ data: { id, status: 'active' } })
+      }
+      if (method === 'DELETE') {
+        const target = feeStructureHistory.find((s) => s.id === rest)
+        if (!target) {
+          return new Response(JSON.stringify({ error: { message: 'not found' } }), { status: 404, headers: { 'Content-Type': 'application/json' } })
+        }
+        if (target.status === 'active') {
+          return new Response(JSON.stringify({ error: { message: 'Cannot delete the currently published version' } }), { status: 409, headers: { 'Content-Type': 'application/json' } })
+        }
+        feeStructureHistory = feeStructureHistory.filter((s) => s.id !== rest)
+        return new Response(null, { status: 204 })
+      }
+      const found = feeStructureHistory.find((s) => s.id === rest)
       return found ? jsonOk({ data: found }) : new Response(JSON.stringify({ error: { message: 'not found' } }), { status: 404, headers: { 'Content-Type': 'application/json' } })
     }
 
@@ -137,6 +156,9 @@ beforeEach(() => {
           ...body,
           id: `struct-${feeStructureHistory.length + 1}`,
           created_at: new Date(2026, 0, feeStructureHistory.length + 1).toISOString(),
+        }
+        if (body.status === 'active') {
+          feeStructureHistory = feeStructureHistory.map((s) => (s.status === 'active' ? { ...s, status: 'inactive' } : s))
         }
         feeStructureHistory = [...feeStructureHistory, saved]
         return jsonOk({ data: body })
@@ -555,11 +577,11 @@ describe('Fee structure', () => {
       expect(body.name).toBeTruthy()
       expect(body.academic_year).toBeTruthy()
       expect(body.effective_from).toBeTruthy()
-      expect(body.status).toBe('active')
+      expect(body.status).toBe('inactive')
       expect(body.amounts['X-A'] || body.amounts['IX-A'] || body.amounts['X-B']).toBeTruthy()
     })
     await waitFor(() => {
-      expect(within(container).getByText(/Fee structure saved/i)).toBeInTheDocument()
+      expect(within(container).getByText(/Draft saved/i)).toBeInTheDocument()
     })
   }, 15000)
 
@@ -723,7 +745,7 @@ describe('Fee structure', () => {
     fireEvent.blur(firstAmount)
     fireEvent.click(within(container).getByText('Save only'))
     await waitFor(() => {
-      expect(within(container).getByText(/Fee structure saved/i)).toBeInTheDocument()
+      expect(within(container).getByText(/Draft saved/i)).toBeInTheDocument()
     })
 
     clickTab('Saved versions')
@@ -754,7 +776,7 @@ describe('Fee structure', () => {
     fireEvent.change(amountInput(), { target: { value: '1000' } })
     fireEvent.blur(amountInput())
     fireEvent.click(within(container).getByText('Save only'))
-    await waitFor(() => expect(within(container).getByText(/Fee structure saved/i)).toBeInTheDocument())
+    await waitFor(() => expect(within(container).getByText(/Draft saved/i)).toBeInTheDocument())
 
     fireEvent.change(amountInput(), { target: { value: '2000' } })
     fireEvent.blur(amountInput())
@@ -769,5 +791,84 @@ describe('Fee structure', () => {
     await waitFor(() => {
       expect(within(container).getAllByRole('button', { name: /view/i }).length).toBe(2)
     })
+  })
+
+  it('"Save only" creates a Draft with Edit/Publish/Delete actions; "Save & generate" publishes with only View', async () => {
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+    await waitFor(() => expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0))
+    fireEvent.click(within(container).getByRole('button', { name: 'X' }))
+    await waitFor(() => expect(within(container).getAllByLabelText('X-A Academic amount').length).toBeGreaterThan(0))
+    const amountInput = within(container).getAllByLabelText('X-A Academic amount')[0] as HTMLInputElement
+    fireEvent.change(amountInput, { target: { value: '1000' } })
+    fireEvent.blur(amountInput)
+    fireEvent.click(within(container).getByText('Save only'))
+    await waitFor(() => expect(within(container).getByText(/Draft saved/i)).toBeInTheDocument())
+
+    clickTab('Saved versions')
+    await waitFor(() => expect(within(container).getByText('Draft')).toBeInTheDocument())
+    expect(within(container).getByRole('button', { name: /^edit$/i })).toBeInTheDocument()
+    expect(within(container).getByRole('button', { name: /^publish$/i })).toBeInTheDocument()
+    expect(within(container).getByRole('button', { name: /^delete$/i })).toBeInTheDocument()
+  })
+
+  it('publishing a draft marks it Published and shows a success toast', async () => {
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+    await waitFor(() => expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0))
+    fireEvent.click(within(container).getByRole('button', { name: 'X' }))
+    await waitFor(() => expect(within(container).getAllByLabelText('X-A Academic amount').length).toBeGreaterThan(0))
+    const amountInput = within(container).getAllByLabelText('X-A Academic amount')[0] as HTMLInputElement
+    fireEvent.change(amountInput, { target: { value: '1500' } })
+    fireEvent.blur(amountInput)
+    fireEvent.click(within(container).getByText('Save only'))
+    await waitFor(() => expect(within(container).getByText(/Draft saved/i)).toBeInTheDocument())
+
+    clickTab('Saved versions')
+    await waitFor(() => expect(within(container).getByRole('button', { name: /^publish$/i })).toBeInTheDocument())
+    fireEvent.click(within(container).getByRole('button', { name: /^publish$/i }))
+
+    await waitFor(() => {
+      const fetchMock = vi.mocked(fetch)
+      const publishCall = fetchMock.mock.calls.find(([url, opts]) => opts?.method === 'POST' && String(url).includes('/publish'))
+      expect(publishCall).toBeDefined()
+    })
+    await waitFor(() => expect(within(container).getAllByText('Published').length).toBeGreaterThan(0))
+  })
+
+  it('deleting a draft removes it after confirming, but the published version has no delete action', async () => {
+    const { container, clickTab } = renderScreen()
+    clickTab('Structure')
+    await waitFor(() => expect(within(container).getAllByText('Academic').length).toBeGreaterThan(0))
+    fireEvent.click(within(container).getByRole('button', { name: 'X' }))
+    await waitFor(() => expect(within(container).getAllByLabelText('X-A Academic amount').length).toBeGreaterThan(0))
+    const amountInput = () => within(container).getAllByLabelText('X-A Academic amount')[0] as HTMLInputElement
+
+    fireEvent.change(amountInput(), { target: { value: '1000' } })
+    fireEvent.blur(amountInput())
+    fireEvent.click(within(container).getByText('Save & generate'))
+    await waitFor(() => expect(within(container).getByText(/Structure published/i)).toBeInTheDocument())
+
+    clickTab('Structure')
+    fireEvent.change(amountInput(), { target: { value: '2000' } })
+    fireEvent.blur(amountInput())
+    fireEvent.click(within(container).getByText('Save only'))
+    await waitFor(() => expect(within(container).getByText(/Draft saved/i)).toBeInTheDocument())
+
+    clickTab('Saved versions')
+    await waitFor(() => expect(within(container).getAllByRole('button', { name: /view/i }).length).toBe(2))
+    expect(within(container).getAllByRole('button', { name: /^delete$/i }).length).toBe(1)
+
+    fireEvent.click(within(container).getByRole('button', { name: /^delete$/i }))
+    await waitFor(() => expect(within(container).getByText('Delete this draft?')).toBeInTheDocument())
+    const deleteButtons = within(container).getAllByRole('button', { name: /^delete$/i })
+    fireEvent.click(deleteButtons[deleteButtons.length - 1])
+
+    await waitFor(() => {
+      const fetchMock = vi.mocked(fetch)
+      const deleteCall = fetchMock.mock.calls.find(([url, opts]) => opts?.method === 'DELETE' && String(url).includes('/fees/structures/'))
+      expect(deleteCall).toBeDefined()
+    })
+    await waitFor(() => expect(within(container).getAllByRole('button', { name: /view/i }).length).toBe(1))
   })
 })
