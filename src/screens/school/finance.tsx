@@ -1646,7 +1646,14 @@ function FeeStructureHistoryTab({ editable, onEdit }: { editable: boolean; onEdi
                 <td className="fw6">{e.name}</td>
                 <td>{e.academicYear}</td>
                 <td className="muted">{[e.classGrade, e.section].filter(Boolean).join('-') || 'All classes'}</td>
-                <td className="ta-right fw6">{fmtMoney(e.totalAmount, e.currency)}</td>
+                <td className="ta-right">
+                  <div className="fw6">{fmtMoney(e.totalAmount, e.currency)}</div>
+                  {e.headAmounts.length > 0 && (
+                    <div className="t-xs muted">
+                      {e.headAmounts.map((h) => `${h.headName} ${fmtMoney(h.amount, e.currency)}`).join(' · ')}
+                    </div>
+                  )}
+                </td>
                 <td><Badge tone={e.status === 'active' ? 'success' : 'neutral'} dot>{e.status === 'active' ? 'Published' : 'Draft'}</Badge></td>
                 <td className="muted">{e.createdAt ? new Date(e.createdAt).toLocaleString() : '—'}</td>
                 <td className="ta-right">

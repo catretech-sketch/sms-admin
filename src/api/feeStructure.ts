@@ -216,7 +216,16 @@ export function amountsOnly(doc: FeeStructureDocument | FeeStructureMatrix): Fee
   return coerceAmounts(doc)
 }
 
-/** One saved version in the Fee Structure history list — metadata only, no amounts (kept light). */
+/** One fee head's projected revenue for a saved structure version — e.g. "Exam Fee — ₹8,000",
+ *  summed (rate × enrolled students) across every class that charges it. */
+export interface FeeStructureHeadAmount {
+  headId: string | null
+  headName: string
+  amount: number
+}
+
+/** One saved version in the Fee Structure history list — metadata only, no per-class amounts
+ *  (kept light) — but does include the per-fee-head totals. */
 export interface FeeStructureHistoryEntry {
   id: string
   name: string
@@ -226,12 +235,23 @@ export interface FeeStructureHistoryEntry {
   currency: string
   status: FeeStructureStatus
   createdAt: string
-  /** Sum of every class's every fee head for this version — a quick total for the list,
-   *  not a substitute for the full per-class breakdown (see getFeeStructureVersion). */
+  /** Sum of every class's every fee head (rate × enrolled students) for this version — a
+   *  quick total for the list, not a substitute for the full per-class breakdown (see
+   *  getFeeStructureVersion). */
   totalAmount: number
+  /** Per-fee-head breakdown of totalAmount, e.g. [{ headName: 'Exam Fee', amount: 8000 }]. */
+  headAmounts: FeeStructureHeadAmount[]
 }
 
 interface ListEnvelope { data: Record<string, unknown>[]; next_cursor: string | null }
+
+function toHeadAmount(row: Record<string, unknown>): FeeStructureHeadAmount {
+  return {
+    headId: row.head_id ? String(row.head_id) : null,
+    headName: String(row.head_name ?? '').trim(),
+    amount: Number(row.amount) || 0,
+  }
+}
 
 function toHistoryEntry(row: Record<string, unknown>): FeeStructureHistoryEntry {
   return {
@@ -244,6 +264,7 @@ function toHistoryEntry(row: Record<string, unknown>): FeeStructureHistoryEntry 
     status: String(row.status ?? 'active').toLowerCase() === 'inactive' ? 'inactive' : 'active',
     createdAt: String(row.created_at ?? '').trim(),
     totalAmount: Number(row.total_amount) || 0,
+    headAmounts: Array.isArray(row.head_amounts) ? row.head_amounts.map(toHeadAmount) : [],
   }
 }
 

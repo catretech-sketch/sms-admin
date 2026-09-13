@@ -149,10 +149,17 @@ beforeEach(() => {
       return jsonOk({
         data: feeStructureHistory.map((s) => {
           const amounts = (s.amounts as Record<string, Record<string, number>> | undefined) ?? {}
-          const total = Object.values(amounts).reduce(
-            (sum, byHead) => sum + Object.values(byHead).reduce((a, n) => a + n, 0), 0,
-          )
-          return { ...s, amounts: undefined, amounts_json: undefined, total_amount: total }
+          const byHeadTotals: Record<string, number> = {}
+          for (const byHead of Object.values(amounts)) {
+            for (const [headId, amount] of Object.entries(byHead)) {
+              byHeadTotals[headId] = (byHeadTotals[headId] ?? 0) + amount
+            }
+          }
+          const total = Object.values(byHeadTotals).reduce((a, n) => a + n, 0)
+          const headAmounts = Object.entries(byHeadTotals).map(([headId, amount]) => ({
+            head_id: headId, head_name: feeHeads.find((h) => h.id === headId)?.name ?? headId, amount,
+          }))
+          return { ...s, amounts: undefined, amounts_json: undefined, total_amount: total, head_amounts: headAmounts }
         }),
         next_cursor: null,
       })
@@ -895,5 +902,6 @@ describe('Fee structure', () => {
 
     clickTab('Saved versions')
     await waitFor(() => expect(within(container).getAllByText(/4,200|4200/).length).toBeGreaterThan(0))
+    expect(within(container).getByText(/Academic.*4,200|Academic.*4200/)).toBeInTheDocument()
   })
 })
