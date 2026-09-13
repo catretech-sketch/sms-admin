@@ -9,6 +9,7 @@ const wireTeacher = {
   id: 'T-01', name: 'Meera', gender: 'F', department: 'Science', designation: 'HOD',
   subjects: ['Physics'], class_teacher: '10-A', phone: '99', email: 'm@s.edu', exp: 12,
   rating: 4.6, attendance_pct: 97, result: 88, load: 24, status: 'active', avatar_hue: 180, top: true,
+  user_id: 'U-01',
 }
 
 beforeEach(() => { localStorage.clear(); vi.restoreAllMocks() })
@@ -36,6 +37,12 @@ describe('listTeachers', () => {
     expect(raw.department).toBeUndefined()
     expect(raw.designation).toBeUndefined()
     expect(raw.attendancePct).toBeUndefined()
+  })
+
+  it('maps the linked user_id (null until the teacher accepts their invite)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: [wireTeacher], next_cursor: null })))
+    const rows = await listTeachers()
+    expect(rows[0].userId).toBe('U-01')
   })
 
   it('forwards q/dept/status as query params and drops "all"', async () => {
