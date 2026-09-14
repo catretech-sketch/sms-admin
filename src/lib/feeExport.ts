@@ -41,3 +41,18 @@ export function downloadTextFile(filename: string, text: string, mime = 'text/cs
   a.remove()
   URL.revokeObjectURL(url)
 }
+
+/** Same download mechanics as downloadTextFile, for binary output (e.g. a generated .xlsx
+ *  workbook's ArrayBuffer) that a text Blob can't carry. */
+export function downloadArrayBuffer(filename: string, data: ArrayBuffer, mime: string): void {
+  const blob = new Blob([data], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}

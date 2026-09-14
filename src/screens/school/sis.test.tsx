@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AppProvider } from '@/context/AppProvider'
 import { ToastProvider } from '@/context/ToastProvider'
 import { students as seed } from '@/data/mockDb'
-import { sisScreens, buildBulkPreview, buildBulkRowRecord, buildBulkImportPayloads, canBulkImport, bulkImportTemplateCsv } from './sis'
+import { sisScreens, buildBulkPreview, buildBulkRowRecord, buildBulkImportPayloads, canBulkImport, bulkImportTemplateXlsx } from './sis'
+import ExcelJS from 'exceljs'
 import { suggestColumnMapping } from '@/lib/importColumnMapping'
 import type { BulkStudentRow } from '@/lib/studentMapping'
 import type { Student } from '@/types'
@@ -867,7 +868,7 @@ describe('buildBulkPreview — bulk-only checks (pure)', () => {
     const rows = [validRowCells({ section: '99-Z' })]
     const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], false)
     expect(preview.errorRows).toHaveLength(1)
-    expect(preview.errorRows[0].errors.cls).toMatch(/class not found/i)
+    expect(preview.errorRows[0].errors.cls).toMatch(/class \+ section .*99-Z.* was not found/i)
   })
 
   it('does not flag a class value that resolves to a real class', () => {
@@ -916,7 +917,7 @@ describe('buildBulkPreview — reference-existence checks (spec §6)', () => {
     const rows = [validRowCells({ ...optedIn, transportRouteId: 'Route 42' })]
     const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], true)
     expect(preview.errorRows).toHaveLength(1)
-    expect(preview.errorRows[0].errors.transportRouteId).toMatch(/route not found/i)
+    expect(preview.errorRows[0].errors.transportRouteId).toMatch(/transport route .*Route 42.* was not found/i)
   })
 
   it('accepts a stop that belongs to the resolved route', () => {
@@ -931,13 +932,13 @@ describe('buildBulkPreview — reference-existence checks (spec §6)', () => {
     const rows = [validRowCells({ ...optedIn, transportRouteId: 'North Line', transportStopId: 'Lake View' })]
     const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], true)
     expect(preview.errorRows).toHaveLength(1)
-    expect(preview.errorRows[0].errors.transportStopId).toMatch(/stop not found on this route/i)
+    expect(preview.errorRows[0].errors.transportStopId).toMatch(/pickup stop .*Lake View.* was not found on this route/i)
   })
 
   it('flags an unknown transport fee head', () => {
     const rows = [validRowCells({ ...optedIn, transportRouteId: 'North Line', transportFeeHeadId: 'Bus Money' })]
     const preview = buildBulkPreview(parsedRows(rows), VALID_ROW_MAPPING, TEST_REFS, [], true)
-    expect(preview.errorRows[0].errors.transportFeeHeadId).toMatch(/transport fee head not found/i)
+    expect(preview.errorRows[0].errors.transportFeeHeadId).toMatch(/transport fee head .*Bus Money.* was not found/i)
   })
 
   it('skips transport reference checks entirely when the operations tier is off', () => {
@@ -948,7 +949,7 @@ describe('buildBulkPreview — reference-existence checks (spec §6)', () => {
 
   it('flags a house that is not in the school house catalog, and accepts one that is', () => {
     const bad = buildBulkPreview(parsedRows([validRowCells({ house: 'Gryffindor' })]), VALID_ROW_MAPPING, TEST_REFS, [], false)
-    expect(bad.errorRows[0].errors.house).toMatch(/house not found/i)
+    expect(bad.errorRows[0].errors.house).toMatch(/house .*Gryffindor.* was not found/i)
     const good = buildBulkPreview(parsedRows([validRowCells({ house: 'ruby' })]), VALID_ROW_MAPPING, TEST_REFS, [], false)
     expect(good.errorRows).toHaveLength(0)
   })
@@ -1057,12 +1058,15 @@ describe('canBulkImport — entry-point role gate (Important 8)', () => {
   })
 })
 
-describe('bulkImportTemplateCsv', () => {
-  it('is a header-only CSV whose columns are exactly the wizard\'s mappable field labels', () => {
-    const csv = bulkImportTemplateCsv()
-    const lines = csv.trim().split('\n')
-    expect(lines).toHaveLength(1) // headers only, no sample data
-    const headers = lines[0].split(',')
+describe('bulkImportTemplateXlsx', () => {
+  it('is a workbook whose header row is exactly the wizard\'s mappable field labels, plus exactly one example student row', async () => {
+    const buf = await bulkImportTemplateXlsx()
+    const wb = new ExcelJS.Workbook()
+    await wb.xlsx.load(buf)
+    const sheet = wb.worksheets[0]
+
+    // Row 1: headers only.
+    const headers = (sheet.getRow(1).values as unknown[]).slice(1).map((v) => String(v))
     expect(headers).toContain('First Name')
     expect(headers).toContain('Class + Section')
     expect(headers).toContain('Pickup Stop')
@@ -1072,22 +1076,43 @@ describe('bulkImportTemplateCsv', () => {
     // A file built from this template auto-maps with zero manual column matching.
     const suggested = suggestColumnMapping(headers)
     expect(Object.values(suggested).every((v) => v !== null)).toBe(true)
+
+    // Exactly ONE example row, and nothing after it.
+    expect(sheet.rowCount).toBe(2)
+    const rowByHeader = (label: string): unknown => {
+      const col = headers.indexOf(label) + 1
+      return sheet.getRow(2).getCell(col).value
+    }
+    expect(rowByHeader('First Name')).toBeTruthy()
+    expect(rowByHeader('Class + Section')).toBeTruthy()
+
+    // The example demonstrates the optional-transport path: opted out, every transport
+    // column left blank rather than a guessed/fake route, stop or fee head.
+    expect(rowByHeader('Uses School Transport')).toBe('No')
+    expect(rowByHeader('Transport Fee Head') ?? '').toBe('')
+    expect(rowByHeader('Transport Route') ?? '').toBe('')
+    expect(rowByHeader('Pickup Stop') ?? '').toBe('')
   })
 })
 
 describe('Bulk import wizard — Upload step template download', () => {
-  it('Download template actually downloads a template instead of reopening the file picker', async () => {
+  it('Download template actually downloads an .xlsx workbook instead of reopening the file picker', async () => {
     const feeExport = await import('@/lib/feeExport')
-    const downloadSpy = vi.spyOn(feeExport, 'downloadTextFile').mockImplementation(() => {})
+    const downloadSpy = vi.spyOn(feeExport, 'downloadArrayBuffer').mockImplementation(() => {})
 
     const { getByText } = renderSisScreen()
     fireEvent.click(getByText('Bulk Import'))
     fireEvent.click(getByText('Download template'))
 
-    expect(downloadSpy).toHaveBeenCalledTimes(1)
-    const [filename, csv] = downloadSpy.mock.calls[0]
-    expect(filename).toMatch(/\.csv$/)
-    expect(csv).toContain('First Name')
+    await waitFor(() => expect(downloadSpy).toHaveBeenCalledTimes(1))
+    const [filename, buf, mime] = downloadSpy.mock.calls[0]
+    expect(filename).toMatch(/\.xlsx$/)
+    expect(mime).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+    const wb = new ExcelJS.Workbook()
+    await wb.xlsx.load(buf)
+    const headers = (wb.worksheets[0].getRow(1).values as unknown[]).slice(1).map((v) => String(v))
+    expect(headers).toContain('First Name')
   })
 })
 

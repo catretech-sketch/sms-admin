@@ -37,8 +37,9 @@ import { parseCsvText, parseXlsxBuffer, type ParsedFile, type ParsedRow } from '
 import { BULK_IMPORT_FIELDS, suggestColumnMapping } from '@/lib/importColumnMapping'
 import { validateStudentForm } from '@/lib/studentValidation'
 import { isDuplicateValue, normalizePhoneDigits, normalizeEmailKey } from '@/lib/validation'
-import { errorRowsToCsv, csvHeaderOnly, type ErrorReportRow } from '@/lib/importErrorReport'
-import { downloadTextFile } from '@/lib/feeExport'
+import { errorRowsToCsv, type ErrorReportRow } from '@/lib/importErrorReport'
+import { downloadTextFile, downloadArrayBuffer } from '@/lib/feeExport'
+import ExcelJS from 'exceljs'
 import { toDateInputValue } from '@/lib/dateInput'
 import { buildStudentFromRow, toBulkImportRowPayload, parseBulkGender, type BulkStudentRow, type BulkImportRowPayload } from '@/lib/studentMapping'
 import { useBulkImportStudents, isTransportFailedRow, BATCH_SIZE } from '@/api/hooks/useBulkImportStudents'
@@ -314,7 +315,7 @@ export function buildBulkPreview(
 
     const sectionValue = (record.section ?? '').trim()
     if (sectionValue && !errors.cls && !importClassExists(refs.classes, sectionValue)) {
-      errors.cls = 'Class not found — check spelling or add it in Academics first'
+      errors.cls = `Class + Section "${sectionValue}" was not found — check spelling or add it in Academics first`
     }
 
     // dob: `required()` alone only proves the cell is non-empty. Anything that does not
@@ -335,7 +336,7 @@ export function buildBulkPreview(
 
     const houseValue = (record.house ?? '').trim()
     if (houseValue && !errors.house && !resolveImportHouse(refs.houses, houseValue)) {
-      errors.house = 'House not found — check spelling or add it in Academics → Houses first'
+      errors.house = `House "${houseValue}" was not found — check spelling or add it in Academics → Houses first`
     }
 
     // Transport reference checks (spec §6). Only meaningful for a row that actually opted
@@ -346,17 +347,17 @@ export function buildBulkPreview(
       const feeHeadValue = (record.transportFeeHeadId ?? '').trim()
       const route = resolveImportRoute(refs.routes, routeValue)
       if (routeValue && !route && !errors.transportRouteId) {
-        errors.transportRouteId = 'Route not found — check spelling or add it in Transport first'
+        errors.transportRouteId = `Transport Route "${routeValue}" was not found — check spelling or add it in Transport first`
       }
       // A stop is only checked once its route resolved: with an unresolved/blank route
       // there is no stop list to check against, and transportRouteId already carries the
       // actionable error, so a second cascading message would just be noise.
       if (stopValue && route && !errors.transportStopId
         && !resolveImportStop(refs.stopsByRoute[route.id] ?? [], stopValue)) {
-        errors.transportStopId = 'Stop not found on this route — check spelling or add it in Transport first'
+        errors.transportStopId = `Pickup Stop "${stopValue}" was not found on this route — check spelling or add it in Transport first`
       }
       if (feeHeadValue && !errors.transportFeeHeadId && !resolveImportFeeHead(refs.feeHeads, feeHeadValue)) {
-        errors.transportFeeHeadId = 'Transport fee head not found — check spelling or add it in Finance first'
+        errors.transportFeeHeadId = `Transport Fee Head "${feeHeadValue}" was not found — check spelling or add it in Finance first`
       }
     }
 
@@ -417,13 +418,88 @@ export function buildBulkImportPayloads(validRows: BulkPreviewRow[], refs: BulkI
   })
 }
 
-/** Header-only CSV template matching the wizard's own mappable column labels, so a file built
- *  from it auto-maps end to end with no manual column matching. Omits Admission Number — like
- *  Roll Number, it's server-auto-generated; the column stays mappable for schools migrating
- *  legacy data with existing admission numbers, but a fresh template shouldn't invite filling it. */
-export function bulkImportTemplateCsv(): string {
-  const labels = BULK_IMPORT_FIELDS.filter((f) => f.key !== 'admissionNo').map((f) => f.label)
-  return `${csvHeaderOnly(labels)}\n`
+/** One clearly-fictional example student for the downloadable template — never a real school's
+ *  data. Reuses the same placeholder names/values the reference-resolution docs above and the
+ *  test fixtures elsewhere in this file already use ("Ruby" house, "Gandhi Chowk" address,
+ *  "9000000001" phone, a 2015 dob), so the template stays consistent with the rest of the app.
+ *  section uses "I-A" (Grade I · Section A) — this app's own DEFAULT_GRADES/DEFAULT_SECTIONS
+ *  convention (defaultClasses.ts), i.e. what a school gets from "Seed default classes" — so the
+ *  example actually resolves out of the box for any school on the default class structure,
+ *  rather than an arbitrary Arabic-numeral grade many schools never create.
+ *  Uses School Transport is "No" with every transport column blank: Route / Stop / Fee Head are
+ *  per-school foreign keys this template cannot safely guess, so leaving them blank both keeps
+ *  the example truthful and demonstrates that transport is optional. */
+const BULK_IMPORT_EXAMPLE_ROW: Record<(typeof BULK_IMPORT_FIELDS)[number]['key'], string> = {
+  admissionNo: '',
+  admissionDate: '2025-04-01',
+  firstName: 'Aarav',
+  lastName: 'Sharma',
+  section: 'I-A',
+  house: 'Ruby',
+  gender: 'Male',
+  dob: '2015-04-23',
+  academicYear: '2025-2026',
+  bloodGroup: 'O+',
+  religion: 'Hindu',
+  category: 'General',
+  phone: '9000000001',
+  email: 'aarav.sharma@example.com',
+  caste: '',
+  motherTongue: 'Hindi',
+  languages: 'Hindi, English',
+  lastSchool: '',
+  address: 'Gandhi Chowk, Pune',
+  fatherName: 'Ramesh Sharma',
+  fatherEmail: '',
+  fatherPhone: '9000000002',
+  fatherOccupation: 'Business',
+  motherName: 'Sunita Sharma',
+  motherEmail: '',
+  motherPhone: '',
+  motherOccupation: 'Homemaker',
+  status: '',
+  transportOptedIn: 'No',
+  transportFeeHeadId: '',
+  transportRouteId: '',
+  transportStopId: '',
+}
+
+/** Downloadable starter workbook: a bold, frozen header row matching the wizard's own mappable
+ *  column labels (so a file built from it auto-maps end to end), plus exactly ONE example
+ *  student row showing the expected format. Omits Admission Number — like Roll Number, it's
+ *  server-auto-generated; the column stays mappable for schools migrating legacy data with
+ *  existing admission numbers, but a fresh template shouldn't invite filling it. A cell note on
+ *  the header row spells out that the example must be replaced, and that Class + Section /
+ *  House / Route / Stop / Fee Head must match records that already exist for the school — this
+ *  template never invents a real database value. */
+export async function bulkImportTemplateXlsx(): Promise<ArrayBuffer> {
+  const fields = BULK_IMPORT_FIELDS.filter((f) => f.key !== 'admissionNo')
+  const wb = new ExcelJS.Workbook()
+  const ws = wb.addWorksheet('Students')
+  ws.views = [{ state: 'frozen', ySplit: 1 }]
+
+  const headerRow = ws.getRow(1)
+  fields.forEach((f, i) => {
+    const cell = headerRow.getCell(i + 1)
+    cell.value = f.label
+    cell.font = { bold: true }
+  })
+  headerRow.commit()
+
+  const exampleRow = ws.getRow(2)
+  fields.forEach((f, i) => { exampleRow.getCell(i + 1).value = BULK_IMPORT_EXAMPLE_ROW[f.key] })
+  exampleRow.commit()
+
+  fields.forEach((f, i) => {
+    const width = Math.max(f.label.length, BULK_IMPORT_EXAMPLE_ROW[f.key].length, 8) + 2
+    ws.getColumn(i + 1).width = Math.min(32, width)
+  })
+
+  ws.getCell(1, 1).note = 'Row 2 is ONE example student, for format only — replace it with your '
+    + 'own data. Class + Section, House, Transport Route, Pickup Stop and Transport Fee Head '
+    + "must match records that already exist in this school's Academics / Transport / Finance."
+
+  return wb.xlsx.writeBuffer()
 }
 
 function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -623,7 +699,13 @@ function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => void })
             <Btn
               variant="secondary"
               icon="download"
-              onClick={() => downloadTextFile('student-import-template.csv', bulkImportTemplateCsv())}
+              onClick={() => {
+                void bulkImportTemplateXlsx().then((buf) => downloadArrayBuffer(
+                  'student-import-template.xlsx',
+                  buf,
+                  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                ))
+              }}
             >
               Download template
             </Btn>
