@@ -28,7 +28,7 @@ import { payrollRunToCsv, payrollCsvFileName, downloadPayslip } from '@/lib/payr
 import { downloadFeeReceipt } from '@/lib/feeReceipt'
 import { studentPhotoUrl } from '@/api/studentExtras'
 import { notifyFeeAudience } from '@/lib/feeNotify'
-import { collectAudienceContacts, contactsForStudentIds } from '@/lib/collectAudienceEmails'
+import { collectAudienceContacts, contactsByStudentId } from '@/lib/collectAudienceEmails'
 import { can } from '@/lib/gating'
 import { newIdempotencyKey } from '@/lib/idempotencyKey'
 import {
@@ -1585,25 +1585,50 @@ function RemindersModal({ dueInvoices, allDueInvoices, defaultersCount, schoolNa
     if (!targetInvoices.length) { toast.danger('No invoices selected', 'No due/partial invoices match the current view.'); return }
     setSending(true)
     try {
-      const studentIds = [...new Set(targetInvoices.map((i) => i.studentId))]
-      const contacts = await contactsForStudentIds(studentIds)
-      if (!contacts.emails.length && !contacts.phones.length) {
+      // One reminder PER STUDENT, each with that student's own outstanding total (already
+      // transport-gated correctly by the backend invoice engine, never recomputed here) — never
+      // one blended amount broadcast to every parent, which would misstate everyone's due.
+      const byStudent = new Map<string, { name: string; due: number; dueDate?: string }>()
+      for (const inv of targetInvoices) {
+        const entry = byStudent.get(inv.studentId) ?? { name: inv.studentName, due: 0, dueDate: undefined }
+        entry.due += inv.due
+        if (inv.dueDate && (!entry.dueDate || inv.dueDate < entry.dueDate)) entry.dueDate = inv.dueDate
+        byStudent.set(inv.studentId, entry)
+      }
+      const contactsById = await contactsByStudentId([...byStudent.keys()])
+
+      let totalReach = 0
+      let sentChannels: string[] = []
+      let sentAny = false
+      for (const [studentId, info] of byStudent) {
+        if (info.due <= 0) continue
+        const contacts = contactsById[studentId]
+        if (!contacts || (!contacts.emails.length && !contacts.phones.length)) continue
+        const res = await notifyFeeAudience({
+          kind: 'reminder',
+          schoolName,
+          currency,
+          studentName: info.name,
+          amount: info.due,
+          dueDate: info.dueDate,
+          channels,
+          audience: 'parents',
+          emails: contacts.emails,
+          phones: contacts.phones,
+        })
+        sentAny = true
+        totalReach += res.reach
+        sentChannels = res.channels
+      }
+
+      if (!sentAny) {
         toast.danger('No contacts found', 'None of the targeted students have a guardian email or phone on file.')
         return
       }
-      const totalDue = targetInvoices.reduce((sum, i) => sum + i.due, 0)
-      const res = await notifyFeeAudience({
-        kind: 'reminder',
-        schoolName,
-        currency,
-        amount: totalDue,
-        count: targetInvoices.length,
-        channels,
-        audience: 'parents',
-        emails: contacts.emails,
-        phones: contacts.phones,
-      })
-      toast.success('Reminders sent', `Reached ${fmtNum(res.reach)} parent(s) via ${res.channels.join(' · ')}.`)
+      toast.success(
+        'Reminders sent',
+        `Reached ${fmtNum(totalReach)} parent(s) across ${fmtNum(byStudent.size)} student(s) via ${sentChannels.join(' · ')}.`,
+      )
       onClose()
     } catch (err) {
       toast.danger('Could not send reminders', err instanceof Error ? err.message : 'Please try again.')

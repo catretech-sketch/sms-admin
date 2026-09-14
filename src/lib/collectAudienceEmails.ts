@@ -109,3 +109,30 @@ export async function contactsForStudentIds(studentIds: string[]): Promise<Audie
   } catch { /* best-effort */ }
   return { emails: [...emails], phones: [...phones] }
 }
+
+/** Same guardian-contact collection as contactsForStudentIds, but keyed per student — for a
+ *  reminder that must tell each parent THEIR OWN child's due, never one shared/blended send
+ *  that would mix one student's contacts (or amount) with another's. One listStudents() call
+ *  for every requested id, not one call per student. */
+export async function contactsByStudentId(
+  studentIds: string[],
+): Promise<Record<string, AudienceContacts>> {
+  const ids = new Set(studentIds)
+  const result: Record<string, AudienceContacts> = {}
+  if (!ids.size) return result
+  try {
+    for (const s of await listStudents()) {
+      if (!ids.has(s.id)) continue
+      const emails = new Set<string>()
+      const phones = new Set<string>()
+      addEmail(emails, s.guardianEmail)
+      addEmail(emails, s.father?.email)
+      addEmail(emails, s.mother?.email)
+      addPhone(phones, s.phone)
+      addPhone(phones, s.father?.phone)
+      addPhone(phones, s.mother?.phone)
+      result[s.id] = { emails: [...emails], phones: [...phones] }
+    }
+  } catch { /* best-effort */ }
+  return result
+}

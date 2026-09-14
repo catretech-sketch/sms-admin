@@ -292,7 +292,7 @@ describe('Fee collection tab', () => {
     expect(within(container).getByText('Rohan Iyer')).toBeInTheDocument()
   })
 
-  it('sends fee reminders to the guardians of every defaulter, via the real notify path', async () => {
+  it('sends fee reminders to the guardians of every defaulter, via the real notify path — one reminder per student, with THAT student\'s own due', async () => {
     students = [
       { id: 's1', admission_no: 'A1', class_label: 'X-A', name: 'Asha Verma', gender: 'F', grade: 'X', section: 'A', roll: 1, guardian_name: 'P1', guardian_phone: '9111111111', guardian_email: 'asha.parent@x.com', attendance_pct: 0, fee_status: 'due', fee_due: 0, status: 'active', house: '', avatar_hue: 1 },
     ]
@@ -305,16 +305,102 @@ describe('Fee collection tab', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Send reminders' }))
 
     await waitFor(() => {
+      // Per-student send: her OWN due (36000, from the inv-1 fixture), never a blended total
+      // across every defaulter, and no lingering "count" from the old bulk-message shape.
       expect(notifyFeeAudience).toHaveBeenCalledWith(expect.objectContaining({
         kind: 'reminder',
+        studentName: 'Asha Verma',
+        amount: 36000,
         emails: ['asha.parent@x.com'],
         phones: ['9111111111'],
-        count: 1,
       }))
+      expect(vi.mocked(notifyFeeAudience).mock.calls[0][0]).not.toHaveProperty('count')
     })
     await waitFor(() => {
       expect(within(container).getByText(/Reminders sent/i)).toBeInTheDocument()
     })
+  })
+
+  it('mixed Transport Yes/No students each get a reminder for their OWN amount — no transport fee leaks onto the No student, no shared total', async () => {
+    students = [
+      // Transport = No: base fees only (500 + 6300).
+      { id: 's1', admission_no: 'A1', class_label: 'X-A', name: 'Asha Verma', gender: 'F', grade: 'X', section: 'A', roll: 1, guardian_name: 'P1', guardian_phone: '9111111111', guardian_email: 'asha.parent@x.com', attendance_pct: 0, fee_status: 'due', fee_due: 0, status: 'active', house: '', avatar_hue: 1 },
+      // Transport = Yes: same base fees + the ₹17,000 transport fee, already folded into
+      // her invoice's `due` by the backend — the frontend never re-derives this.
+      { id: 's4', admission_no: 'A4', class_label: 'X-B', name: 'Kabir Shah', gender: 'M', grade: 'X', section: 'B', roll: 2, guardian_name: 'P4', guardian_phone: '9222222222', guardian_email: 'kabir.parent@x.com', attendance_pct: 0, fee_status: 'due', fee_due: 0, status: 'active', house: '', avatar_hue: 2 },
+    ]
+    feeInvoices = [
+      {
+        id: 'inv-1', student_id: 's1', student_name: 'Asha Verma', cls: 'X-A', grade: 'X',
+        academic_year: '2025-26', term: 'Term 1',
+        lines: [{ head_id: 'h1', head_name: 'Tour', amount: 500 }, { head_id: 'h2', head_name: 'Exam', amount: 6300 }],
+        total: 6800, paid: 0, waived: 0, due: 6800, status: 'due',
+      },
+      {
+        id: 'inv-4', student_id: 's4', student_name: 'Kabir Shah', cls: 'X-B', grade: 'X',
+        academic_year: '2025-26', term: 'Term 1',
+        lines: [
+          { head_id: 'h1', head_name: 'Tour', amount: 500 }, { head_id: 'h2', head_name: 'Exam', amount: 6300 },
+          { head_id: 'h3', head_name: 'Transport', amount: 17000 },
+        ],
+        total: 23800, paid: 0, waived: 0, due: 23800, status: 'due',
+      },
+    ]
+    const { container } = renderScreen()
+    await waitFor(() => {
+      expect(within(container).getByText('Asha Verma')).toBeInTheDocument()
+      expect(within(container).getByText('Kabir Shah')).toBeInTheDocument()
+    })
+    fireEvent.click(within(container).getByRole('button', { name: 'Send reminders' }))
+    const dialog = within(container).getByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Send reminders' }))
+
+    await waitFor(() => {
+      expect(notifyFeeAudience).toHaveBeenCalledWith(expect.objectContaining({
+        studentName: 'Asha Verma', amount: 6800, emails: ['asha.parent@x.com'],
+      }))
+      expect(notifyFeeAudience).toHaveBeenCalledWith(expect.objectContaining({
+        studentName: 'Kabir Shah', amount: 23800, emails: ['kabir.parent@x.com'],
+      }))
+    })
+    // Exactly one reminder per student — never one combined 6800+23800=30600 blended send.
+    expect(notifyFeeAudience).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not send a duplicate reminder or amount when the same student has more than one due invoice', async () => {
+    students = [
+      { id: 's1', admission_no: 'A1', class_label: 'X-A', name: 'Asha Verma', gender: 'F', grade: 'X', section: 'A', roll: 1, guardian_name: 'P1', guardian_phone: '9111111111', guardian_email: 'asha.parent@x.com', attendance_pct: 0, fee_status: 'due', fee_due: 0, status: 'active', house: '', avatar_hue: 1 },
+    ]
+    feeInvoices = [
+      {
+        id: 'inv-1', student_id: 's1', student_name: 'Asha Verma', cls: 'X-A', grade: 'X',
+        academic_year: '2025-26', term: 'Term 1', lines: [{ head_id: 'h1', head_name: 'Academic', amount: 36000 }],
+        total: 36000, paid: 0, waived: 0, due: 36000, status: 'due',
+      },
+      {
+        id: 'inv-1b', student_id: 's1', student_name: 'Asha Verma', cls: 'X-A', grade: 'X',
+        academic_year: '2025-26', term: 'Term 2', lines: [{ head_id: 'h1', head_name: 'Academic', amount: 12000 }],
+        total: 12000, paid: 0, waived: 0, due: 12000, status: 'due',
+      },
+    ]
+    const { container } = renderScreen()
+    await waitFor(() => {
+      // She now has TWO due invoice rows in Collection (one per period) — that's the point of
+      // this fixture, not a bug: getAllByText, not getByText.
+      expect(within(container).getAllByText('Asha Verma').length).toBeGreaterThan(0)
+    })
+    fireEvent.click(within(container).getByRole('button', { name: 'Send reminders' }))
+    const dialog = within(container).getByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Send reminders' }))
+
+    await waitFor(() => {
+      // One reminder for Asha, with BOTH her due invoices summed (36000 + 12000) — not two
+      // separate reminders and not just the first invoice's amount.
+      expect(notifyFeeAudience).toHaveBeenCalledWith(expect.objectContaining({
+        studentName: 'Asha Verma', amount: 48000,
+      }))
+    })
+    expect(notifyFeeAudience).toHaveBeenCalledTimes(1)
   })
 
   it('shows the fee-head breakdown for a multi-line invoice, not just the lump total', async () => {
@@ -739,6 +825,11 @@ describe('Fee structure', () => {
         phones: ['9000000001'],
       }))
     })
+    // Deliberately generic (spec: never announce the full published structure amount to
+    // every student) — no amount/total field of any kind on this call.
+    const invoiceCreatedCall = vi.mocked(notifyFeeAudience).mock.calls
+      .find(([arg]) => arg.kind === 'invoice_created')
+    expect(invoiceCreatedCall?.[0]).not.toHaveProperty('amount')
     await waitFor(() => expect(createdNotifications.some((n) => n.title === 'Fee billed')).toBe(true))
   })
 
