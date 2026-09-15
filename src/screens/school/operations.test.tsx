@@ -129,9 +129,9 @@ describe('Issues tab', () => {
 
   it('opens the detail drawer with vehicle context, photo absence, and the notes timeline', async () => {
     renderScreen()
-    screen.getByRole('button', { name: /issues/i }).click()
+    fireEvent.click(screen.getByRole('button', { name: /issues/i }))
     await waitFor(() => expect(screen.getByText('Brake noise')).toBeInTheDocument())
-    screen.getByText('Brake noise').click()
+    fireEvent.click(screen.getByText('Brake noise'))
     await waitFor(() => expect(screen.getByText('Looking into it')).toBeInTheDocument())
     expect(screen.getByText('BUS-01')).toBeInTheDocument()
     expect(screen.getByText('Priya Admin')).toBeInTheDocument()
