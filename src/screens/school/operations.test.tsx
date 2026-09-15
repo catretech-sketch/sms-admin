@@ -137,4 +137,59 @@ describe('Issues tab', () => {
     expect(screen.getByText('Priya Admin')).toBeInTheDocument()
     expect(screen.queryByAltText('Issue attachment')).not.toBeInTheDocument()
   })
+
+  it('changes status via PATCH and reflects the new status', async () => {
+    const { fetchMock } = renderScreen(['school.admin'])
+    fireEvent.click(screen.getByRole('button', { name: /issues/i }))
+    await waitFor(() => expect(screen.getByText('Brake noise')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Brake noise'))
+    await waitFor(() => expect(screen.getByText('Looking into it')).toBeInTheDocument())
+
+    const statusSelects = screen.getAllByRole('combobox') as HTMLSelectElement[]
+    const drawerStatusSelect = statusSelects[statusSelects.length - 1]
+    fireEvent.change(drawerStatusSelect, { target: { value: 'resolved' } })
+
+    await waitFor(() => {
+      const patch = fetchMock.mock.calls.find((c: unknown[]) => {
+        const url = String(c[0])
+        const opts = c[1] as RequestInit | undefined
+        return url.includes('/issues/I1') && (opts?.method ?? '') === 'PATCH'
+      })
+      expect(patch).toBeTruthy()
+      expect(JSON.parse((patch![1] as RequestInit).body as string)).toEqual({ status: 'resolved' })
+    })
+  })
+
+  it('adds a note via PATCH and clears the textarea on success', async () => {
+    const { fetchMock } = renderScreen(['school.admin'])
+    fireEvent.click(screen.getByRole('button', { name: /issues/i }))
+    await waitFor(() => expect(screen.getByText('Brake noise')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Brake noise'))
+    await waitFor(() => expect(screen.getByText('Looking into it')).toBeInTheDocument())
+
+    const textarea = screen.getByPlaceholderText(/add a note/i) as HTMLTextAreaElement
+    fireEvent.input(textarea, { target: { value: 'Scheduled for tomorrow' } })
+    fireEvent.click(screen.getByRole('button', { name: /add note/i }))
+
+    await waitFor(() => {
+      const patch = fetchMock.mock.calls.find((c: unknown[]) => {
+        const url = String(c[0])
+        const opts = c[1] as RequestInit | undefined
+        return url.includes('/issues/I1') && (opts?.method ?? '') === 'PATCH'
+          && JSON.parse((opts?.body as string) ?? '{}').note === 'Scheduled for tomorrow'
+      })
+      expect(patch).toBeTruthy()
+    })
+    await waitFor(() => expect(textarea.value).toBe(''))
+  })
+
+  it('hides status and note controls for a non-manager role', async () => {
+    renderScreen(['school.teacher'])
+    fireEvent.click(screen.getByRole('button', { name: /issues/i }))
+    await waitFor(() => expect(screen.getByText('Brake noise')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Brake noise'))
+    await waitFor(() => expect(screen.getByText('Looking into it')).toBeInTheDocument())
+    expect(screen.queryByPlaceholderText(/add a note/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /add note/i })).not.toBeInTheDocument()
+  })
 })

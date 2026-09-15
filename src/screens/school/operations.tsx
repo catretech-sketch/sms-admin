@@ -21,7 +21,7 @@ import {
 import { TierGate } from '@/components/shell/gates'
 import { FleetLiveMap } from '@/components/maps/RouteBuilderMap'
 import { useComplaints, useCreateComplaint, useUpdateComplaint } from '@/api/hooks/useComplaints'
-import { useIssues, useIssue } from '@/api/hooks/useIssues'
+import { useIssues, useIssue, useUpdateIssue } from '@/api/hooks/useIssues'
 import type { Issue, IssueCategory, IssuePriority, IssueStatus } from '@/api/issues'
 import { useThreads, useThreadMessages, useCreateThread, useSendMessage } from '@/api/hooks/useThreads'
 import { useMergedClassNames } from '@/api/hooks/useClasses'
@@ -716,6 +716,7 @@ function ComplaintsTab() {
 
 /* ---------- Issues: staff-reported vehicle/student/route/safety issues ---------- */
 function IssuesTab() {
+  const app = useApp()
   const [statusFilter, setStatusFilter] = useState<IssueStatus | 'all'>('all')
   const [q, setQ] = useState('')
   const [openIssue, setOpenIssue] = useState<Issue | null>(null)
@@ -776,15 +777,56 @@ function IssuesTab() {
           />
         )}
       </Card>
-      <IssueDetailDrawer issue={openIssue} onClose={() => setOpenIssue(null)} />
+      <IssueDetailDrawer
+        issue={openIssue}
+        onClose={() => setOpenIssue(null)}
+        canManage={can(app.role, 'issues', 'E')}
+      />
     </div>
   )
 }
 
-function IssueDetailDrawer({ issue, onClose }: { issue: Issue | null; onClose: () => void }) {
+function IssueDetailDrawer({ issue, onClose, canManage }: { issue: Issue | null; onClose: () => void; canManage: boolean }) {
+  const toast = useToast()
   const detailQ = useIssue(issue?.id ?? null)
+  const updateIssueMut = useUpdateIssue()
+  const [note, setNote] = useState('')
+  const [status, setStatus] = useState<IssueStatus>('open')
   const full = detailQ.data ?? issue
   const notes = (full?.notes ?? []).slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+
+  useEffect(() => {
+    if (full) setStatus(full.status)
+  }, [full])
+
+  const changeStatus = (next: IssueStatus) => {
+    if (!issue) return
+    const prev = status
+    setStatus(next)
+    updateIssueMut.mutate(
+      { id: issue.id, input: { status: next } },
+      {
+        onSuccess: () => toast.success('Status updated', `${issue.title} is now ${ISSUE_STATUS_LABEL[next]}.`),
+        onError: (err) => {
+          setStatus(prev)
+          toast.danger('Could not update status', err instanceof Error ? err.message : 'Please try again.')
+        },
+      },
+    )
+  }
+
+  const submitNote = () => {
+    if (!issue) return
+    const text = note.trim()
+    if (!text) { toast.danger('Note required', 'Enter a note before submitting.'); return }
+    updateIssueMut.mutate(
+      { id: issue.id, input: { note: text } },
+      {
+        onSuccess: () => { setNote(''); toast.success('Note added', 'Your note was saved.') },
+        onError: (err) => toast.danger('Could not add note', err instanceof Error ? err.message : 'Please try again.'),
+      },
+    )
+  }
 
   return (
     <Drawer open={!!issue} onClose={onClose} icon="alert" title={issue?.title} sub={issue ? ISSUE_CATEGORY_LABEL[issue.category] : undefined}>
@@ -792,7 +834,7 @@ function IssueDetailDrawer({ issue, onClose }: { issue: Issue | null; onClose: (
         <div className="col gap16">
           <div className="row ai-center gap8">
             <Badge tone={ISSUE_PRIORITY_TONE[issue.priority]} soft dot>{issue.priority[0].toUpperCase() + issue.priority.slice(1)}</Badge>
-            <Badge tone={ISSUE_STATUS_TONE[full.status]} soft>{ISSUE_STATUS_LABEL[full.status]}</Badge>
+            <Badge tone={ISSUE_STATUS_TONE[status]} soft>{ISSUE_STATUS_LABEL[status]}</Badge>
           </div>
           <div>
             <div className="t-xs muted3" style={{ textTransform: 'uppercase', letterSpacing: 0.4 }}>Description</div>
@@ -814,6 +856,21 @@ function IssueDetailDrawer({ issue, onClose }: { issue: Issue | null; onClose: (
           {full.photoBase64 && (
             <img src={full.photoBase64} alt="Issue attachment" style={{ maxWidth: '100%', borderRadius: 10 }} />
           )}
+          {canManage && (
+            <Field label="Status">
+              <Select
+                options={[
+                  { value: 'open', label: 'Open' },
+                  { value: 'in_progress', label: 'In progress' },
+                  { value: 'resolved', label: 'Resolved' },
+                  { value: 'closed', label: 'Closed' },
+                ]}
+                value={status}
+                disabled={updateIssueMut.isPending}
+                onChange={(e) => changeStatus(e.target.value as IssueStatus)}
+              />
+            </Field>
+          )}
           <div>
             <div className="t-xs muted3" style={{ textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 }}>Notes</div>
             <div className="col gap10">
@@ -828,6 +885,16 @@ function IssueDetailDrawer({ issue, onClose }: { issue: Issue | null; onClose: (
                 </div>
               ))}
             </div>
+            {canManage && (
+              <div className="col gap8" style={{ marginTop: 10 }}>
+                <Textarea value={note} rows={3} placeholder="Add a note…" onChange={(e) => setNote(e.target.value)} />
+                <div className="row jc-end">
+                  <Btn variant="primary" size="sm" icon="check" disabled={updateIssueMut.isPending} onClick={submitNote}>
+                    {updateIssueMut.isPending ? 'Adding…' : 'Add note'}
+                  </Btn>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
