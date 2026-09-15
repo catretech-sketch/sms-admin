@@ -93,6 +93,11 @@ export const queryKeys = {
   complaints: {
     all: ['complaints'] as const,
   },
+  issues: {
+    all: ['issues'] as const,
+    list: (status?: string) => ['issues', 'list', status ?? 'all'] as const,
+    detail: (id: string) => ['issues', 'detail', id] as const,
+  },
   threads: {
     all: ['threads'] as const,
     messages: (threadId: string) => ['threads', 'messages', threadId] as const,
