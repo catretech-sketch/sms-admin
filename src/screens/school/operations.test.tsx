@@ -126,4 +126,15 @@ describe('Issues tab', () => {
     await waitFor(() => expect(screen.queryByText('Missed pickup')).not.toBeInTheDocument())
     expect(screen.getByText('Brake noise')).toBeInTheDocument()
   })
+
+  it('opens the detail drawer with vehicle context, photo absence, and the notes timeline', async () => {
+    renderScreen()
+    screen.getByRole('button', { name: /issues/i }).click()
+    await waitFor(() => expect(screen.getByText('Brake noise')).toBeInTheDocument())
+    screen.getByText('Brake noise').click()
+    await waitFor(() => expect(screen.getByText('Looking into it')).toBeInTheDocument())
+    expect(screen.getByText('BUS-01')).toBeInTheDocument()
+    expect(screen.getByText('Priya Admin')).toBeInTheDocument()
+    expect(screen.queryByAltText('Issue attachment')).not.toBeInTheDocument()
+  })
 })

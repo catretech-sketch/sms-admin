@@ -21,7 +21,7 @@ import {
 import { TierGate } from '@/components/shell/gates'
 import { FleetLiveMap } from '@/components/maps/RouteBuilderMap'
 import { useComplaints, useCreateComplaint, useUpdateComplaint } from '@/api/hooks/useComplaints'
-import { useIssues } from '@/api/hooks/useIssues'
+import { useIssues, useIssue } from '@/api/hooks/useIssues'
 import type { Issue, IssueCategory, IssuePriority, IssueStatus } from '@/api/issues'
 import { useThreads, useThreadMessages, useCreateThread, useSendMessage } from '@/api/hooks/useThreads'
 import { useMergedClassNames } from '@/api/hooks/useClasses'
@@ -776,7 +776,62 @@ function IssuesTab() {
           />
         )}
       </Card>
+      <IssueDetailDrawer issue={openIssue} onClose={() => setOpenIssue(null)} />
     </div>
+  )
+}
+
+function IssueDetailDrawer({ issue, onClose }: { issue: Issue | null; onClose: () => void }) {
+  const detailQ = useIssue(issue?.id ?? null)
+  const full = detailQ.data ?? issue
+  const notes = (full?.notes ?? []).slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+
+  return (
+    <Drawer open={!!issue} onClose={onClose} icon="alert" title={issue?.title} sub={issue ? ISSUE_CATEGORY_LABEL[issue.category] : undefined}>
+      {issue && full && (
+        <div className="col gap16">
+          <div className="row ai-center gap8">
+            <Badge tone={ISSUE_PRIORITY_TONE[issue.priority]} soft dot>{issue.priority[0].toUpperCase() + issue.priority.slice(1)}</Badge>
+            <Badge tone={ISSUE_STATUS_TONE[full.status]} soft>{ISSUE_STATUS_LABEL[full.status]}</Badge>
+          </div>
+          <div>
+            <div className="t-xs muted3" style={{ textTransform: 'uppercase', letterSpacing: 0.4 }}>Description</div>
+            <div className="t-md" style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{full.description}</div>
+          </div>
+          <div className="sm-grid-2 gap12">
+            <div>
+              <div className="t-xs muted3">Reporter</div>
+              <div className="t-sm fw6">{full.reporterName ?? full.reporterUserId}</div>
+            </div>
+            <div>
+              <div className="t-xs muted3">Created</div>
+              <div className="t-sm fw6">{new Date(full.createdAt).toLocaleString()}</div>
+            </div>
+            {full.vehicleId && <div><div className="t-xs muted3">Vehicle</div><div className="t-sm fw6">{full.vehicleId}</div></div>}
+            {full.routeId && <div><div className="t-xs muted3">Route</div><div className="t-sm fw6">{full.routeId}</div></div>}
+            {full.tripId && <div><div className="t-xs muted3">Trip</div><div className="t-sm fw6">{full.tripId}</div></div>}
+          </div>
+          {full.photoBase64 && (
+            <img src={full.photoBase64} alt="Issue attachment" style={{ maxWidth: '100%', borderRadius: 10 }} />
+          )}
+          <div>
+            <div className="t-xs muted3" style={{ textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 }}>Notes</div>
+            <div className="col gap10">
+              {notes.length === 0 && <div className="t-sm muted">No notes yet.</div>}
+              {notes.map((n) => (
+                <div key={n.id} style={{ padding: 10, borderRadius: 8, background: 'var(--surface-2)' }}>
+                  <div className="row ai-center jc-between">
+                    <span className="t-xs fw6">{n.authorName ?? n.authorUserId}</span>
+                    <span className="t-xs muted3">{new Date(n.createdAt).toLocaleString()}</span>
+                  </div>
+                  <div className="t-sm" style={{ marginTop: 4 }}>{n.note}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </Drawer>
   )
 }
 
