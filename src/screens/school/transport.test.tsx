@@ -7,6 +7,7 @@ import { tokenStore } from '@/api/auth/tokenStore'
 import { transportScreens } from './transport'
 
 const TransportBusesScreen = transportScreens['school.transport.buses']
+const TransportDashboardScreen = transportScreens['school.transport']
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -61,6 +62,20 @@ function renderScreen(roles: string[]) {
   )
 }
 
+function renderDashboard(roles: string[]) {
+  vi.stubGlobal('fetch', makeFetch(roles))
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+  return render(
+    <QueryClientProvider client={qc}>
+      <AppProvider>
+        <ToastProvider>
+          <TransportDashboardScreen />
+        </ToastProvider>
+      </AppProvider>
+    </QueryClientProvider>,
+  )
+}
+
 describe('Transport role gating', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -86,5 +101,17 @@ describe('Transport role gating', () => {
     await waitFor(() => expect(screen.getByText('Bus 01')).toBeInTheDocument())
     expect(screen.queryByRole('button', { name: /add bus/i })).not.toBeInTheDocument()
     expect(screen.queryByTitle('Edit')).not.toBeInTheDocument()
+  })
+
+  it('shows the dashboard bus row Edit button for admin (operations.E)', async () => {
+    renderDashboard(['school.admin'])
+    await waitFor(() => expect(screen.getByText('Bus 01')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /^edit$/i })).toBeInTheDocument()
+  })
+
+  it('hides the dashboard bus row Edit button for principal (operations.V only)', async () => {
+    renderDashboard(['school.principal'])
+    await waitFor(() => expect(screen.getByText('Bus 01')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: /^edit$/i })).not.toBeInTheDocument()
   })
 })

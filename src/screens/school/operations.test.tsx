@@ -192,4 +192,106 @@ describe('Issues tab', () => {
     expect(screen.queryByPlaceholderText(/add a note/i)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /add note/i })).not.toBeInTheDocument()
   })
+
+  it('filters issues client-side by search term', async () => {
+    const rows = [
+      ...ISSUE_ROWS,
+      {
+        id: 'I3', tenant_id: TENANT_ID, reporter_user_id: 'U7', reporter_name: 'Anil Warden',
+        category: 'safety', title: 'Loose railing', description: 'Railing near the stairwell is loose',
+        priority: 'high', status: 'open', vehicle_id: null, route_id: null, trip_id: null,
+        photo_base64: null, created_at: '2026-09-12T09:00:00Z', updated_at: '2026-09-12T09:00:00Z',
+      },
+    ]
+    renderScreen(['school.admin'], rows)
+    fireEvent.click(screen.getByRole('button', { name: /issues/i }))
+    await waitFor(() => expect(screen.getByText('Brake noise')).toBeInTheDocument())
+    expect(screen.getByText('Loose railing')).toBeInTheDocument()
+
+    const searchInput = screen.getByPlaceholderText(/search title or description/i)
+    fireEvent.change(searchInput, { target: { value: 'brake' } })
+
+    await waitFor(() => expect(screen.queryByText('Loose railing')).not.toBeInTheDocument())
+    expect(screen.getByText('Brake noise')).toBeInTheDocument()
+  })
+
+  it('reverts the status select when the PATCH fails', async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: { method?: string; body?: unknown }) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
+      const method = (init?.method ?? 'GET').toUpperCase()
+      const auth = authAndSchoolResponse(url, method, ['school.admin'])
+      if (auth) return Promise.resolve(auth)
+      if (/\/staff\/issues\/[^/?]+$/.test(url)) return Promise.resolve(jsonResponse({ data: ISSUE_DETAIL }))
+      if (url.includes('/staff/issues')) return Promise.resolve(jsonResponse({ data: ISSUE_ROWS, next_cursor: null }))
+      if (/\/issues\/[^/?]+$/.test(url) && method === 'PATCH') {
+        return Promise.resolve(jsonResponse({ error: 'Server error' }, 500))
+      }
+      return Promise.resolve(jsonResponse({ data: [], next_cursor: null }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <AppProvider>
+          <ToastProvider>
+            <CommunicationScreen />
+          </ToastProvider>
+        </AppProvider>
+      </QueryClientProvider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /issues/i }))
+    await waitFor(() => expect(screen.getByText('Brake noise')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Brake noise'))
+    await waitFor(() => expect(screen.getByText('Looking into it')).toBeInTheDocument())
+
+    const statusSelects = screen.getAllByRole('combobox') as HTMLSelectElement[]
+    const drawerStatusSelect = statusSelects[statusSelects.length - 1]
+    fireEvent.change(drawerStatusSelect, { target: { value: 'resolved' } })
+
+    await waitFor(() => expect(drawerStatusSelect.value).toBe('open'))
+  })
+
+  it('preserves the note draft when the PATCH fails', async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: { method?: string; body?: unknown }) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
+      const method = (init?.method ?? 'GET').toUpperCase()
+      const auth = authAndSchoolResponse(url, method, ['school.admin'])
+      if (auth) return Promise.resolve(auth)
+      if (/\/staff\/issues\/[^/?]+$/.test(url)) return Promise.resolve(jsonResponse({ data: ISSUE_DETAIL }))
+      if (url.includes('/staff/issues')) return Promise.resolve(jsonResponse({ data: ISSUE_ROWS, next_cursor: null }))
+      if (/\/issues\/[^/?]+$/.test(url) && method === 'PATCH') {
+        return Promise.resolve(jsonResponse({ error: 'Server error' }, 500))
+      }
+      return Promise.resolve(jsonResponse({ data: [], next_cursor: null }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <AppProvider>
+          <ToastProvider>
+            <CommunicationScreen />
+          </ToastProvider>
+        </AppProvider>
+      </QueryClientProvider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /issues/i }))
+    await waitFor(() => expect(screen.getByText('Brake noise')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Brake noise'))
+    await waitFor(() => expect(screen.getByText('Looking into it')).toBeInTheDocument())
+
+    const textarea = screen.getByPlaceholderText(/add a note/i) as HTMLTextAreaElement
+    fireEvent.input(textarea, { target: { value: 'Draft note that should survive' } })
+    fireEvent.click(screen.getByRole('button', { name: /add note/i }))
+
+    await waitFor(() => {
+      const patch = fetchMock.mock.calls.some((c: unknown[]) => {
+        const url = String(c[0])
+        const opts = c[1] as RequestInit | undefined
+        return url.includes('/issues/I1') && (opts?.method ?? '') === 'PATCH'
+      })
+      expect(patch).toBe(true)
+    })
+    expect(textarea.value).toBe('Draft note that should survive')
+  })
 })

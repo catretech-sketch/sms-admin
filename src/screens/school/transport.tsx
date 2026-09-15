@@ -147,7 +147,7 @@ function TransportDashboardBody() {
                       <div className="fw6">{b.busNo}</div>
                       <div className="t-xs muted3 truncate">{b.routeName ?? 'No route'}{b.driver ? ` · ${b.driver}` : ''}</div>
                     </div>
-                    <Btn variant="ghost" size="sm" onClick={() => openBusEditor(app, b.busId)}>Edit</Btn>
+                    {canEdit && <Btn variant="ghost" size="sm" onClick={() => openBusEditor(app, b.busId)}>Edit</Btn>}
                   </div>
                 ))}
               </div>
@@ -227,6 +227,8 @@ function CreateRouteModal({
 }
 
 function RouteBuilder({ route, onBack }: { route: TransportRoute; onBack: () => void }) {
+  const app = useApp()
+  const canEdit = can(app.role, 'operations', 'E')
   const toast = useToast()
   const stopsQ = useRouteStops(route.id)
   const stops = stopsQ.data ?? []
@@ -342,9 +344,13 @@ function RouteBuilder({ route, onBack }: { route: TransportRoute; onBack: () => 
                       <div className="fw6 t-md truncate">{s.name}</div>
                       <div className="t-xs muted3">{unplaced ? 'Not on map — select & click map' : `${(s.lat as number).toFixed(4)}, ${(s.lng as number).toFixed(4)}`}</div>
                     </div>
-                    <IconBtn icon="chevUp" title="Move up" disabled={i === 0 || reorder.isPending} onClick={(e) => { e.stopPropagation(); moveStop(i, -1) }} />
-                    <IconBtn icon="chevDown" title="Move down" disabled={i === sorted.length - 1 || reorder.isPending} onClick={(e) => { e.stopPropagation(); moveStop(i, 1) }} />
-                    <IconBtn icon="trash" title="Delete" onClick={(e) => { e.stopPropagation(); removeStop(s.id) }} />
+                    {canEdit && (
+                      <>
+                        <IconBtn icon="chevUp" title="Move up" disabled={i === 0 || reorder.isPending} onClick={(e) => { e.stopPropagation(); moveStop(i, -1) }} />
+                        <IconBtn icon="chevDown" title="Move down" disabled={i === sorted.length - 1 || reorder.isPending} onClick={(e) => { e.stopPropagation(); moveStop(i, 1) }} />
+                        <IconBtn icon="trash" title="Delete" onClick={(e) => { e.stopPropagation(); removeStop(s.id) }} />
+                      </>
+                    )}
                   </div>
                 )
               })}
@@ -353,7 +359,7 @@ function RouteBuilder({ route, onBack }: { route: TransportRoute; onBack: () => 
           {selectedId && (
             <div style={{ padding: 14, borderTop: '1px solid var(--border)' }} className="col gap10">
               <Field label="Stop name">
-                <Input value={editName} onChange={(e) => setEditName(e.target.value)} onBlur={saveName} />
+                <Input value={editName} onChange={(e) => setEditName(e.target.value)} onBlur={saveName} disabled={!canEdit} />
               </Field>
               <div className="t-xs muted3 row ai-center gap6">
                 <Icon name="pin" size={12} />
@@ -366,7 +372,7 @@ function RouteBuilder({ route, onBack }: { route: TransportRoute; onBack: () => 
           stops={stops}
           height={420}
           selectedStopId={selectedId}
-          onMapClick={handleMapClick}
+          onMapClick={canEdit ? handleMapClick : undefined}
           onStopClick={(stopId) => {
             const s = stops.find((x) => x.id === stopId)
             if (s) selectStop(s)

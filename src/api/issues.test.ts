@@ -23,6 +23,17 @@ describe('toIssue', () => {
     expect(issue.notes).toHaveLength(1)
     expect(issue.notes?.[0]).toMatchObject({ id: 'N1', authorUserId: 'U2', note: 'Checked, scheduling service' })
   })
+
+  it('falls back to safe defaults for unrecognized enum values from the wire', () => {
+    const issue = toIssue({
+      id: 'I1', tenant_id: 'T1', reporter_user_id: 'U1', category: 'maintenance',
+      title: 'Odd category', description: 'x', priority: 'urgent', status: 'archived',
+      created_at: '2026-09-15T09:00:00Z', updated_at: '2026-09-15T09:00:00Z',
+    })
+    expect(issue.category).toBe('other')
+    expect(issue.priority).toBe('normal')
+    expect(issue.status).toBe('open')
+  })
 })
 
 describe('listIssues', () => {
