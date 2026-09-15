@@ -3,7 +3,7 @@
    ============================================================ */
 import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import { useApp, useToast } from '@/lib/hooks'
-import { tierIncludes } from '@/lib/gating'
+import { can, tierIncludes } from '@/lib/gating'
 import {
   PageHead, Card, CardHead, Kpi, Btn, Badge, Field, Input, Modal, Empty, IconBtn, Icon, Select,
 } from '@/components/ui'
@@ -53,6 +53,7 @@ function kpiVal(loading: boolean, err: boolean, val: number | undefined, fmt: (n
 
 function TransportDashboardBody() {
   const app = useApp()
+  const canEdit = can(app.role, 'operations', 'E')
   const summary = useTransportSummary()
   const routesQ = useTransportRoutes()
   const busesQ = useTransportBuses()
@@ -70,8 +71,8 @@ function TransportDashboardBody() {
       <PageHead title="Transport" sub="Routes, buses, live GPS & student assignments"
         actions={
           <div className="row gap8 wrap">
-            <Btn variant="secondary" icon="plus" onClick={() => setRouteModalOpen(true)}>Add route</Btn>
-            <Btn variant="primary" icon="plus" onClick={() => setBusModalOpen(true)}>Add bus</Btn>
+            {canEdit && <Btn variant="secondary" icon="plus" onClick={() => setRouteModalOpen(true)}>Add route</Btn>}
+            {canEdit && <Btn variant="primary" icon="plus" onClick={() => setBusModalOpen(true)}>Add bus</Btn>}
           </div>
         } />
       <div className="col gap16">
@@ -88,7 +89,7 @@ function TransportDashboardBody() {
               <CardHead title="Routes" icon="pin"
                 action={
                   <div className="row gap6">
-                    <Btn variant="ghost" size="sm" icon="plus" onClick={() => setRouteModalOpen(true)}>Add</Btn>
+                    {canEdit && <Btn variant="ghost" size="sm" icon="plus" onClick={() => setRouteModalOpen(true)}>Add</Btn>}
                     <Btn variant="ghost" size="sm" onClick={() => app.go('school.transport.routes')}>All</Btn>
                   </div>
                 } />
@@ -102,7 +103,7 @@ function TransportDashboardBody() {
               <div className="t-sm muted" style={{ padding: 16 }}>Loading…</div>
             ) : routes.length === 0 ? (
               <Empty icon="pin" title="No routes" body="Create a route, then place stops on the map."
-                action={<Btn variant="primary" size="sm" onClick={() => setRouteModalOpen(true)}>Add route</Btn>} />
+                action={canEdit ? <Btn variant="primary" size="sm" onClick={() => setRouteModalOpen(true)}>Add route</Btn> : undefined} />
             ) : (
               <div>
                 {routes.slice(0, 6).map((r) => (
@@ -123,7 +124,7 @@ function TransportDashboardBody() {
               <CardHead title="Buses" icon="bus"
                 action={
                   <div className="row gap6">
-                    <Btn variant="ghost" size="sm" icon="plus" onClick={() => setBusModalOpen(true)}>Add</Btn>
+                    {canEdit && <Btn variant="ghost" size="sm" icon="plus" onClick={() => setBusModalOpen(true)}>Add</Btn>}
                     <Btn variant="ghost" size="sm" onClick={() => app.go('school.transport.buses')}>All</Btn>
                   </div>
                 } />
@@ -137,7 +138,7 @@ function TransportDashboardBody() {
               <div className="t-sm muted" style={{ padding: 16 }}>Loading…</div>
             ) : buses.length === 0 ? (
               <Empty icon="bus" title="No buses" body="Add a vehicle and assign a route and driver."
-                action={<Btn variant="primary" size="sm" onClick={() => setBusModalOpen(true)}>Add bus</Btn>} />
+                action={canEdit ? <Btn variant="primary" size="sm" onClick={() => setBusModalOpen(true)}>Add bus</Btn> : undefined} />
             ) : (
               <div>
                 {buses.slice(0, 6).map((b) => (
@@ -378,6 +379,7 @@ function RouteBuilder({ route, onBack }: { route: TransportRoute; onBack: () => 
 
 function TransportRoutesBody() {
   const app = useApp()
+  const canEdit = can(app.role, 'operations', 'E')
   const toast = useToast()
   const routesQ = useTransportRoutes()
   const routes = routesQ.data ?? []
@@ -416,7 +418,7 @@ function TransportRoutesBody() {
         actions={
           <div className="row gap8">
             <Btn variant="ghost" icon="arrowLeft" onClick={() => app.go('school.transport')}>Back to Transport</Btn>
-            <Btn variant="primary" icon="plus" onClick={() => setCreateOpen(true)}>New route</Btn>
+            {canEdit && <Btn variant="primary" icon="plus" onClick={() => setCreateOpen(true)}>New route</Btn>}
           </div>
         } />
       <Card pad={false}>
@@ -426,7 +428,8 @@ function TransportRoutesBody() {
             <Btn variant="secondary" size="sm" onClick={() => routesQ.refetch()}>Retry</Btn>
           </div>
         ) : routesQ.isLoading ? <div style={{ padding: 24 }} className="muted">Loading routes…</div> : routes.length === 0 ? (
-          <Empty icon="pin" title="No routes yet" body="Create a route then place stops on the map." action={<Btn variant="primary" onClick={() => setCreateOpen(true)}>Create route</Btn>} />
+          <Empty icon="pin" title="No routes yet" body="Create a route then place stops on the map."
+            action={canEdit ? <Btn variant="primary" onClick={() => setCreateOpen(true)}>Create route</Btn> : undefined} />
         ) : (
           <div>
             {routes.map((r) => (
@@ -437,7 +440,7 @@ function TransportRoutesBody() {
                 </div>
                 <div className="row gap8">
                   <Btn variant="secondary" icon="pin" onClick={() => setEditing(r)}>Open builder</Btn>
-                  <IconBtn icon="trash" title="Delete route" onClick={() => setDeleting(r)} />
+                  {canEdit && <IconBtn icon="trash" title="Delete route" onClick={() => setDeleting(r)} />}
                 </div>
               </div>
             ))}
@@ -718,6 +721,7 @@ function TravelingTeachersCell({ busId }: { busId: string }) {
 
 function TransportBusesBody() {
   const app = useApp()
+  const canEdit = can(app.role, 'operations', 'E')
   const busesQ = useTransportBuses()
   const buses = busesQ.data ?? []
   const staffQ = useStaff()
@@ -742,7 +746,7 @@ function TransportBusesBody() {
         actions={
           <div className="row gap8">
             <Btn variant="ghost" icon="arrowLeft" onClick={() => app.go('school.transport')}>Back to Transport</Btn>
-            <Btn variant="primary" icon="plus" onClick={() => setCreateOpen(true)}>Add bus</Btn>
+            {canEdit && <Btn variant="primary" icon="plus" onClick={() => setCreateOpen(true)}>Add bus</Btn>}
           </div>
         } />
       <Card>
@@ -772,7 +776,7 @@ function TransportBusesBody() {
                   <td>{b.stopCount}</td>
                   <td>{b.studentsAssigned}</td>
                   <td>{b.studentsAssigned} / {b.capacity ?? '∞'}</td>
-                  <td><IconBtn icon="edit" title="Edit" onClick={() => setEditBus(b)} /></td>
+                  <td>{canEdit ? <IconBtn icon="edit" title="Edit" onClick={() => setEditBus(b)} /> : null}</td>
                 </tr>
               ))}
             </tbody>
