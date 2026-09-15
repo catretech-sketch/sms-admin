@@ -51,6 +51,7 @@ export const PERMS: Record<string, Record<GateRole, Cap[]>> = {
   communication: { admin: ['E'], principal: ['E', 'A'], vice_principal: ['E'], teacher: ['E'], staff: ['V', 'E'] },
   operations: { admin: ['E'], principal: ['V'], vice_principal: ['V'], teacher: [], staff: ['V', 'E'] },
   settings: { admin: ['E'], principal: ['V'], vice_principal: ['V'], teacher: [], staff: [] },
+  issues: { admin: ['V', 'E'], principal: ['V', 'E'], vice_principal: ['V', 'E'], teacher: [], staff: [] },
 }
 
 /* ---------- Schools (tenants) ---------- */

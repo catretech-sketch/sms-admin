@@ -49,6 +49,14 @@ describe('gating', () => {
     expect(can('principal', 'fees', 'E')).toBe(true)
     expect(can('principal', 'fees', 'A')).toBe(true)
   })
+  it('can() gates Issues manager actions to admin/principal/vice_principal (owner via inheritance)', () => {
+    expect(can('admin', 'issues', 'E')).toBe(true)
+    expect(can('principal', 'issues', 'E')).toBe(true)
+    expect(can('vice_principal', 'issues', 'E')).toBe(true)
+    expect(can('owner', 'issues', 'E')).toBe(true)
+    expect(can('teacher', 'issues', 'E')).toBe(false)
+    expect(can('staff', 'issues', 'E')).toBe(false)
+  })
   it('caps() returns the capability array', () => {
     expect(caps('admin', 'sis')).toContain('E')
     expect(caps('teacher', 'fees')).toEqual([])
