@@ -12,15 +12,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { UseQueryResult } from '@tanstack/react-query'
 import { useApp, useToast } from '@/lib/hooks'
-import { tierIncludes } from '@/lib/gating'
+import { tierIncludes, can } from '@/lib/gating'
 import {
   PageHead, Tabs, Card, CardHead, Kpi, Btn, IconBtn, Badge, Avatar, Search,
-  Select, Field, Input, Textarea, Modal, Icon, Empty, Checkbox, TierPill,
+  Select, Field, Input, Textarea, Modal, Drawer, Spinner, Icon, Empty, Checkbox, TierPill,
   Segmented, DataTable, type Column, type BadgeTone,
 } from '@/components/ui'
 import { TierGate } from '@/components/shell/gates'
 import { FleetLiveMap } from '@/components/maps/RouteBuilderMap'
 import { useComplaints, useCreateComplaint, useUpdateComplaint } from '@/api/hooks/useComplaints'
+import { useIssues } from '@/api/hooks/useIssues'
+import type { Issue, IssueCategory, IssuePriority, IssueStatus } from '@/api/issues'
 import { useThreads, useThreadMessages, useCreateThread, useSendMessage } from '@/api/hooks/useThreads'
 import { useMergedClassNames } from '@/api/hooks/useClasses'
 import { useAnnouncements, useCreateAnnouncement } from '@/api/hooks/useAnnouncements'
@@ -58,6 +60,19 @@ import type { Announcement } from '@/api/announcements'
 const PRIORITY_TONE: Record<Complaint['priority'], BadgeTone> = { high: 'danger', medium: 'warning', low: 'neutral' }
 const STATUS_TONE: Record<Complaint['status'], BadgeTone> = { open: 'info', in_progress: 'warning', resolved: 'success' }
 const STATUS_LABEL: Record<Complaint['status'], string> = { open: 'Open', in_progress: 'In progress', resolved: 'Resolved' }
+const ISSUE_CATEGORY_LABEL: Record<IssueCategory, string> = {
+  vehicle: 'Vehicle', student: 'Student', route: 'Route', safety: 'Safety', other: 'Other',
+}
+const ISSUE_PRIORITY_TONE: Record<IssuePriority, BadgeTone> = { emergency: 'danger', high: 'warning', normal: 'neutral' }
+const ISSUE_STATUS_TONE: Record<IssueStatus, BadgeTone> = { open: 'info', in_progress: 'warning', resolved: 'success', closed: 'neutral' }
+const ISSUE_STATUS_LABEL: Record<IssueStatus, string> = { open: 'Open', in_progress: 'In progress', resolved: 'Resolved', closed: 'Closed' }
+const ISSUE_STATUS_FILTER_OPTIONS: { value: IssueStatus | 'all'; label: string }[] = [
+  { value: 'all', label: 'All statuses' },
+  { value: 'open', label: 'Open' },
+  { value: 'in_progress', label: 'In progress' },
+  { value: 'resolved', label: 'Resolved' },
+  { value: 'closed', label: 'Closed' },
+]
 
 /* Strip the data-URL prefix so we can POST raw base64 for email attachments. */
 function fileToBase64(file: File): Promise<{ base64: string; contentType: string }> {
@@ -121,20 +136,24 @@ function CommunicationScreen() {
   const [tab, setTab] = useState('messenger')
   const { data: threadsData } = useThreads()
   const { data: complaintsData } = useComplaints()
+  const { data: issuesData } = useIssues('all')
   const unread = (threadsData ?? []).reduce((n, t) => n + t.unread, 0)
   const openComplaints = (complaintsData ?? []).filter((c) => c.status !== 'resolved').length
+  const openIssues = (issuesData ?? []).filter((i) => i.status === 'open' || i.status === 'in_progress').length
   return (
     <div>
-      <PageHead title="Communication" sub="Messenger · Complaints · Announcements" />
+      <PageHead title="Communication" sub="Messenger · Complaints · Issues · Announcements" />
       <div style={{ marginBottom: 14 }}>
         <Tabs value={tab} onChange={setTab} tabs={[
           { value: 'messenger', label: 'Messenger', icon: 'message', count: unread },
           { value: 'complaints', label: 'Complaints', icon: 'inbox', count: openComplaints },
+          { value: 'issues', label: 'Issues', icon: 'alert', count: openIssues },
           { value: 'announcements', label: 'Announcements', icon: 'bell' },
         ]} />
       </div>
       {tab === 'messenger' && <MessengerTab />}
       {tab === 'complaints' && <ComplaintsTab />}
+      {tab === 'issues' && <IssuesTab />}
       {tab === 'announcements' && <AnnouncementsTab />}
     </div>
   )
@@ -691,6 +710,72 @@ function ComplaintsTab() {
           : <DataTable columns={cols} rows={rows} pageSize={8} rowKey={(r) => r.id} initialSort={{ key: 'priority', dir: 'asc' }} />}
       </Card>
       <NewComplaintModal open={newOpen} onClose={() => setNewOpen(false)} />
+    </div>
+  )
+}
+
+/* ---------- Issues: staff-reported vehicle/student/route/safety issues ---------- */
+function IssuesTab() {
+  const [statusFilter, setStatusFilter] = useState<IssueStatus | 'all'>('all')
+  const [q, setQ] = useState('')
+  const [openIssue, setOpenIssue] = useState<Issue | null>(null)
+  const issuesQ = useIssues(statusFilter)
+  const rows: Issue[] = issuesQ.data ?? []
+
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase()
+    if (!term) return rows
+    return rows.filter((r) => r.title.toLowerCase().includes(term) || r.description.toLowerCase().includes(term))
+  }, [rows, q])
+
+  const cols: Column<Issue>[] = [
+    { key: 'category', label: 'Category', sortValue: (r) => r.category, render: (r) => <Badge tone="neutral" soft>{ISSUE_CATEGORY_LABEL[r.category]}</Badge> },
+    {
+      key: 'title', label: 'Issue', sortValue: (r) => r.title,
+      render: (r) => (
+        <div>
+          <div className="fw6 t-md">{r.title}</div>
+          <div className="t-xs muted3">{r.description}</div>
+        </div>
+      ),
+    },
+    { key: 'priority', label: 'Priority', sortValue: (r) => r.priority, render: (r) => <Badge tone={ISSUE_PRIORITY_TONE[r.priority]} soft dot>{r.priority[0].toUpperCase() + r.priority.slice(1)}</Badge> },
+    { key: 'status', label: 'Status', sortValue: (r) => r.status, render: (r) => <Badge tone={ISSUE_STATUS_TONE[r.status]} soft>{ISSUE_STATUS_LABEL[r.status]}</Badge> },
+    { key: 'reporter', label: 'Reporter', render: (r) => <span className="t-md">{r.reporterName ?? r.reporterUserId.slice(0, 8)}</span> },
+    { key: 'created', label: 'Created', align: 'right', sortValue: (r) => r.createdAt, render: (r) => <span className="t-sm muted">{new Date(r.createdAt).toLocaleString()}</span> },
+  ]
+
+  return (
+    <div className="col gap16">
+      <div className="row ai-center jc-between gap12 wrap">
+        <Search value={q} onChange={setQ} placeholder="Search title or description…" />
+        <Select
+          options={ISSUE_STATUS_FILTER_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value as IssueStatus | 'all')}
+        />
+      </div>
+      <Card pad={false}>
+        <div className="row ai-center jc-between" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
+          <CardHead title="Issues" sub="Vehicle, student, route & safety issues reported by staff" icon="alert" />
+        </div>
+        {issuesQ.isError ? (
+          <div style={{ padding: 16 }}>
+            <div className="t-sm muted" style={{ marginBottom: 8 }}>Could not load issues.</div>
+            <Btn variant="secondary" size="sm" onClick={() => issuesQ.refetch()}>Retry</Btn>
+          </div>
+        ) : issuesQ.isLoading ? (
+          <div style={{ padding: 16 }}><Spinner size={24} /></div>
+        ) : filtered.length === 0 ? (
+          <Empty icon="alert" title="No issues reported" />
+        ) : (
+          <DataTable
+            columns={cols} rows={filtered} pageSize={8} rowKey={(r) => r.id}
+            initialSort={{ key: 'created', dir: 'desc' }}
+            onRowClick={(r) => setOpenIssue(r)}
+          />
+        )}
+      </Card>
     </div>
   )
 }
