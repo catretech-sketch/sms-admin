@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AppProvider } from '@/context/AppProvider'
 import { ToastProvider } from '@/context/ToastProvider'
@@ -31,12 +31,20 @@ function authAndSchoolResponse(url: string, method: string, roles: string[]): Re
   return null
 }
 
-const ISSUE_ROWS = [{
-  id: 'I1', tenant_id: TENANT_ID, reporter_user_id: 'U9', reporter_name: 'Ramesh Driver',
-  category: 'vehicle', title: 'Brake noise', description: 'Squeaking on braking',
-  priority: 'high', status: 'open', vehicle_id: 'BUS-01', route_id: null, trip_id: null,
-  photo_base64: null, created_at: '2026-09-14T09:00:00Z', updated_at: '2026-09-14T09:00:00Z',
-}]
+const ISSUE_ROWS = [
+  {
+    id: 'I1', tenant_id: TENANT_ID, reporter_user_id: 'U9', reporter_name: 'Ramesh Driver',
+    category: 'vehicle', title: 'Brake noise', description: 'Squeaking on braking',
+    priority: 'high', status: 'open', vehicle_id: 'BUS-01', route_id: null, trip_id: null,
+    photo_base64: null, created_at: '2026-09-14T09:00:00Z', updated_at: '2026-09-14T09:00:00Z',
+  },
+  {
+    id: 'I2', tenant_id: TENANT_ID, reporter_user_id: 'U8', reporter_name: 'Sunita Warden',
+    category: 'student', title: 'Missed pickup', description: 'Student missed the morning bus',
+    priority: 'normal', status: 'closed', vehicle_id: null, route_id: null, trip_id: null,
+    photo_base64: null, created_at: '2026-09-13T09:00:00Z', updated_at: '2026-09-13T09:00:00Z',
+  },
+]
 
 const ISSUE_DETAIL = {
   ...ISSUE_ROWS[0],
@@ -50,7 +58,14 @@ function makeFetch(roles: string[], rows: unknown[] = ISSUE_ROWS, detail: unknow
     const auth = authAndSchoolResponse(url, method, roles)
     if (auth) return Promise.resolve(auth)
     if (/\/staff\/issues\/[^/?]+$/.test(url)) return Promise.resolve(jsonResponse({ data: detail }))
-    if (url.includes('/staff/issues')) return Promise.resolve(jsonResponse({ data: rows, next_cursor: null }))
+    if (url.includes('/staff/issues')) {
+      const statusMatch = url.match(/[?&]status=([^&]+)/)
+      const statusFilter = statusMatch ? decodeURIComponent(statusMatch[1]) : null
+      const filteredRows = statusFilter
+        ? rows.filter((r) => (r as { status?: string }).status === statusFilter)
+        : rows
+      return Promise.resolve(jsonResponse({ data: filteredRows, next_cursor: null }))
+    }
     if (/\/issues\/[^/?]+$/.test(url) && method === 'PATCH') {
       const body = init?.body ? JSON.parse(init.body as string) : {}
       return Promise.resolve(jsonResponse({ data: { ...(detail as object), ...body } }))
@@ -90,21 +105,25 @@ describe('Issues tab', () => {
 
   it('lists reported issues after switching to the Issues tab', async () => {
     renderScreen()
-    screen.getByRole('button', { name: /issues/i }).click()
+    fireEvent.click(screen.getByRole('button', { name: /issues/i }))
     await waitFor(() => expect(screen.getByText('Brake noise')).toBeInTheDocument())
     expect(screen.getByText(/squeaking on braking/i)).toBeInTheDocument()
   })
 
-  it('re-fetches with the status query param when the status filter changes', async () => {
+  it('re-fetches with the status query param and re-renders filtered rows when the status filter changes', async () => {
     const { fetchMock } = renderScreen()
-    screen.getByRole('button', { name: /issues/i }).click()
+    fireEvent.click(screen.getByRole('button', { name: /issues/i }))
     await waitFor(() => expect(screen.getByText('Brake noise')).toBeInTheDocument())
+    expect(screen.getByText('Missed pickup')).toBeInTheDocument()
+
     const statusSelect = screen.getByRole('combobox') as HTMLSelectElement
-    statusSelect.value = 'open'
-    statusSelect.dispatchEvent(new Event('change', { bubbles: true }))
+    fireEvent.change(statusSelect, { target: { value: 'open' } })
+
     await waitFor(() => {
       const called = fetchMock.mock.calls.some((c: unknown[]) => String(c[0]).includes('/staff/issues?status=open'))
       expect(called).toBe(true)
     })
+    await waitFor(() => expect(screen.queryByText('Missed pickup')).not.toBeInTheDocument())
+    expect(screen.getByText('Brake noise')).toBeInTheDocument()
   })
 })
