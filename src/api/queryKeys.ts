@@ -98,6 +98,10 @@ export const queryKeys = {
     list: (status?: string) => ['issues', 'list', status ?? 'all'] as const,
     detail: (id: string) => ['issues', 'detail', id] as const,
   },
+  tasks: {
+    all: ['tasks'] as const,
+    list: () => ['tasks', 'list', tenantScope()] as const,
+  },
   threads: {
     all: ['threads'] as const,
     messages: (threadId: string) => ['threads', 'messages', threadId] as const,
