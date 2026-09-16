@@ -6,6 +6,16 @@
 
 This doc is for whoever picks this up next (human or another agent/IDE). Everything below reflects real, verified state — not aspirational.
 
+## Addendum (later same day) — root cause of §2 found by a concurrent session, plus a new regression
+
+Another concurrent session working on `sms-backend` found and fixed the §2 bug (confirmed via `git diff` on disk, not yet committed as of writing): **`TaskResponse` is a C# record, which auto-generates a copy-constructor in addition to the explicit primary one. When a query's result set has fewer columns than the primary constructor's full parameter list (true for `Task_Create`/`Task_Complete`/`Task_AttachPhoto`, which only ever return the original 16 columns, never the 3 joined `*Name` fields), Dapper cannot reliably fall back to the optional parameters' default values — it needs an explicit secondary constructor whose signature matches the proc's actual 16 columns.** The fix adds exactly that: a second `TaskResponse(...)` constructor taking the original 16 params and delegating to the primary one with `null` for the 3 name fields. This is the general shape of the bug — **the same class of issue almost certainly affects `StaffResponse`** (also a record with optional trailing params — `EmployeeCode`, `Email`, `PhotoUrl`, and now `UserId` — populated by both `Staff_Create`/`Staff_Update` stored procs *and* inline SELECTs).
+
+**New regression observed live in the browser** (not yet diagnosed): `GET /v1/staff` now 500s, and the transport SignalR hub (`/hubs/transport`) WebSocket fails to connect. The `GET /v1/staff` path (`StaffRepository.ListAsync`) is an **inline SELECT**, not a stored proc, and its column list was updated to include `s.UserId` — column count should match `StaffResponse`'s 17-param constructor exactly, so this doesn't fit the same root cause as neatly as `Staff_Create`/`Staff_Update` would. Needs fresh investigation — check in this order:
+1. Is the server actually running the latest build, or a stale/mid-rebuild binary? (This session fought constant process contention on port 5162 all day — see §4 below — confirm the running process's file timestamp/PID before trusting any error from it.)
+2. Apply the same secondary-constructor fix to `StaffResponse` for the `Staff_Create`/`Staff_Update` stored-proc paths regardless (they will hit this exact bug the moment either is called, even if it's not the cause of today's specific `GET /v1/staff` 500).
+3. Get the real exception (the generic `GlobalExceptionHandler` message hides it) — see the debug technique in §2 (temporarily echo `exception.ToString()` in the response body, **revert before finishing**).
+4. The SignalR transport-hub failure may well be a downstream symptom of the same server error/instability rather than a separate bug — re-check it once `GET /v1/staff` is fixed before investigating it independently.
+
 ---
 
 ## 1. What's already done (uncommitted, in `sms-backend`)
