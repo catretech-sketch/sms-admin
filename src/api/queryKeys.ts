@@ -100,7 +100,10 @@ export const queryKeys = {
   },
   tasks: {
     all: ['tasks'] as const,
-    list: () => ['tasks', 'list', tenantScope()] as const,
+    list: (filter: object = {}) => ['tasks', 'list', tenantScope(), filter] as const,
+    pages: (filter: object = {}) => ['tasks', 'pages', tenantScope(), filter] as const,
+    people: () => ['tasks', 'people', tenantScope()] as const,
+    roles: () => ['tasks', 'roles', tenantScope()] as const,
   },
   threads: {
     all: ['threads'] as const,

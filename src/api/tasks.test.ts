@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { listAllTasks, createTask, toTask } from './tasks'
+import {
+  listAllTasks, listAllTasksPage, listPeopleSummary, listRoleSummary, createTask, toTask,
+  toPersonSummary,
+} from './tasks'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -44,6 +47,17 @@ describe('toTask', () => {
     expect(task.status).toBe('pending')
     expect(task.assignedToRoleKey).toBeUndefined()
   })
+
+  it('maps resolved creator and completer names when the backend sends them', () => {
+    const task = toTask({
+      id: 'T4', tenant_id: 'S1', title: 'Named', priority: 'normal', status: 'completed',
+      created_by_user_id: 'U1', created_by_user_name: 'Admin One',
+      completed_by_user_id: 'U2', completed_by_user_name: 'Ramesh Kumar',
+      created_at: '2026-09-16T09:00:00Z', completed_at: '2026-09-16T10:00:00Z',
+    })
+    expect(task.createdByUserName).toBe('Admin One')
+    expect(task.completedByUserName).toBe('Ramesh Kumar')
+  })
 })
 
 describe('listAllTasks', () => {
@@ -62,6 +76,95 @@ describe('listAllTasks', () => {
     expect(rows[0]).toMatchObject({ id: 'T1', status: 'pending', assignedToRoleKey: 'sweeper' })
     const [url] = fetchMock.mock.calls[0]
     expect(String(url)).toMatch(/\/staff\/tasks\/all$/)
+  })
+
+  it('sends status, assignee, role, date-range and cursor as query params', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: [], next_cursor: 'next-page' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const page = await listAllTasksPage({
+      status: 'pending',
+      assignedToUserId: 'U1',
+      assignedToRoleKey: 'driver',
+      from: '2026-09-01T00:00:00.000Z',
+      to: '2026-09-16T23:59:59.999Z',
+      cursor: 'abc',
+    })
+    expect(page.nextCursor).toBe('next-page')
+    const url = String(fetchMock.mock.calls[0][0])
+    expect(url).toMatch(/status=pending/)
+    expect(url).toMatch(/assigned_to_user_id=U1/)
+    expect(url).toMatch(/assigned_to_role_key=driver/)
+    expect(url).toMatch(/from=2026-09-01T00%3A00%3A00\.000Z/)
+    expect(url).toMatch(/to=2026-09-16T23%3A59%3A59\.999Z/)
+    expect(url).toMatch(/cursor=abc/)
+  })
+
+  it('omits blank filter params so an empty call stays backward-compatible', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: [], next_cursor: null }))
+    vi.stubGlobal('fetch', fetchMock)
+    await listAllTasks({ status: undefined })
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/staff\/tasks\/all$/)
+    expect(String(fetchMock.mock.calls[0][0])).not.toMatch(/status=/)
+  })
+})
+
+describe('summaries', () => {
+  it('maps people summary rows from snake_case', () => {
+    const row = toPersonSummary({
+      user_id: 'U1', name: 'Ramesh', role_key: 'driver',
+      total_tasks: 4, pending_tasks: 1, completed_tasks: 2, overdue_tasks: 1,
+      last_activity_at: '2026-09-16T10:00:00Z',
+    })
+    expect(row).toEqual({
+      userId: 'U1', name: 'Ramesh', roleKey: 'driver',
+      totalTasks: 4, pendingTasks: 1, completedTasks: 2, overdueTasks: 1,
+      lastActivityAt: '2026-09-16T10:00:00Z',
+    })
+  })
+
+  it('maps a non-duty person with a null role_key', () => {
+    const row = toPersonSummary({
+      user_id: 'U2', name: 'Librarian', role_key: null,
+      total_tasks: 1, pending_tasks: 1, completed_tasks: 0, overdue_tasks: 0,
+      last_activity_at: null,
+    })
+    expect(row.roleKey).toBeUndefined()
+    expect(row.lastActivityAt).toBeUndefined()
+  })
+
+  it('maps role summary rows and GETs both summary endpoints', async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/summary/people')) {
+        return jsonResponse({
+          data: [{
+            user_id: 'U1', name: 'Ramesh', role_key: 'driver',
+            total_tasks: 2, pending_tasks: 1, completed_tasks: 1, overdue_tasks: 0,
+            last_activity_at: '2026-09-16T10:00:00Z',
+          }],
+          next_cursor: null,
+        })
+      }
+      return jsonResponse({
+        data: [{
+          role_key: 'driver', headcount: 3, total_tasks: 5, pending_tasks: 2,
+          completed_tasks: 3, overdue_tasks: 1, last_activity_at: '2026-09-16T10:00:00Z',
+        }],
+        next_cursor: null,
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const people = await listPeopleSummary()
+    expect(people[0]).toMatchObject({ userId: 'U1', name: 'Ramesh', roleKey: 'driver', totalTasks: 2 })
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/staff\/tasks\/summary\/people$/)
+
+    const roles = await listRoleSummary()
+    expect(roles[0]).toEqual({
+      roleKey: 'driver', headcount: 3, totalTasks: 5, pendingTasks: 2,
+      completedTasks: 3, overdueTasks: 1, lastActivityAt: '2026-09-16T10:00:00Z',
+    })
+    expect(String(fetchMock.mock.calls[1][0])).toMatch(/\/staff\/tasks\/summary\/roles$/)
   })
 })
 

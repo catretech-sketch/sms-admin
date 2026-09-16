@@ -18,6 +18,6 @@ export default defineConfig({
     // Never collect SDD scratch artifacts (briefs/targets live under .superpowers/),
     // and never collect nested worktree checkouts (they have their own node_modules,
     // so a duplicate test file collected from one mixes two React copies and crashes).
-    exclude: [...configDefaults.exclude, '.superpowers/**', '.worktrees/**'],
+    exclude: [...configDefaults.exclude, '.superpowers/**', '.worktrees/**', '.claude/worktrees/**'],
   },
 })

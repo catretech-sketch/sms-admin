@@ -31,7 +31,9 @@ export interface StaffTask {
   assignedToRoleKey?: StaffDutyRole
   completedAt?: string
   completedByUserId?: string
+  completedByUserName?: string
   createdByUserId?: string
+  createdByUserName?: string
   createdAt: string
   /** Not present on the real backend TaskResponse DTO (no UpdatedAt column) — always
    *  undefined in production. Kept optional (not coerced to '') so callers can't
@@ -49,6 +51,41 @@ export interface CreateTaskInput {
   dueDate?: string
   assignedToUserId?: string
   assignedToRoleKey?: StaffDutyRole
+}
+
+export interface TaskListFilter {
+  status?: TaskStatus
+  assignedToUserId?: string
+  assignedToRoleKey?: StaffDutyRole
+  from?: string
+  to?: string
+  cursor?: string
+}
+
+export interface TaskPage {
+  data: StaffTask[]
+  nextCursor: string | null
+}
+
+export interface PersonTaskSummary {
+  userId: string
+  name: string
+  roleKey?: StaffDutyRole
+  totalTasks: number
+  pendingTasks: number
+  completedTasks: number
+  overdueTasks: number
+  lastActivityAt?: string
+}
+
+export interface RoleTaskSummary {
+  roleKey: StaffDutyRole
+  headcount: number
+  totalTasks: number
+  pendingTasks: number
+  completedTasks: number
+  overdueTasks: number
+  lastActivityAt?: string
 }
 
 interface ListEnvelope { data: Record<string, unknown>[]; next_cursor: string | null }
@@ -82,15 +119,70 @@ export function toTask(wire: Record<string, unknown>): StaffTask {
     assignedToRoleKey: toDutyRole(c.assignedToRoleKey),
     completedAt: typeof c.completedAt === 'string' ? c.completedAt : undefined,
     completedByUserId: typeof c.completedByUserId === 'string' ? c.completedByUserId : undefined,
+    completedByUserName: typeof c.completedByUserName === 'string' ? c.completedByUserName : undefined,
     createdByUserId: typeof c.createdByUserId === 'string' ? c.createdByUserId : undefined,
+    createdByUserName: typeof c.createdByUserName === 'string' ? c.createdByUserName : undefined,
     createdAt: String(c.createdAt ?? ''),
     updatedAt: typeof c.updatedAt === 'string' ? c.updatedAt : undefined,
   }
 }
 
-export async function listAllTasks(): Promise<StaffTask[]> {
-  const env = await listRequest<ListEnvelope>('/staff/tasks/all')
-  return env.data.map(toTask)
+function filterQuery(filter: TaskListFilter = {}): Record<string, string | undefined> {
+  return {
+    status: filter.status,
+    assigned_to_user_id: filter.assignedToUserId,
+    assigned_to_role_key: filter.assignedToRoleKey,
+    from: filter.from,
+    to: filter.to,
+    cursor: filter.cursor,
+  }
+}
+
+export async function listAllTasksPage(filter: TaskListFilter = {}): Promise<TaskPage> {
+  const env = await listRequest<ListEnvelope>('/staff/tasks/all', { query: filterQuery(filter) })
+  return { data: env.data.map(toTask), nextCursor: env.next_cursor }
+}
+
+export async function listAllTasks(filter: TaskListFilter = {}): Promise<StaffTask[]> {
+  const page = await listAllTasksPage(filter)
+  return page.data
+}
+
+export function toPersonSummary(wire: Record<string, unknown>): PersonTaskSummary {
+  const c = snakeToCamel<Record<string, unknown>>(wire)
+  return {
+    userId: String(c.userId ?? ''),
+    name: String(c.name ?? ''),
+    roleKey: toDutyRole(c.roleKey),
+    totalTasks: Number(c.totalTasks ?? 0),
+    pendingTasks: Number(c.pendingTasks ?? 0),
+    completedTasks: Number(c.completedTasks ?? 0),
+    overdueTasks: Number(c.overdueTasks ?? 0),
+    lastActivityAt: typeof c.lastActivityAt === 'string' ? c.lastActivityAt : undefined,
+  }
+}
+
+export function toRoleSummary(wire: Record<string, unknown>): RoleTaskSummary {
+  const c = snakeToCamel<Record<string, unknown>>(wire)
+  return {
+    roleKey: toDutyRole(c.roleKey) ?? 'driver',
+    headcount: Number(c.headcount ?? 0),
+    totalTasks: Number(c.totalTasks ?? 0),
+    pendingTasks: Number(c.pendingTasks ?? 0),
+    completedTasks: Number(c.completedTasks ?? 0),
+    overdueTasks: Number(c.overdueTasks ?? 0),
+    lastActivityAt: typeof c.lastActivityAt === 'string' ? c.lastActivityAt : undefined,
+  }
+}
+
+export async function listPeopleSummary(): Promise<PersonTaskSummary[]> {
+  const env = await listRequest<ListEnvelope>('/staff/tasks/summary/people')
+  return env.data.map(toPersonSummary)
+}
+
+export async function listRoleSummary(): Promise<RoleTaskSummary[]> {
+  const env = await listRequest<ListEnvelope>('/staff/tasks/summary/roles')
+  return env.data.map(toRoleSummary)
 }
 
 export async function createTask(input: CreateTaskInput): Promise<StaffTask> {
