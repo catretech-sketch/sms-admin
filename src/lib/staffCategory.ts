@@ -14,7 +14,7 @@ const DEPT_HINTS: [StaffCategory, RegExp][] = [
   ['security', /security|guard|gate|watchman/i],
   ['academic', /academic|lab|library|librarian/i],
   ['admin', /admin|office|account|clerk|principal|vice/i],
-  ['support', /support|housekeep|nurse|cook|gardener|peon|clean/i],
+  ['support', /support|housekeep|nurse|cook|gardener|peon|clean|sweep/i],
 ]
 
 /** Infer category slug from department / role text when API category is missing. */
