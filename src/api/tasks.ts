@@ -33,7 +33,10 @@ export interface StaffTask {
   completedByUserId?: string
   createdByUserId?: string
   createdAt: string
-  updatedAt: string
+  /** Not present on the real backend TaskResponse DTO (no UpdatedAt column) — always
+   *  undefined in production. Kept optional (not coerced to '') so callers can't
+   *  mistake a missing value for a real empty-string timestamp. */
+  updatedAt?: string
 }
 
 /** Exactly one of userId/roleKey must be set — a specific staff member, or a
@@ -81,7 +84,7 @@ export function toTask(wire: Record<string, unknown>): StaffTask {
     completedByUserId: typeof c.completedByUserId === 'string' ? c.completedByUserId : undefined,
     createdByUserId: typeof c.createdByUserId === 'string' ? c.createdByUserId : undefined,
     createdAt: String(c.createdAt ?? ''),
-    updatedAt: String(c.updatedAt ?? ''),
+    updatedAt: typeof c.updatedAt === 'string' ? c.updatedAt : undefined,
   }
 }
 
