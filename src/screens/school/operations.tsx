@@ -23,6 +23,11 @@ import { FleetLiveMap } from '@/components/maps/RouteBuilderMap'
 import { useComplaints, useCreateComplaint, useUpdateComplaint } from '@/api/hooks/useComplaints'
 import { useIssues, useIssue, useUpdateIssue } from '@/api/hooks/useIssues'
 import type { Issue, IssueCategory, IssuePriority, IssueStatus } from '@/api/issues'
+import { useTasks, useCreateTask } from '@/api/hooks/useTasks'
+import {
+  STAFF_DUTY_ROLES, STAFF_DUTY_ROLE_LABELS,
+  type StaffTask, type TaskPriority, type TaskStatus, type StaffDutyRole, type CreateTaskInput,
+} from '@/api/tasks'
 import { useThreads, useThreadMessages, useCreateThread, useSendMessage } from '@/api/hooks/useThreads'
 import { useMergedClassNames } from '@/api/hooks/useClasses'
 import { useAnnouncements, useCreateAnnouncement } from '@/api/hooks/useAnnouncements'
@@ -73,6 +78,22 @@ const ISSUE_STATUS_FILTER_OPTIONS: { value: IssueStatus | 'all'; label: string }
   { value: 'resolved', label: 'Resolved' },
   { value: 'closed', label: 'Closed' },
 ]
+const TASK_PRIORITY_TONE: Record<TaskPriority, BadgeTone> = { urgent: 'danger', normal: 'neutral' }
+const TASK_STATUS_TONE: Record<TaskStatus, BadgeTone> = { pending: 'info', in_progress: 'warning', completed: 'success' }
+const TASK_STATUS_LABEL: Record<TaskStatus, string> = { pending: 'Pending', in_progress: 'In progress', completed: 'Completed' }
+const TASK_STATUS_FILTER_OPTIONS: { value: TaskStatus | 'all'; label: string }[] = [
+  { value: 'all', label: 'All statuses' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'in_progress', label: 'In progress' },
+  { value: 'completed', label: 'Completed' },
+]
+const TASK_ASSIGNEE_ROLE_OPTIONS = STAFF_DUTY_ROLES.map((r) => ({ value: r, label: STAFF_DUTY_ROLE_LABELS[r] }))
+
+/** "All Drivers", "All Cleaners" — the assignee column label for a role broadcast. */
+function taskAssigneeLabel(t: StaffTask): string {
+  if (t.assignedToRoleKey) return `All ${STAFF_DUTY_ROLE_LABELS[t.assignedToRoleKey]}s`
+  return t.assignedToUserName ?? (t.assignedToUserId ? t.assignedToUserId.slice(0, 8) : '—')
+}
 
 /* Strip the data-URL prefix so we can POST raw base64 for email attachments. */
 function fileToBase64(file: File): Promise<{ base64: string; contentType: string }> {
@@ -137,23 +158,27 @@ function CommunicationScreen() {
   const { data: threadsData } = useThreads()
   const { data: complaintsData } = useComplaints()
   const { data: issuesData } = useIssues('all')
+  const { data: tasksData } = useTasks()
   const unread = (threadsData ?? []).reduce((n, t) => n + t.unread, 0)
   const openComplaints = (complaintsData ?? []).filter((c) => c.status !== 'resolved').length
   const openIssues = (issuesData ?? []).filter((i) => i.status === 'open' || i.status === 'in_progress').length
+  const openTasks = (tasksData ?? []).filter((t) => t.status !== 'completed').length
   return (
     <div>
-      <PageHead title="Communication" sub="Messenger · Complaints · Issues · Announcements" />
+      <PageHead title="Communication" sub="Messenger · Complaints · Issues · Staff tasks · Announcements" />
       <div style={{ marginBottom: 14 }}>
         <Tabs value={tab} onChange={setTab} tabs={[
           { value: 'messenger', label: 'Messenger', icon: 'message', count: unread },
           { value: 'complaints', label: 'Complaints', icon: 'inbox', count: openComplaints },
           { value: 'issues', label: 'Issues', icon: 'alert', count: openIssues },
+          { value: 'tasks', label: 'Staff tasks', icon: 'check', count: openTasks },
           { value: 'announcements', label: 'Announcements', icon: 'bell' },
         ]} />
       </div>
       {tab === 'messenger' && <MessengerTab />}
       {tab === 'complaints' && <ComplaintsTab />}
       {tab === 'issues' && <IssuesTab />}
+      {tab === 'tasks' && <StaffTasksTab />}
       {tab === 'announcements' && <AnnouncementsTab />}
     </div>
   )
@@ -899,6 +924,185 @@ function IssueDetailDrawer({ issue, onClose, canManage }: { issue: Issue | null;
         </div>
       )}
     </Drawer>
+  )
+}
+
+/* ---------- Staff tasks: admin-assigned checklist items for duty-role staff ---------- */
+function StaffTasksTab() {
+  const app = useApp()
+  const [statusFilter, setStatusFilter] = useState<TaskStatus | 'all'>('all')
+  const [q, setQ] = useState('')
+  const [openNew, setOpenNew] = useState(false)
+  const tasksQ = useTasks()
+  const rows: StaffTask[] = tasksQ.data ?? []
+  const canManage = can(app.role, 'staffTasks', 'E')
+
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase()
+    return rows.filter((r) => {
+      if (statusFilter !== 'all' && r.status !== statusFilter) return false
+      if (!term) return true
+      return r.title.toLowerCase().includes(term) || (r.detail ?? '').toLowerCase().includes(term)
+    })
+  }, [rows, q, statusFilter])
+
+  const cols: Column<StaffTask>[] = [
+    {
+      key: 'title', label: 'Task', sortValue: (r) => r.title,
+      render: (r) => (
+        <div>
+          <div className="fw6 t-md">{r.title}</div>
+          {r.detail && <div className="t-xs muted3">{r.detail}</div>}
+        </div>
+      ),
+    },
+    { key: 'category', label: 'Category', sortValue: (r) => r.category ?? '', render: (r) => r.category ? <Badge tone="neutral" soft>{r.category}</Badge> : <span className="t-sm muted">—</span> },
+    { key: 'priority', label: 'Priority', sortValue: (r) => r.priority, render: (r) => <Badge tone={TASK_PRIORITY_TONE[r.priority]} soft dot>{r.priority[0].toUpperCase() + r.priority.slice(1)}</Badge> },
+    { key: 'assignee', label: 'Assigned to', sortValue: (r) => taskAssigneeLabel(r), render: (r) => <span className="t-md">{taskAssigneeLabel(r)}</span> },
+    { key: 'due', label: 'Due', align: 'right', sortValue: (r) => r.dueDate ?? '', render: (r) => <span className="t-sm muted">{r.dueDate ? new Date(r.dueDate).toLocaleDateString() : '—'}</span> },
+    { key: 'status', label: 'Status', sortValue: (r) => r.status, render: (r) => <Badge tone={TASK_STATUS_TONE[r.status]} soft>{TASK_STATUS_LABEL[r.status]}</Badge> },
+  ]
+
+  return (
+    <div className="col gap16">
+      <div className="row ai-center jc-between gap12 wrap">
+        <div className="row ai-center gap12 wrap">
+          <Search value={q} onChange={setQ} placeholder="Search title or detail…" />
+          <Select
+            options={TASK_STATUS_FILTER_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as TaskStatus | 'all')}
+          />
+        </div>
+        {canManage && <Btn variant="primary" icon="plus" onClick={() => setOpenNew(true)}>New task</Btn>}
+      </div>
+      <Card pad={false}>
+        <div className="row ai-center jc-between" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
+          <CardHead title="Staff tasks" sub="Checklist items assigned to duty staff — driver, conductor, cleaner, gardener, guard, peon" icon="check" />
+        </div>
+        {tasksQ.isError ? (
+          <div style={{ padding: 16 }}>
+            <div className="t-sm muted" style={{ marginBottom: 8 }}>Could not load tasks.</div>
+            <Btn variant="secondary" size="sm" onClick={() => tasksQ.refetch()}>Retry</Btn>
+          </div>
+        ) : tasksQ.isLoading ? (
+          <div style={{ padding: 16 }}><Spinner size={24} /></div>
+        ) : filtered.length === 0 ? (
+          <Empty icon="check" title="No staff tasks yet" body="Create a task and assign it to a staff member or a whole duty role." />
+        ) : (
+          <DataTable
+            columns={cols} rows={filtered} pageSize={8} rowKey={(r) => r.id}
+            initialSort={{ key: 'due', dir: 'desc' }}
+          />
+        )}
+      </Card>
+      <NewTaskModal open={openNew} onClose={() => setOpenNew(false)} />
+    </div>
+  )
+}
+
+function NewTaskModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const toast = useToast()
+  const createTaskMut = useCreateTask()
+  const staffQ = useStaff()
+  const staffRoster = staffQ.data ?? []
+
+  const [title, setTitle] = useState('')
+  const [detail, setDetail] = useState('')
+  const [category, setCategory] = useState('')
+  const [priority, setPriority] = useState<TaskPriority>('normal')
+  const [dueDate, setDueDate] = useState('')
+  const [assignMode, setAssignMode] = useState<'user' | 'role'>('role')
+  const [assignedUserId, setAssignedUserId] = useState('')
+  const [assignedRole, setAssignedRole] = useState<StaffDutyRole>('driver')
+
+  useEffect(() => {
+    if (!open) return
+    setTitle(''); setDetail(''); setCategory(''); setPriority('normal'); setDueDate('')
+    setAssignMode('role'); setAssignedUserId(''); setAssignedRole('driver')
+  }, [open])
+
+  const submit = () => {
+    if (!title.trim()) { toast.danger('Title required', 'Enter a short task title.'); return }
+    if (assignMode === 'user' && !assignedUserId) { toast.danger('Assignee required', 'Choose a staff member to assign the task to.'); return }
+    const input: CreateTaskInput = {
+      title,
+      priority,
+      ...(detail.trim() ? { detail } : {}),
+      ...(category.trim() ? { category } : {}),
+      ...(dueDate ? { dueDate } : {}),
+      ...(assignMode === 'user' ? { assignedToUserId: assignedUserId } : { assignedToRoleKey: assignedRole }),
+    }
+    createTaskMut.mutate(input, {
+      onSuccess: () => { toast.success('Task created', `${title} was assigned.`); onClose() },
+      onError: (err) => toast.danger('Could not create task', err instanceof Error ? err.message : 'Please try again.'),
+    })
+  }
+
+  return (
+    <Modal
+      open={open} onClose={onClose} icon="check"
+      title="New staff task" sub="Assign a checklist item to a staff member or a whole duty role"
+      footer={
+        <div className="row gap8 jc-end">
+          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn variant="primary" icon="check" disabled={createTaskMut.isPending} onClick={submit}>
+            {createTaskMut.isPending ? 'Creating…' : 'Create task'}
+          </Btn>
+        </div>
+      }
+    >
+      <div className="col gap16">
+        <Field label="Title" required>
+          <Input icon="check" value={title} placeholder="e.g. Sweep courtyard before assembly" onChange={(e) => setTitle(e.target.value)} />
+        </Field>
+        <Field label="Detail">
+          <Textarea value={detail} rows={3} placeholder="Optional instructions…" onChange={(e) => setDetail(e.target.value)} />
+        </Field>
+        <div className="sm-grid-2 gap16">
+          <Field label="Category" hint="Free text, e.g. cleaning, garden, security">
+            <Input value={category} placeholder="e.g. cleaning" onChange={(e) => setCategory(e.target.value)} />
+          </Field>
+          <Field label="Priority">
+            <Select
+              options={[{ value: 'normal', label: 'Normal' }, { value: 'urgent', label: 'Urgent' }]}
+              value={priority}
+              onChange={(e) => setPriority(e.target.value as TaskPriority)}
+            />
+          </Field>
+        </div>
+        <Field label="Due date">
+          <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+        </Field>
+        <Field label="Assign to">
+          <Select
+            options={[{ value: 'role', label: 'A whole duty role (broadcast)' }, { value: 'user', label: 'A specific staff member' }]}
+            value={assignMode}
+            onChange={(e) => setAssignMode(e.target.value as 'user' | 'role')}
+          />
+        </Field>
+        {assignMode === 'role' ? (
+          <Field label="Duty role">
+            <Select
+              options={TASK_ASSIGNEE_ROLE_OPTIONS}
+              value={assignedRole}
+              onChange={(e) => setAssignedRole(e.target.value as StaffDutyRole)}
+            />
+          </Field>
+        ) : (
+          <Field label="Staff member" hint={staffQ.isLoading ? 'Loading staff…' : undefined}>
+            <Select
+              options={[
+                { value: '', label: 'Select a staff member…' },
+                ...staffRoster.map((s) => ({ value: s.id, label: `${s.name} — ${s.role}` })),
+              ]}
+              value={assignedUserId}
+              onChange={(e) => setAssignedUserId(e.target.value)}
+            />
+          </Field>
+        )}
+      </div>
+    </Modal>
   )
 }
 
