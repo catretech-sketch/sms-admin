@@ -125,6 +125,8 @@ describe('FleetLiveMap route geometry', () => {
 
     // Bus marker with live speed.
     expect(screen.getByText('BUS-01 · 42 km/h')).toBeInTheDocument()
+    // Bus icon rendered alongside the label, not a bare colored box.
+    expect(screen.getByTestId('bus-icon-b1')).toBeInTheDocument()
     // ★ highlightStop overlay.
     expect(screen.getByText('★ Home')).toBeInTheDocument()
     // Road-following geometry rendered (available) — no "unavailable" fallback badge.
@@ -132,6 +134,23 @@ describe('FleetLiveMap route geometry', () => {
     // Route stop markers (drawn alongside the road polyline for the selected bus's route).
     expect(screen.getByText('Stop 1')).toBeInTheDocument()
     expect(screen.getByText('Stop 2')).toBeInTheDocument()
+  })
+
+  it('rotates the bus icon to match its GPS heading', async () => {
+    const user = userEvent.setup()
+    const fleetWithHeading = [{ busId: 'b1', busNo: 'BUS-01', routeId: 'r1', lat: 12.1, lng: 77.1, speedKmh: 20, heading: 135 }]
+    render(<FleetLiveMap fleet={fleetWithHeading} routeStopsByRouteId={routeStopsByRouteId} />)
+    await user.click(screen.getByRole('button', { name: /all buses/i }))
+    await user.click(screen.getByRole('checkbox', { name: /bus-01/i }))
+    expect(screen.getByTestId('bus-icon-b1')).toHaveStyle({ transform: 'rotate(135deg)' })
+  })
+
+  it('does not rotate the bus icon when heading is unavailable', async () => {
+    const user = userEvent.setup()
+    render(<FleetLiveMap fleet={fleet} routeStopsByRouteId={routeStopsByRouteId} />)
+    await user.click(screen.getByRole('button', { name: /all buses/i }))
+    await user.click(screen.getByRole('checkbox', { name: /bus-01/i }))
+    expect(screen.getByTestId('bus-icon-b1')).toHaveStyle({ transform: 'rotate(0deg)' })
   })
 
   it('does not show a student count badge on stop markers (count is revealed via click instead)', async () => {

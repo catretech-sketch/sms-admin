@@ -3,6 +3,7 @@ import { APIProvider, Map, AdvancedMarker, useMap, useMapsLibrary, MapControl, C
 import type { RouteStop, RouteGeometry } from '@/api/transport'
 import { Checkbox } from '@/components/ui'
 import { decodePolyline } from '@/lib/decodePolyline'
+import { useInterpolatedPosition } from '@/lib/useInterpolatedPosition'
 
 const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
 const MAP_ID = import.meta.env.VITE_GOOGLE_MAPS_MAP_ID
@@ -163,6 +164,55 @@ function StopPin({
   )
 }
 
+/** Bus icon + label, rotated to the vehicle's GPS heading when available (points up/0deg otherwise). */
+function BusMarker({
+  busId, label, heading, color,
+}: {
+  busId: string
+  label: string
+  heading?: number | null
+  color: string
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <svg
+        data-testid={`bus-icon-${busId}`}
+        width={22} height={22} viewBox="0 0 24 24" fill={color}
+        style={{ transform: `rotate(${heading ?? 0}deg)`, filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.35))' }}
+      >
+        <path d="M12 2 L20 20 L12 16 L4 20 Z" />
+      </svg>
+      <span style={{
+        background: color, color: '#fff', padding: '4px 8px', borderRadius: 8, fontSize: 11, fontWeight: 700,
+        boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
+      }}>
+        {label}
+      </span>
+    </div>
+  )
+}
+
+/** Wraps a fleet bus marker with position interpolation — smooths movement between GPS pings
+ *  instead of the marker jump-cutting to each new ping. */
+function LiveBusMarker({
+  busId, lat, lng, heading, color, label,
+}: {
+  busId: string
+  lat: number
+  lng: number
+  heading?: number | null
+  color: string
+  label: string
+}) {
+  const position = useInterpolatedPosition(lat, lng)
+  if (!position) return null
+  return (
+    <AdvancedMarker position={position}>
+      <BusMarker busId={busId} label={label} heading={heading} color={color} />
+    </AdvancedMarker>
+  )
+}
+
 export type RouteBuilderMapProps = {
   stops: RouteStop[]
   height?: number
@@ -314,7 +364,7 @@ export function FleetLiveMap({
   routeGeometryByRouteId = {},
   onStopClick,
 }: {
-  fleet: { busId: string; busNo: string; routeId?: string | null; lat?: number | null; lng?: number | null; speedKmh?: number | null; status?: string }[]
+  fleet: { busId: string; busNo: string; routeId?: string | null; lat?: number | null; lng?: number | null; speedKmh?: number | null; heading?: number | null; status?: string }[]
   routeStopsByRouteId: Record<string, RouteStop[]>
   height?: number
   /** Optional ★ child/student stop overlay (from API assignment — not local SoT). */
@@ -359,6 +409,7 @@ export function FleetLiveMap({
       lat: b.lat as number,
       lng: b.lng as number,
       speedKmh: b.speedKmh ?? null,
+      heading: b.heading ?? null,
       // Always surface speed when GPS reports it — not only when legacy status is "moving".
       moving: b.speedKmh != null && b.speedKmh > 3,
       showSpeed: b.speedKmh != null,
@@ -466,15 +517,15 @@ export function FleetLiveMap({
             </AdvancedMarker>
           )))}
           {busPoints.map((b) => (
-            <AdvancedMarker key={b.id} position={{ lat: b.lat, lng: b.lng }}>
-              <span style={{
-                background: b.moving ? '#16a34a' : '#64748b',
-                color: '#fff', padding: '4px 8px', borderRadius: 8, fontSize: 11, fontWeight: 700,
-                boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
-              }}>
-                {b.busNo}{b.showSpeed ? ` · ${Math.round(b.speedKmh!)} km/h` : ''}
-              </span>
-            </AdvancedMarker>
+            <LiveBusMarker
+              key={b.id}
+              busId={b.id}
+              lat={b.lat}
+              lng={b.lng}
+              heading={b.heading}
+              color={b.moving ? '#16a34a' : '#64748b'}
+              label={`${b.busNo}${b.showSpeed ? ` · ${Math.round(b.speedKmh!)} km/h` : ''}`}
+            />
           ))}
           {highlightStop ? (
             <AdvancedMarker position={{ lat: highlightStop.lat, lng: highlightStop.lng }}>
