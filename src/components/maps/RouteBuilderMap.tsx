@@ -367,7 +367,7 @@ export function FleetLiveMap({
   onStopClick,
   onBusClick,
 }: {
-  fleet: { busId: string; busNo: string; routeId?: string | null; lat?: number | null; lng?: number | null; speedKmh?: number | null; heading?: number | null; status?: string }[]
+  fleet: { busId: string; busNo: string; routeId?: string | null; routeName?: string | null; driver?: string | null; lat?: number | null; lng?: number | null; speedKmh?: number | null; heading?: number | null; status?: string }[]
   routeStopsByRouteId: Record<string, RouteStop[]>
   height?: number
   /** Optional ★ child/student stop overlay (from API assignment — not local SoT). */
@@ -384,6 +384,30 @@ export function FleetLiveMap({
   const toggleBus = (id: string) => setSelectedBusIds((prev) => (
     prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
   ))
+
+  const [routeFilter, setRouteFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const [search, setSearch] = useState('')
+
+  const routeOptions: [string, string][] = []
+  const seenRouteIds = new Set<string>()
+  for (const b of fleet) {
+    if (!b.routeId || seenRouteIds.has(b.routeId)) continue
+    seenRouteIds.add(b.routeId)
+    routeOptions.push([b.routeId, b.routeName ?? b.routeId])
+  }
+  const statusOptions = Array.from(new Set(fleet.map((b) => b.status).filter((s): s is string => !!s)))
+
+  const filteredFleet = fleet.filter((b) => {
+    if (routeFilter && b.routeId !== routeFilter) return false
+    if (statusFilter && b.status !== statusFilter) return false
+    if (search) {
+      const q = search.toLowerCase()
+      const haystack = `${b.busNo} ${b.routeName ?? ''} ${b.driver ?? ''}`.toLowerCase()
+      if (!haystack.includes(q)) return false
+    }
+    return true
+  })
 
   const [pickerOpen, setPickerOpen] = useState(false)
   const pickerRef = useRef<HTMLDivElement>(null)
@@ -403,8 +427,8 @@ export function FleetLiveMap({
       : `${selectedBusIds.length} buses selected`
 
   const visibleFleet = selectedBusIds.length
-    ? fleet.filter((b) => selectedBusIds.includes(b.busId))
-    : fleet
+    ? filteredFleet.filter((b) => selectedBusIds.includes(b.busId))
+    : filteredFleet
 
   const busPoints = visibleFleet
     .filter((b) => b.lat != null && b.lng != null)
@@ -453,7 +477,7 @@ export function FleetLiveMap({
             borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.15)', padding: 8,
           }}
         >
-          {fleet.map((b) => (
+          {filteredFleet.map((b) => (
             <div key={b.busId} style={{ padding: '5px 4px' }}>
               <Checkbox
                 checked={selectedBusIds.includes(b.busId)}
@@ -494,7 +518,45 @@ export function FleetLiveMap({
 
   return (
     <div>
-      {busSelector}
+      <div className="row gap8 ai-center" style={{ marginBottom: 8, flexWrap: 'wrap' }}>
+        {busSelector}
+        {routeOptions.length > 0 && (
+          <label style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            Route
+            <select
+              aria-label="Route"
+              value={routeFilter}
+              onChange={(e) => setRouteFilter(e.target.value)}
+              style={{ padding: '5px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 12 }}
+            >
+              <option value="">All routes</option>
+              {routeOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
+          </label>
+        )}
+        {statusOptions.length > 0 && (
+          <label style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            Status
+            <select
+              aria-label="Status"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              style={{ padding: '5px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 12 }}
+            >
+              <option value="">All statuses</option>
+              {statusOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>
+        )}
+        {fleet.length > 0 && (
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search bus, route or driver…"
+            style={{ padding: '5px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 12, minWidth: 180 }}
+          />
+        )}
+      </div>
       <div style={{ position: 'relative', height, borderRadius: 14, overflow: 'hidden', border: '1px solid var(--border)' }}>
       <APIProvider apiKey={API_KEY}>
         <Map

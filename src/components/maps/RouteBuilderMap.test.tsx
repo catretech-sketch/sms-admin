@@ -153,6 +153,50 @@ describe('FleetLiveMap route geometry', () => {
     expect(screen.getByTestId('bus-icon-b1')).toHaveStyle({ transform: 'rotate(0deg)' })
   })
 
+  it('filters buses by route', async () => {
+    const user = userEvent.setup()
+    const twoRouteFleet = [
+      { busId: 'b1', busNo: 'BUS-01', routeId: 'r1', routeName: 'Route A', lat: 12.1, lng: 77.1, speedKmh: 20 },
+      { busId: 'b2', busNo: 'BUS-02', routeId: 'r2', routeName: 'Route B', lat: 13.1, lng: 78.1, speedKmh: 10 },
+    ]
+    render(<FleetLiveMap fleet={twoRouteFleet} routeStopsByRouteId={routeStopsByRouteId} />)
+    expect(screen.getByText(/BUS-01/)).toBeInTheDocument()
+    expect(screen.getByText(/BUS-02/)).toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText(/route/i), 'r1')
+
+    expect(screen.getByText(/BUS-01/)).toBeInTheDocument()
+    expect(screen.queryByText(/BUS-02/)).not.toBeInTheDocument()
+  })
+
+  it('filters buses by status', async () => {
+    const user = userEvent.setup()
+    const twoStatusFleet = [
+      { busId: 'b1', busNo: 'BUS-01', routeId: 'r1', lat: 12.1, lng: 77.1, speedKmh: 20, status: 'on_route' },
+      { busId: 'b2', busNo: 'BUS-02', routeId: 'r2', lat: 13.1, lng: 78.1, speedKmh: 0, status: 'delayed' },
+    ]
+    render(<FleetLiveMap fleet={twoStatusFleet} routeStopsByRouteId={routeStopsByRouteId} />)
+
+    await user.selectOptions(screen.getByLabelText(/status/i), 'delayed')
+
+    expect(screen.queryByText(/BUS-01/)).not.toBeInTheDocument()
+    expect(screen.getByText(/BUS-02/)).toBeInTheDocument()
+  })
+
+  it('filters buses by a search term matching bus number or driver', async () => {
+    const user = userEvent.setup()
+    const searchableFleet = [
+      { busId: 'b1', busNo: 'BUS-01', routeId: 'r1', lat: 12.1, lng: 77.1, speedKmh: 20, driver: 'Raj Kumar' },
+      { busId: 'b2', busNo: 'BUS-02', routeId: 'r2', lat: 13.1, lng: 78.1, speedKmh: 10, driver: 'Sunita Devi' },
+    ]
+    render(<FleetLiveMap fleet={searchableFleet} routeStopsByRouteId={routeStopsByRouteId} />)
+
+    await user.type(screen.getByPlaceholderText(/search/i), 'sunita')
+
+    expect(screen.queryByText(/BUS-01/)).not.toBeInTheDocument()
+    expect(screen.getByText(/BUS-02/)).toBeInTheDocument()
+  })
+
   it('calls onBusClick with the bus id when a bus marker is clicked', async () => {
     const user = userEvent.setup()
     const onBusClick = vi.fn()
