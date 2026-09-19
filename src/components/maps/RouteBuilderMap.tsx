@@ -176,13 +176,30 @@ function BusMarker({
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: onClick ? 'pointer' : undefined }} onClick={onClick}>
-      <svg
-        data-testid={`bus-icon-${busId}`}
-        width={22} height={22} viewBox="0 0 24 24" fill={color}
-        style={{ transform: `rotate(${heading ?? 0}deg)`, filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.35))' }}
-      >
-        <path d="M12 2 L20 20 L12 16 L4 20 Z" />
-      </svg>
+      <div style={{ position: 'relative', width: 26, height: 26 }}>
+        <svg
+          data-testid={`bus-icon-${busId}`}
+          width={26} height={26} viewBox="0 0 24 24" fill="#FFC107"
+          style={{ transform: `rotate(${heading ?? 0}deg)`, filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.4))' }}
+        >
+          {/* School-bus body, viewed from above — front (windshield stripe) points toward heading 0deg (up). */}
+          <rect x={5} y={2} width={14} height={20} rx={4} stroke="#1f2937" strokeWidth={1} />
+          <rect x={7} y={4.5} width={10} height={2.5} rx={0.5} fill="#1f2937" />
+          <rect x={7} y={8.5} width={10} height={9} rx={1} fill="#fff9db" stroke="#1f2937" strokeWidth={0.6} />
+          <line x1={12} y1={8.5} x2={12} y2={17.5} stroke="#1f2937" strokeWidth={0.6} />
+          <rect x={3.5} y={6} width={1.6} height={3} rx={0.6} fill="#1f2937" />
+          <rect x={18.9} y={6} width={1.6} height={3} rx={0.6} fill="#1f2937" />
+          <rect x={3.5} y={15} width={1.6} height={3} rx={0.6} fill="#1f2937" />
+          <rect x={18.9} y={15} width={1.6} height={3} rx={0.6} fill="#1f2937" />
+        </svg>
+        <span
+          data-testid={`bus-status-dot-${busId}`}
+          style={{
+            position: 'absolute', bottom: -1, right: -1, width: 9, height: 9, borderRadius: 999,
+            background: color, border: '1.5px solid #fff', boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
+          }}
+        />
+      </div>
       <span style={{
         background: color, color: '#fff', padding: '4px 8px', borderRadius: 8, fontSize: 11, fontWeight: 700,
         boxShadow: '0 2px 6px rgba(0,0,0,0.25)',

@@ -136,6 +136,18 @@ describe('FleetLiveMap route geometry', () => {
     expect(screen.getByText('Stop 2')).toBeInTheDocument()
   })
 
+  it('renders a fixed yellow school-bus icon with a separate status-colored dot', async () => {
+    const user = userEvent.setup()
+    const movingFleet = [{ busId: 'b1', busNo: 'BUS-01', routeId: 'r1', lat: 12.1, lng: 77.1, speedKmh: 20 }]
+    render(<FleetLiveMap fleet={movingFleet} routeStopsByRouteId={routeStopsByRouteId} />)
+    await user.click(screen.getByRole('button', { name: /all buses/i }))
+    await user.click(screen.getByRole('checkbox', { name: /bus-01/i }))
+
+    const icon = screen.getByTestId('bus-icon-b1')
+    expect(icon).toHaveAttribute('fill', '#FFC107')
+    expect(screen.getByTestId('bus-status-dot-b1')).toHaveStyle({ background: 'rgb(22, 163, 74)' })
+  })
+
   it('rotates the bus icon to match its GPS heading', async () => {
     const user = userEvent.setup()
     const fleetWithHeading = [{ busId: 'b1', busNo: 'BUS-01', routeId: 'r1', lat: 12.1, lng: 77.1, speedKmh: 20, heading: 135 }]
