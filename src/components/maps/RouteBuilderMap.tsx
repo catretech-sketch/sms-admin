@@ -403,6 +403,9 @@ export function FleetLiveMap({
   ))
 
   const [routeFilter, setRouteFilter] = useState('')
+  // Distinguishes "the filter is untouched" (still hide routes by default, to avoid
+  // clutter on a large fleet) from "the user explicitly picked All routes" (show them).
+  const [routeFilterTouched, setRouteFilterTouched] = useState(false)
   const [statusFilter, setStatusFilter] = useState('')
   const [search, setSearch] = useState('')
 
@@ -464,7 +467,7 @@ export function FleetLiveMap({
   // No selection and no route filter -> no routes at all (just live locations). Selecting
   // buses, or picking a route in the filter, draws only the route(s) currently in view.
   const visibleRouteIds = new Set(visibleFleet.map((b) => b.routeId).filter((id): id is string => !!id))
-  const routePaths = (selectedBusIds.length === 0 && !routeFilter) ? [] : Object.entries(routeStopsByRouteId)
+  const routePaths = (selectedBusIds.length === 0 && !routeFilter && !routeFilterTouched) ? [] : Object.entries(routeStopsByRouteId)
     .filter(([routeId]) => visibleRouteIds.has(routeId))
     .map(([routeId, stops]) => {
       const placed = placedStops(stops)
@@ -543,7 +546,7 @@ export function FleetLiveMap({
             <select
               aria-label="Route"
               value={routeFilter}
-              onChange={(e) => setRouteFilter(e.target.value)}
+              onChange={(e) => { setRouteFilter(e.target.value); setRouteFilterTouched(true) }}
               style={{ padding: '5px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 12 }}
             >
               <option value="">All routes</option>

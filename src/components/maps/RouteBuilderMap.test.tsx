@@ -181,6 +181,35 @@ describe('FleetLiveMap route geometry', () => {
     expect(screen.queryByText(/BUS-02/)).not.toBeInTheDocument()
   })
 
+  it('draws no route line before touching the route filter or picking a bus (default declutter)', () => {
+    render(<FleetLiveMap fleet={fleet} routeStopsByRouteId={routeStopsByRouteId} />)
+    expect(screen.queryByText('Stop 1')).not.toBeInTheDocument()
+  })
+
+  it('explicitly picking "All routes" in the filter draws every visible bus\'s route', async () => {
+    const user = userEvent.setup()
+    const twoRouteFleet = [
+      { busId: 'b1', busNo: 'BUS-01', routeId: 'r1', routeName: 'Route A', lat: 12.1, lng: 77.1, speedKmh: 20 },
+      { busId: 'b2', busNo: 'BUS-02', routeId: 'r2', routeName: 'Route B', lat: 13.1, lng: 78.1, speedKmh: 10 },
+    ]
+    const twoRouteStops = {
+      ...routeStopsByRouteId,
+      r2: [
+        { id: 's3', routeId: 'r2', name: 'Stop 3', sequence: 1, lat: 13.1, lng: 78.1 },
+        { id: 's4', routeId: 'r2', name: 'Stop 4', sequence: 2, lat: 13.2, lng: 78.2 },
+      ],
+    }
+    render(<FleetLiveMap fleet={twoRouteFleet} routeStopsByRouteId={twoRouteStops} />)
+    expect(screen.queryByText('Stop 1')).not.toBeInTheDocument()
+    expect(screen.queryByText('Stop 4')).not.toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText(/route/i), 'r1')
+    await user.selectOptions(screen.getByLabelText(/route/i), '')
+
+    expect(screen.getByText('Stop 1')).toBeInTheDocument()
+    expect(screen.getByText('Stop 4')).toBeInTheDocument()
+  })
+
   it('selecting a route in the filter draws its stops even with no bus explicitly selected', async () => {
     const user = userEvent.setup()
     const twoRouteFleet = [
