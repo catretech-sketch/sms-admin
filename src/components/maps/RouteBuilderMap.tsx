@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { APIProvider, Map, AdvancedMarker, useMap, useMapsLibrary, MapControl, ControlPosition } from '@vis.gl/react-google-maps'
-import type { RouteStop } from '@/api/transport'
+import type { RouteStop, RouteGeometry } from '@/api/transport'
 import { Checkbox } from '@/components/ui'
+import { decodePolyline } from '@/lib/decodePolyline'
 
 const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
 const MAP_ID = import.meta.env.VITE_GOOGLE_MAPS_MAP_ID
@@ -97,6 +98,34 @@ function RoutePolyline({ path, strokeColor = '#2563eb' }: { path: LatLng[]; stro
   return null
 }
 
+/** Renders the decoded road-following route geometry (from the Routes API) as a polyline.
+ *  Draws nothing when geometry is undefined or its status is 'unavailable' — no silent
+ *  fallback to the straight-line RoutePolyline above. */
+function RoadRoutePolyline({ geometry, strokeColor = '#2563eb' }: { geometry: RouteGeometry | undefined; strokeColor?: string }) {
+  const map = useMap()
+  const encoded = geometry?.status === 'available' ? geometry.geometry : null
+  useEffect(() => {
+    if (!map || !encoded || typeof google === 'undefined') return
+    const path = decodePolyline(encoded)
+    if (path.length < 2) return
+    const line = new google.maps.Polyline({ path, strokeColor, strokeOpacity: 0.85, strokeWeight: 4, geodesic: false, map })
+    return () => line.setMap(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, encoded, strokeColor])
+  return null
+}
+
+function RouteUnavailableBadge() {
+  return (
+    <div
+      className="t-xs muted3"
+      style={{ position: 'absolute', top: 10, right: 12, background: 'var(--surface)', padding: '4px 8px', borderRadius: 8, border: '1px solid var(--border)' }}
+    >
+      Route unavailable
+    </div>
+  )
+}
+
 function StopPin({ sequence, name, selected }: { sequence: number; name: string; selected?: boolean }) {
   return (
     <div style={{ transform: 'translate(-50%, -50%)', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -130,6 +159,7 @@ export type RouteBuilderMapProps = {
   selectedStopId?: string | null
   onMapClick?: (lat: number, lng: number) => void
   onStopClick?: (stopId: string) => void
+  geometry?: RouteGeometry
 }
 
 /**
@@ -137,7 +167,7 @@ export type RouteBuilderMapProps = {
  * numbered markers. Parent handles persistence.
  */
 export function RouteBuilderMap({
-  stops, height = 420, selectedStopId, onMapClick, onStopClick,
+  stops, height = 420, selectedStopId, onMapClick, onStopClick, geometry,
 }: RouteBuilderMapProps) {
   const placed = useMemo(() => placedStops(stops), [stops])
   const path = useMemo(
@@ -175,7 +205,7 @@ export function RouteBuilderMap({
             onMapClick(e.detail.latLng.lat, e.detail.latLng.lng)
           }}
         >
-          {path.length >= 2 && <RoutePolyline path={path} />}
+          {geometry?.status === 'available' && <RoadRoutePolyline geometry={geometry} />}
           {placed.map((s) => (
             <AdvancedMarker
               key={s.id}
@@ -194,6 +224,7 @@ export function RouteBuilderMap({
           Click map to add a stop
         </div>
       )}
+      {geometry?.status === 'unavailable' && <RouteUnavailableBadge />}
     </div>
   )
 }
