@@ -300,10 +300,14 @@ export function FleetLiveMap({
   fleet,
   routeStopsByRouteId,
   height = 360,
+  routeGeometryByRouteId = {},
 }: {
   fleet: { busId: string; busNo: string; routeId?: string | null; lat?: number | null; lng?: number | null; speedKmh?: number | null; status?: string }[]
   routeStopsByRouteId: Record<string, RouteStop[]>
   height?: number
+  /** Road-following geometry per route, keyed by routeId. Additive — falls back to no line
+   *  (not a straight-line placeholder) when a selected route's geometry isn't available yet. */
+  routeGeometryByRouteId?: Record<string, RouteGeometry>
 }) {
   const [selectedBusIds, setSelectedBusIds] = useState<string[]>([])
   const toggleBus = (id: string) => setSelectedBusIds((prev) => (
@@ -426,9 +430,14 @@ export function FleetLiveMap({
           gestureHandling="greedy"
           style={{ width: '100%', height: '100%' }}
         >
-          {routePaths.map((r, i) => (
-            <RoutePolyline key={r.routeId} path={r.path} strokeColor={ROUTE_COLORS[i % ROUTE_COLORS.length]} />
-          ))}
+          {routePaths.map((r, i) => {
+            const geom = routeGeometryByRouteId[r.routeId]
+            return geom?.status === 'available'
+              ? <RoadRoutePolyline key={r.routeId} geometry={geom} strokeColor={ROUTE_COLORS[i % ROUTE_COLORS.length]} />
+              : geom?.status === 'unavailable'
+                ? null // handled by the badge below, not a per-route line
+                : null // still loading — no line yet, not a straight-line placeholder
+          })}
           {routePaths.flatMap((r) => r.stops.map((s) => (
             <AdvancedMarker key={s.id} position={{ lat: s.lat as number, lng: s.lng as number }}>
               <StopPin sequence={s.sequence} name={s.name} />
@@ -453,6 +462,9 @@ export function FleetLiveMap({
           <div className="fw6">Waiting for live GPS</div>
           <div className="t-sm muted">Assign routes to buses and start a trip to see polylines and positions.</div>
         </div>
+      )}
+      {selectedBusIds.length > 0 && routePaths.some((r) => routeGeometryByRouteId[r.routeId]?.status === 'unavailable') && (
+        <RouteUnavailableBadge />
       )}
       </div>
     </div>

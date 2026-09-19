@@ -46,7 +46,7 @@ import {
   useCreateSportsTeam, useCreateSportsEvent, useCreateSportsMedal,
   useSendBusNotification,
   useStartBusTrip, usePingBusTrip, useEndBusTrip,
-  useFleetWebSocket, useFleetRouteStops,
+  useFleetWebSocket, useFleetRouteStops, useFleetRouteGeometries,
 } from '@/api/hooks/useOperations'
 import type { FleetBus, TransportRoute, RouteStop, SportsMedal } from '@/api/operations'
 import type { Bus, Complaint } from '@/types'
@@ -2433,6 +2433,7 @@ function GpsScreenBody() {
   const fleetQ = useTransportFleet(true, wsConnected ? 30_000 : 5_000)
   const fleet = fleetQ.data ?? []
   const routeStopsByRouteId = useFleetRouteStops(fleet)
+  const routeGeometryByRouteId = useFleetRouteGeometries(fleet)
 
   const onRoute = fleet.filter((b) => b.status === 'on_route').length
   const delayed = fleet.filter((b) => b.status === 'delayed').length
@@ -2466,7 +2467,7 @@ function GpsScreenBody() {
         <Card>
           <CardHead title="Live map" sub="Real-time vehicle positions" icon="pin"
             action={located.length > 0 ? <Badge tone="success" soft dot>{located.length} live</Badge> : <Badge tone="neutral" soft>No live GPS</Badge>} />
-          <FleetLiveMap fleet={fleet} routeStopsByRouteId={routeStopsByRouteId} />
+          <FleetLiveMap fleet={fleet} routeStopsByRouteId={routeStopsByRouteId} routeGeometryByRouteId={routeGeometryByRouteId} />
         </Card>
       </div>
     </div>
