@@ -36,6 +36,7 @@ import { fromApiRole, leadershipRoleLabel } from '@/api/users'
 import { collectAudienceContacts } from '@/lib/collectAudienceEmails'
 import { gradeRank } from '@/lib/defaultClasses'
 import { shouldPublishGps } from '@/lib/gpsThrottle'
+import { groupStudentsByStop } from '@/lib/transportStops'
 import {
   useTransportSummary, useTransportFleet,
   useBusStudents, useAssignStudentToBus, useUnassignStudentFromBus, useTransportStudentsList,
@@ -1551,8 +1552,11 @@ function BusFleet({ fleet: fleetProp, loading: loadingProp, error: errorProp }: 
     },
     {
       key: 'speedKmh', label: 'Speed', align: 'right',
-      render: (r) => (r.status === 'on_route' || r.status === 'delayed') && r.speedKmh != null
-        ? <span className="row ai-center gap5 jc-end"><span className="sm-dot-live" style={{ width: 6, height: 6 }} /><span className="tnum fw6">{Math.round(r.speedKmh)} km/h</span></span>
+      render: (r) => r.speedKmh != null
+        ? <span className="row ai-center gap5 jc-end">
+            {(r.status === 'on_route' || r.status === 'delayed') ? <span className="sm-dot-live" style={{ width: 6, height: 6 }} /> : null}
+            <span className="tnum fw6">{Math.round(r.speedKmh)} km/h</span>
+          </span>
         : <span className="muted3">—</span>,
     },
     { key: 'nextStopName', label: 'Next stop', render: (r) => r.nextStopName ? <Badge tone="neutral" icon="pin">{r.nextStopName}</Badge> : <span className="muted3">—</span> },
@@ -2434,11 +2438,30 @@ function GpsScreenBody() {
   const fleet = fleetQ.data ?? []
   const routeStopsByRouteId = useFleetRouteStops(fleet)
   const routeGeometryByRouteId = useFleetRouteGeometries(fleet)
+  const mappedQ = useTransportStudentsList({ status: 'mapped' })
+  const mapped = mappedQ.data ?? []
+  const [highlightStudentId, setHighlightStudentId] = useState('')
+  const studentsByStopId = useMemo(() => groupStudentsByStop(mapped), [mapped])
+  const studentCountByStopId = useMemo(
+    () => Object.fromEntries(Object.entries(studentsByStopId).map(([stopId, students]) => [stopId, students.length])),
+    [studentsByStopId],
+  )
+  const [viewStopId, setViewStopId] = useState<string | null>(null)
+  const viewStopStudents = viewStopId ? studentsByStopId[viewStopId] ?? [] : []
+  const viewStopName = viewStopStudents[0]?.stopName ?? ''
 
   const onRoute = fleet.filter((b) => b.status === 'on_route').length
   const delayed = fleet.filter((b) => b.status === 'delayed').length
   const riding = fleet.reduce((n, b) => n + b.studentsRiding, 0)
   const located = fleet.filter((b) => b.lat != null && b.lng != null)
+
+  const highlightStop = (() => {
+    const stu = mapped.find((s) => s.studentId === highlightStudentId)
+    if (!stu?.routeId || !stu.stopId) return null
+    const stop = (routeStopsByRouteId[stu.routeId] ?? []).find((s) => s.id === stu.stopId)
+    if (!stop || stop.lat == null || stop.lng == null) return null
+    return { name: stu.stopName || stop.name || 'Student stop', lat: stop.lat, lng: stop.lng }
+  })()
 
   return (
     <div>
@@ -2465,11 +2488,53 @@ function GpsScreenBody() {
         <DriverModePanel fleet={fleet} />
 
         <Card>
-          <CardHead title="Live map" sub="Real-time vehicle positions" icon="pin"
-            action={located.length > 0 ? <Badge tone="success" soft dot>{located.length} live</Badge> : <Badge tone="neutral" soft>No live GPS</Badge>} />
-          <FleetLiveMap fleet={fleet} routeStopsByRouteId={routeStopsByRouteId} routeGeometryByRouteId={routeGeometryByRouteId} />
+          <CardHead title="Live map" sub="Real-time vehicle positions · optional student stop ★"
+            action={
+              <div className="row gap8 ai-center">
+                <Select
+                  value={highlightStudentId}
+                  onChange={(e) => setHighlightStudentId(e.target.value)}
+                  options={[
+                    { value: '', label: 'No student stop' },
+                    ...mapped
+                      .filter((s) => s.stopId && s.routeId)
+                      .map((s) => ({
+                        value: s.studentId,
+                        label: `${s.studentName}${s.busNo ? ` · ${s.busNo}` : ''}`,
+                      })),
+                  ]}
+                  style={{ minWidth: 200 }}
+                />
+                {located.length > 0 ? <Badge tone="success" soft dot>{located.length} live</Badge> : <Badge tone="neutral" soft>No live GPS</Badge>}
+              </div>
+            } />
+          <FleetLiveMap
+            fleet={fleet}
+            routeStopsByRouteId={routeStopsByRouteId}
+            highlightStop={highlightStop}
+            routeGeometryByRouteId={routeGeometryByRouteId}
+            studentCountByStopId={studentCountByStopId}
+            onStopClick={setViewStopId}
+          />
         </Card>
       </div>
+      <Modal open={!!viewStopId} onClose={() => setViewStopId(null)} size="sm" icon="users" title={viewStopName || 'Stop students'}>
+        {viewStopStudents.length === 0 ? (
+          <Empty title="No students mapped" body="No students are currently mapped to this stop." />
+        ) : (
+          <div className="col gap8">
+            {viewStopStudents.map((s) => (
+              <div key={s.studentId} className="row jc-between ai-center" style={{ padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                <div>
+                  <div className="fw6 t-sm">{s.studentName}</div>
+                  <div className="t-xs muted3">{s.admissionNo}{s.grade ? ` · Grade ${s.grade}${s.section ? `-${s.section}` : ''}` : ''}</div>
+                </div>
+                {s.busNo && <Badge tone="neutral" soft>{s.busNo}</Badge>}
+              </div>
+            ))}
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }

@@ -126,9 +126,21 @@ function RouteUnavailableBadge() {
   )
 }
 
-function StopPin({ sequence, name, selected }: { sequence: number; name: string; selected?: boolean }) {
+function StopPin({
+  sequence, name, selected, studentCount, onClick,
+}: {
+  sequence: number
+  name: string
+  selected?: boolean
+  /** Number of students mapped to this stop — shown as a badge when > 0. */
+  studentCount?: number
+  onClick?: () => void
+}) {
   return (
-    <div style={{ transform: 'translate(-50%, -50%)', display: 'flex', alignItems: 'center', gap: 6 }}>
+    <div
+      style={{ transform: 'translate(-50%, -50%)', display: 'flex', alignItems: 'center', gap: 6, position: 'relative', cursor: onClick ? 'pointer' : undefined }}
+      onClick={onClick}
+    >
       <span
         style={{
           width: 28, height: 28, borderRadius: 999, flex: '0 0 auto',
@@ -149,6 +161,17 @@ function StopPin({ sequence, name, selected }: { sequence: number; name: string;
       >
         {name}
       </span>
+      {!!studentCount && (
+        <span
+          style={{
+            position: 'absolute', top: -8, left: 18, minWidth: 16, height: 16, padding: '0 4px',
+            borderRadius: 999, background: '#dc2626', color: '#fff', fontSize: 10, fontWeight: 800,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #fff',
+          }}
+        >
+          {studentCount}
+        </span>
+      )}
     </div>
   )
 }
@@ -300,14 +323,23 @@ export function FleetLiveMap({
   fleet,
   routeStopsByRouteId,
   height = 360,
+  highlightStop,
   routeGeometryByRouteId = {},
+  studentCountByStopId = {},
+  onStopClick,
 }: {
   fleet: { busId: string; busNo: string; routeId?: string | null; lat?: number | null; lng?: number | null; speedKmh?: number | null; status?: string }[]
   routeStopsByRouteId: Record<string, RouteStop[]>
   height?: number
+  /** Optional ★ child/student stop overlay (from API assignment — not local SoT). */
+  highlightStop?: { name: string; lat: number; lng: number } | null
   /** Road-following geometry per route, keyed by routeId. Additive — falls back to no line
    *  (not a straight-line placeholder) when a selected route's geometry isn't available yet. */
   routeGeometryByRouteId?: Record<string, RouteGeometry>
+  /** Number of students mapped to each stop, keyed by stop id — shown as a badge on the marker. */
+  studentCountByStopId?: Record<string, number>
+  /** Called with a stop's id when its marker is clicked. */
+  onStopClick?: (stopId: string) => void
 }) {
   const [selectedBusIds, setSelectedBusIds] = useState<string[]>([])
   const toggleBus = (id: string) => setSelectedBusIds((prev) => (
@@ -343,7 +375,9 @@ export function FleetLiveMap({
       lat: b.lat as number,
       lng: b.lng as number,
       speedKmh: b.speedKmh ?? null,
-      moving: b.status === 'on_route' || b.status === 'delayed',
+      // Always surface speed when GPS reports it — not only when legacy status is "moving".
+      moving: b.speedKmh != null && b.speedKmh > 3,
+      showSpeed: b.speedKmh != null,
     }))
 
   // No selection -> no routes at all (just live locations). Selecting buses draws only
@@ -440,20 +474,41 @@ export function FleetLiveMap({
           })}
           {routePaths.flatMap((r) => r.stops.map((s) => (
             <AdvancedMarker key={s.id} position={{ lat: s.lat as number, lng: s.lng as number }}>
-              <StopPin sequence={s.sequence} name={s.name} />
+              <StopPin
+                sequence={s.sequence}
+                name={s.name}
+                studentCount={studentCountByStopId[s.id]}
+                onClick={onStopClick ? () => onStopClick(s.id) : undefined}
+              />
             </AdvancedMarker>
           )))}
           {busPoints.map((b) => (
             <AdvancedMarker key={b.id} position={{ lat: b.lat, lng: b.lng }}>
-              <span style={{ background: '#16a34a', color: '#fff', padding: '4px 8px', borderRadius: 8, fontSize: 11, fontWeight: 700, boxShadow: '0 2px 6px rgba(0,0,0,0.25)' }}>
-                {b.busNo}{b.moving && b.speedKmh != null ? ` · ${Math.round(b.speedKmh)}` : ''}
+              <span style={{
+                background: b.moving ? '#16a34a' : '#64748b',
+                color: '#fff', padding: '4px 8px', borderRadius: 8, fontSize: 11, fontWeight: 700,
+                boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
+              }}>
+                {b.busNo}{b.showSpeed ? ` · ${Math.round(b.speedKmh!)} km/h` : ''}
               </span>
             </AdvancedMarker>
           ))}
+          {highlightStop ? (
+            <AdvancedMarker position={{ lat: highlightStop.lat, lng: highlightStop.lng }}>
+              <span style={{
+                background: '#2563eb', color: '#fff', padding: '4px 8px', borderRadius: 8,
+                fontSize: 11, fontWeight: 700, boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
+              }}>
+                ★ {highlightStop.name}
+              </span>
+            </AdvancedMarker>
+          ) : null}
           <FitStops stops={
-            busPoints.length > 0
-              ? busPoints.map((b) => ({ lat: b.lat, lng: b.lng }))
-              : routePaths.flatMap((r) => r.path)
+            [
+              ...busPoints.map((b) => ({ lat: b.lat, lng: b.lng })),
+              ...(highlightStop ? [{ lat: highlightStop.lat, lng: highlightStop.lng }] : []),
+              ...(busPoints.length === 0 && !highlightStop ? routePaths.flatMap((r) => r.path) : []),
+            ]
           } />
         </Map>
       </APIProvider>

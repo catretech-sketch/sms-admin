@@ -133,4 +133,49 @@ describe('FleetLiveMap route geometry', () => {
     expect(screen.getByText('Stop 1')).toBeInTheDocument()
     expect(screen.getByText('Stop 2')).toBeInTheDocument()
   })
+
+  it('shows the student count badge on a stop with mapped students', async () => {
+    const user = userEvent.setup()
+    render(
+      <FleetLiveMap
+        fleet={fleet}
+        routeStopsByRouteId={routeStopsByRouteId}
+        studentCountByStopId={{ s1: 12 }}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: /all buses/i }))
+    await user.click(screen.getByRole('checkbox', { name: /bus-01/i }))
+    expect(screen.getByText('12')).toBeInTheDocument()
+  })
+
+  it('does not show a badge for a stop with no mapped students', async () => {
+    const user = userEvent.setup()
+    render(
+      <FleetLiveMap
+        fleet={fleet}
+        routeStopsByRouteId={routeStopsByRouteId}
+        studentCountByStopId={{ s1: 12 }}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: /all buses/i }))
+    await user.click(screen.getByRole('checkbox', { name: /bus-01/i }))
+    expect(screen.queryByText('0')).not.toBeInTheDocument()
+  })
+
+  it('calls onStopClick with the stop id when a stop marker is clicked', async () => {
+    const user = userEvent.setup()
+    const onStopClick = vi.fn()
+    render(
+      <FleetLiveMap
+        fleet={fleet}
+        routeStopsByRouteId={routeStopsByRouteId}
+        studentCountByStopId={{ s1: 12 }}
+        onStopClick={onStopClick}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: /all buses/i }))
+    await user.click(screen.getByRole('checkbox', { name: /bus-01/i }))
+    await user.click(screen.getByText('Stop 1'))
+    expect(onStopClick).toHaveBeenCalledWith('s1')
+  })
 })
