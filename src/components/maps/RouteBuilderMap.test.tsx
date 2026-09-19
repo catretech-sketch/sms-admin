@@ -153,6 +153,16 @@ describe('FleetLiveMap route geometry', () => {
     expect(screen.getByTestId('bus-icon-b1')).toHaveStyle({ transform: 'rotate(0deg)' })
   })
 
+  it('calls onBusClick with the bus id when a bus marker is clicked', async () => {
+    const user = userEvent.setup()
+    const onBusClick = vi.fn()
+    render(<FleetLiveMap fleet={fleet} routeStopsByRouteId={routeStopsByRouteId} onBusClick={onBusClick} />)
+    await user.click(screen.getByRole('button', { name: /all buses/i }))
+    await user.click(screen.getByRole('checkbox', { name: /bus-01/i }))
+    await user.click(screen.getByText('BUS-01 · 20 km/h'))
+    expect(onBusClick).toHaveBeenCalledWith('b1')
+  })
+
   it('does not show a student count badge on stop markers (count is revealed via click instead)', async () => {
     const user = userEvent.setup()
     render(

@@ -2446,6 +2446,8 @@ function GpsScreenBody() {
   const viewStopStudents = viewStopId ? studentsByStopId[viewStopId] ?? [] : []
   const viewStopName = viewStopStudents[0]?.stopName ?? ''
   const viewStopTitle = viewStopName ? `${viewStopName} · ${viewStopStudents.length} students` : 'Stop students'
+  const [viewBusId, setViewBusId] = useState<string | null>(null)
+  const viewBus = viewBusId ? fleet.find((b) => b.busId === viewBusId) ?? null : null
 
   const onRoute = fleet.filter((b) => b.status === 'on_route').length
   const delayed = fleet.filter((b) => b.status === 'delayed').length
@@ -2511,6 +2513,7 @@ function GpsScreenBody() {
             highlightStop={highlightStop}
             routeGeometryByRouteId={routeGeometryByRouteId}
             onStopClick={setViewStopId}
+            onBusClick={setViewBusId}
           />
         </Card>
       </div>
@@ -2528,6 +2531,50 @@ function GpsScreenBody() {
                 {s.busNo && <Badge tone="neutral" soft>{s.busNo}</Badge>}
               </div>
             ))}
+          </div>
+        )}
+      </Modal>
+      <Modal open={!!viewBusId} onClose={() => setViewBusId(null)} size="sm" icon="bus" title={viewBus?.busNo ?? 'Bus'}>
+        {viewBus && (
+          <div className="col gap8">
+            <div className="row jc-between ai-center">
+              <span className="t-sm muted">Status</span>
+              <Badge tone={BUS_META[viewBus.status].tone} soft dot>{BUS_META[viewBus.status].label}</Badge>
+            </div>
+            {viewBus.routeName && (
+              <div className="row jc-between ai-center">
+                <span className="t-sm muted">Route</span>
+                <span className="t-sm fw6">{viewBus.routeName}</span>
+              </div>
+            )}
+            {viewBus.driver && (
+              <div className="row jc-between ai-center">
+                <span className="t-sm muted">Driver</span>
+                <span className="t-sm fw6">{viewBus.driver}{viewBus.driverPhone ? ` · ${viewBus.driverPhone}` : ''}</span>
+              </div>
+            )}
+            {viewBus.speedKmh != null && (
+              <div className="row jc-between ai-center">
+                <span className="t-sm muted">Speed</span>
+                <span className="t-sm fw6">{Math.round(viewBus.speedKmh)} km/h</span>
+              </div>
+            )}
+            {viewBus.nextStopName && (
+              <div className="row jc-between ai-center">
+                <span className="t-sm muted">Next stop</span>
+                <span className="t-sm fw6">{viewBus.nextStopName}</span>
+              </div>
+            )}
+            <div className="row jc-between ai-center">
+              <span className="t-sm muted">Students riding</span>
+              <span className="t-sm fw6">{viewBus.studentsRiding}{viewBus.capacity != null ? ` / ${viewBus.capacity}` : ''}</span>
+            </div>
+            {viewBus.lastPingAt && (
+              <div className="row jc-between ai-center">
+                <span className="t-sm muted">Last update</span>
+                <span className="t-sm fw6">{new Date(viewBus.lastPingAt).toLocaleTimeString()}</span>
+              </div>
+            )}
           </div>
         )}
       </Modal>

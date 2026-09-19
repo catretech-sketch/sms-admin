@@ -166,15 +166,16 @@ function StopPin({
 
 /** Bus icon + label, rotated to the vehicle's GPS heading when available (points up/0deg otherwise). */
 function BusMarker({
-  busId, label, heading, color,
+  busId, label, heading, color, onClick,
 }: {
   busId: string
   label: string
   heading?: number | null
   color: string
+  onClick?: () => void
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: onClick ? 'pointer' : undefined }} onClick={onClick}>
       <svg
         data-testid={`bus-icon-${busId}`}
         width={22} height={22} viewBox="0 0 24 24" fill={color}
@@ -195,7 +196,7 @@ function BusMarker({
 /** Wraps a fleet bus marker with position interpolation — smooths movement between GPS pings
  *  instead of the marker jump-cutting to each new ping. */
 function LiveBusMarker({
-  busId, lat, lng, heading, color, label,
+  busId, lat, lng, heading, color, label, onClick,
 }: {
   busId: string
   lat: number
@@ -203,12 +204,13 @@ function LiveBusMarker({
   heading?: number | null
   color: string
   label: string
+  onClick?: () => void
 }) {
   const position = useInterpolatedPosition(lat, lng)
   if (!position) return null
   return (
     <AdvancedMarker position={position}>
-      <BusMarker busId={busId} label={label} heading={heading} color={color} />
+      <BusMarker busId={busId} label={label} heading={heading} color={color} onClick={onClick} />
     </AdvancedMarker>
   )
 }
@@ -363,6 +365,7 @@ export function FleetLiveMap({
   highlightStop,
   routeGeometryByRouteId = {},
   onStopClick,
+  onBusClick,
 }: {
   fleet: { busId: string; busNo: string; routeId?: string | null; lat?: number | null; lng?: number | null; speedKmh?: number | null; heading?: number | null; status?: string }[]
   routeStopsByRouteId: Record<string, RouteStop[]>
@@ -374,6 +377,8 @@ export function FleetLiveMap({
   routeGeometryByRouteId?: Record<string, RouteGeometry>
   /** Called with a stop's id when its marker is clicked — parent decides what to reveal (e.g. a student list modal). */
   onStopClick?: (stopId: string) => void
+  /** Called with a bus's id when its marker is clicked — parent decides what to reveal (e.g. a bus info panel). */
+  onBusClick?: (busId: string) => void
 }) {
   const [selectedBusIds, setSelectedBusIds] = useState<string[]>([])
   const toggleBus = (id: string) => setSelectedBusIds((prev) => (
@@ -525,6 +530,7 @@ export function FleetLiveMap({
               heading={b.heading}
               color={b.moving ? '#16a34a' : '#64748b'}
               label={`${b.busNo}${b.showSpeed ? ` · ${Math.round(b.speedKmh!)} km/h` : ''}`}
+              onClick={onBusClick ? () => onBusClick(b.id) : undefined}
             />
           ))}
           {highlightStop ? (
