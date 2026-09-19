@@ -4,6 +4,7 @@ import {
   assignBusTeacher, unassignBusTeacher, deleteRoute,
   listTravelingTeachers, addTravelingTeacher, removeTravelingTeacher,
   getStudentTransport, setStudentTransport, listTransportStudents,
+  getRouteGeometry,
 } from './transport'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -245,5 +246,35 @@ describe('student transport mapping API', () => {
     await listTransportStudents({ status: 'pending', routeId: 'r1' })
     expect(calls[0]).toContain('status=pending')
     expect(calls[0]).toContain('routeId=r1')
+  })
+})
+
+describe('route geometry API', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('GETs available geometry for a route', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: {
+        route_id: 'R1', status: 'available', format: 'google-encoded-polyline',
+        geometry: 'abc123', distance_meters: 4210, duration_seconds: 780,
+        stop_sequence_hash: 'sha256:abc', generated_at: '2026-09-19T10:00:00Z',
+      },
+    })))
+    const result = await getRouteGeometry('R1')
+    expect(result.status).toBe('available')
+    expect(result.geometry).toBe('abc123')
+    expect(result.distanceMeters).toBe(4210)
+  })
+
+  it('GETs unavailable geometry with null fields', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: {
+        route_id: 'R1', status: 'unavailable', format: null, geometry: null,
+        distance_meters: null, duration_seconds: null, stop_sequence_hash: 'sha256:abc', generated_at: null,
+      },
+    })))
+    const result = await getRouteGeometry('R1')
+    expect(result.status).toBe('unavailable')
+    expect(result.geometry).toBeNull()
   })
 })

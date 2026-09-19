@@ -399,6 +399,24 @@ export async function setStudentTransport(studentId: string, input: SetStudentTr
   )
 }
 
+export type RouteGeometryStatus = 'available' | 'unavailable'
+
+export interface RouteGeometry {
+  routeId: string
+  status: RouteGeometryStatus
+  format: string | null
+  geometry: string | null
+  distanceMeters: number | null
+  durationSeconds: number | null
+  stopSequenceHash: string
+  generatedAt: string | null
+}
+
+export async function getRouteGeometry(routeId: string): Promise<RouteGeometry> {
+  if (!routeId) throw new Error('Route ID required')
+  return asObj<RouteGeometry>(await request<Record<string, unknown>>(`/transport/routes/${routeId}/geometry`))
+}
+
 export async function listTransportStudents(filter: TransportStudentsFilter = {}): Promise<TransportMappedStudent[]> {
   const query: Record<string, string> = {}
   if (filter.routeId) query.routeId = filter.routeId
