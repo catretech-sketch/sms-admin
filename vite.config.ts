@@ -15,6 +15,13 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    // Fixed test values for `import.meta.env.VITE_GOOGLE_MAPS_*` so map-rendering tests don't
+    // depend on a gitignored .env.local (which would make them pass locally and fail on a
+    // fresh clone / CI, or vice versa).
+    env: {
+      VITE_GOOGLE_MAPS_API_KEY: 'test-key',
+      VITE_GOOGLE_MAPS_MAP_ID: 'test-map',
+    },
     // Never collect SDD scratch artifacts (briefs/targets live under .superpowers/),
     // and never collect nested worktree checkouts (they have their own node_modules,
     // so a duplicate test file collected from one mixes two React copies and crashes).
