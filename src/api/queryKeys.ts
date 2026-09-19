@@ -150,6 +150,7 @@ export const queryKeys = {
     busStudents: (busId: string) => ['operations', 'transport', 'busStudents', busId] as const,
     travelingTeachers: (busId: string) => ['operations', 'transport', 'travelingTeachers', busId] as const,
     transportRouteStops: (routeId: string) => ['operations', 'transport', 'routeStops', routeId] as const,
+    transportRouteGeometry: (routeId: string) => ['operations', 'transport', 'routeGeometry', routeId] as const,
     studentTransport: (studentId: string) => ['operations', 'transport', 'studentTransport', studentId] as const,
     transportStudentsList: (filters: import('./transport').TransportStudentsFilter = {}) =>
       ['operations', 'transport', 'studentsList', filters] as const,

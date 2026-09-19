@@ -35,6 +35,7 @@ import {
   type CreateHostelBlockInput, type CreateHostelRoomInput, type CreateHostelResidentInput,
   type CreateSportsTeamInput, type CreateSportsEventInput, type CreateSportsMedalInput,
 } from '../operations'
+import { getRouteGeometry, type RouteGeometry } from '../transport'
 
 function useOperationsTier(): boolean {
   const app = useApp()
@@ -356,6 +357,43 @@ export function useFleetRouteStops(fleet: FleetBus[]): Record<string, RouteStop[
     [fleet],
   )
   return useRouteStopsByRoute(routeIds).stopsByRoute
+}
+
+export function useRouteGeometry(routeId: string | null | undefined) {
+  const ops = useOperationsTier()
+  return useQuery({
+    queryKey: queryKeys.operations.transportRouteGeometry(routeId ?? ''),
+    queryFn: () => getRouteGeometry(routeId as string),
+    enabled: ops && !!routeId,
+    staleTime: 60_000,
+  })
+}
+
+/** Route geometry for every distinct routeId present in the live fleet board. */
+export function useFleetRouteGeometries(fleet: FleetBus[]): Record<string, RouteGeometry> {
+  const ops = useOperationsTier()
+  const routeIds = useMemo(
+    () => [...new Set(fleet.map((b) => b.routeId).filter(Boolean))] as string[],
+    [fleet],
+  )
+  const queries = useQueries({
+    queries: routeIds.map((id) => ({
+      queryKey: queryKeys.operations.transportRouteGeometry(id),
+      queryFn: () => getRouteGeometry(id),
+      enabled: ops && !!id,
+      staleTime: 60_000,
+    })),
+  })
+  const snapshots = queries.map((q) => q.data)
+  return useMemo(() => {
+    const out: Record<string, RouteGeometry> = {}
+    routeIds.forEach((id, i) => {
+      const data = snapshots[i]
+      if (data) out[id] = data
+    })
+    return out
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeIds, snapshots])
 }
 
 export function useCreateBus(): UseMutationResult<FleetBus, Error, CreateBusInput> {
