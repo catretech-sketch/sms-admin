@@ -444,10 +444,10 @@ export function FleetLiveMap({
       showSpeed: b.speedKmh != null,
     }))
 
-  // No selection -> no routes at all (just live locations). Selecting buses draws only
-  // the route(s) assigned to those specific buses.
+  // No selection and no route filter -> no routes at all (just live locations). Selecting
+  // buses, or picking a route in the filter, draws only the route(s) currently in view.
   const visibleRouteIds = new Set(visibleFleet.map((b) => b.routeId).filter((id): id is string => !!id))
-  const routePaths = selectedBusIds.length === 0 ? [] : Object.entries(routeStopsByRouteId)
+  const routePaths = (selectedBusIds.length === 0 && !routeFilter) ? [] : Object.entries(routeStopsByRouteId)
     .filter(([routeId]) => visibleRouteIds.has(routeId))
     .map(([routeId, stops]) => {
       const placed = placedStops(stops)
@@ -608,8 +608,8 @@ export function FleetLiveMap({
           <FitStops stops={
             [
               ...busPoints.map((b) => ({ lat: b.lat, lng: b.lng })),
+              ...routePaths.flatMap((r) => r.path),
               ...(highlightStop ? [{ lat: highlightStop.lat, lng: highlightStop.lng }] : []),
-              ...(busPoints.length === 0 && !highlightStop ? routePaths.flatMap((r) => r.path) : []),
             ]
           } />
         </Map>

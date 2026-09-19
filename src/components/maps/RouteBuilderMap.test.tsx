@@ -169,6 +169,20 @@ describe('FleetLiveMap route geometry', () => {
     expect(screen.queryByText(/BUS-02/)).not.toBeInTheDocument()
   })
 
+  it('selecting a route in the filter draws its stops even with no bus explicitly selected', async () => {
+    const user = userEvent.setup()
+    const twoRouteFleet = [
+      { busId: 'b1', busNo: 'BUS-01', routeId: 'r1', routeName: 'Route A', lat: 12.1, lng: 77.1, speedKmh: 20 },
+    ]
+    render(<FleetLiveMap fleet={twoRouteFleet} routeStopsByRouteId={routeStopsByRouteId} />)
+    expect(screen.queryByText('Stop 1')).not.toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText(/route/i), 'r1')
+
+    expect(screen.getByText('Stop 1')).toBeInTheDocument()
+    expect(screen.getByText('Stop 2')).toBeInTheDocument()
+  })
+
   it('filters buses by status', async () => {
     const user = userEvent.setup()
     const twoStatusFleet = [
