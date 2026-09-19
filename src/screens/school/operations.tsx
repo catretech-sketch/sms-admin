@@ -1559,7 +1559,7 @@ function BusFleet({ fleet: fleetProp, loading: loadingProp, error: errorProp }: 
           </span>
         : <span className="muted3">—</span>,
     },
-    { key: 'nextStopName', label: 'Next stop', render: (r) => r.nextStopName ? <Badge tone="neutral" icon="pin">{r.nextStopName}</Badge> : <span className="muted3">—</span> },
+    { key: 'nextStopName', label: 'Next stop', render: (r) => r.nextStopName ? <Badge tone="neutral" icon="pin">{r.nextStopName}{r.etaMinutes != null ? ` · ${r.etaMinutes} min` : ''}</Badge> : <span className="muted3">—</span> },
     { key: 'lastPingAt', label: 'Updated', align: 'right', sortValue: (r) => r.lastPingAt ?? '', render: (r) => <span className="t-xs muted3">{relTime(r.lastPingAt)}</span> },
     { key: 'status', label: 'Live status', sortValue: (r) => r.status, render: (r) => <Badge tone={BUS_META[r.status].tone} soft dot>{BUS_META[r.status].label}</Badge> },
     {
@@ -2562,7 +2562,7 @@ function GpsScreenBody() {
             {viewBus.nextStopName && (
               <div className="row jc-between ai-center">
                 <span className="t-sm muted">Next stop</span>
-                <span className="t-sm fw6">{viewBus.nextStopName}</span>
+                <span className="t-sm fw6">{viewBus.nextStopName}{viewBus.etaMinutes != null ? ` · ETA ${viewBus.etaMinutes} min` : ''}</span>
               </div>
             )}
             <div className="row jc-between ai-center">

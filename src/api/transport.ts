@@ -21,6 +21,7 @@ export interface FleetBus {
   speedKmh?: number | null
   heading?: number | null
   nextStopName?: string | null
+  etaMinutes?: number | null
   lastPingAt?: string | null
   conductorStaffId?: string | null
   capacity?: number | null
