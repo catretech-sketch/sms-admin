@@ -2442,13 +2442,10 @@ function GpsScreenBody() {
   const mapped = mappedQ.data ?? []
   const [highlightStudentId, setHighlightStudentId] = useState('')
   const studentsByStopId = useMemo(() => groupStudentsByStop(mapped), [mapped])
-  const studentCountByStopId = useMemo(
-    () => Object.fromEntries(Object.entries(studentsByStopId).map(([stopId, students]) => [stopId, students.length])),
-    [studentsByStopId],
-  )
   const [viewStopId, setViewStopId] = useState<string | null>(null)
   const viewStopStudents = viewStopId ? studentsByStopId[viewStopId] ?? [] : []
   const viewStopName = viewStopStudents[0]?.stopName ?? ''
+  const viewStopTitle = viewStopName ? `${viewStopName} · ${viewStopStudents.length} students` : 'Stop students'
 
   const onRoute = fleet.filter((b) => b.status === 'on_route').length
   const delayed = fleet.filter((b) => b.status === 'delayed').length
@@ -2513,12 +2510,11 @@ function GpsScreenBody() {
             routeStopsByRouteId={routeStopsByRouteId}
             highlightStop={highlightStop}
             routeGeometryByRouteId={routeGeometryByRouteId}
-            studentCountByStopId={studentCountByStopId}
             onStopClick={setViewStopId}
           />
         </Card>
       </div>
-      <Modal open={!!viewStopId} onClose={() => setViewStopId(null)} size="sm" icon="users" title={viewStopName || 'Stop students'}>
+      <Modal open={!!viewStopId} onClose={() => setViewStopId(null)} size="sm" icon="users" title={viewStopTitle}>
         {viewStopStudents.length === 0 ? (
           <Empty title="No students mapped" body="No students are currently mapped to this stop." />
         ) : (

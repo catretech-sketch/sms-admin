@@ -134,32 +134,17 @@ describe('FleetLiveMap route geometry', () => {
     expect(screen.getByText('Stop 2')).toBeInTheDocument()
   })
 
-  it('shows the student count badge on a stop with mapped students', async () => {
+  it('does not show a student count badge on stop markers (count is revealed via click instead)', async () => {
     const user = userEvent.setup()
     render(
       <FleetLiveMap
         fleet={fleet}
         routeStopsByRouteId={routeStopsByRouteId}
-        studentCountByStopId={{ s1: 12 }}
       />,
     )
     await user.click(screen.getByRole('button', { name: /all buses/i }))
     await user.click(screen.getByRole('checkbox', { name: /bus-01/i }))
-    expect(screen.getByText('12')).toBeInTheDocument()
-  })
-
-  it('does not show a badge for a stop with no mapped students', async () => {
-    const user = userEvent.setup()
-    render(
-      <FleetLiveMap
-        fleet={fleet}
-        routeStopsByRouteId={routeStopsByRouteId}
-        studentCountByStopId={{ s1: 12 }}
-      />,
-    )
-    await user.click(screen.getByRole('button', { name: /all buses/i }))
-    await user.click(screen.getByRole('checkbox', { name: /bus-01/i }))
-    expect(screen.queryByText('0')).not.toBeInTheDocument()
+    expect(screen.queryByText('12')).not.toBeInTheDocument()
   })
 
   it('calls onStopClick with the stop id when a stop marker is clicked', async () => {
@@ -169,7 +154,6 @@ describe('FleetLiveMap route geometry', () => {
       <FleetLiveMap
         fleet={fleet}
         routeStopsByRouteId={routeStopsByRouteId}
-        studentCountByStopId={{ s1: 12 }}
         onStopClick={onStopClick}
       />,
     )

@@ -127,13 +127,11 @@ function RouteUnavailableBadge() {
 }
 
 function StopPin({
-  sequence, name, selected, studentCount, onClick,
+  sequence, name, selected, onClick,
 }: {
   sequence: number
   name: string
   selected?: boolean
-  /** Number of students mapped to this stop — shown as a badge when > 0. */
-  studentCount?: number
   onClick?: () => void
 }) {
   return (
@@ -161,17 +159,6 @@ function StopPin({
       >
         {name}
       </span>
-      {!!studentCount && (
-        <span
-          style={{
-            position: 'absolute', top: -8, left: 18, minWidth: 16, height: 16, padding: '0 4px',
-            borderRadius: 999, background: '#dc2626', color: '#fff', fontSize: 10, fontWeight: 800,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #fff',
-          }}
-        >
-          {studentCount}
-        </span>
-      )}
     </div>
   )
 }
@@ -325,7 +312,6 @@ export function FleetLiveMap({
   height = 360,
   highlightStop,
   routeGeometryByRouteId = {},
-  studentCountByStopId = {},
   onStopClick,
 }: {
   fleet: { busId: string; busNo: string; routeId?: string | null; lat?: number | null; lng?: number | null; speedKmh?: number | null; status?: string }[]
@@ -336,9 +322,7 @@ export function FleetLiveMap({
   /** Road-following geometry per route, keyed by routeId. Additive — falls back to no line
    *  (not a straight-line placeholder) when a selected route's geometry isn't available yet. */
   routeGeometryByRouteId?: Record<string, RouteGeometry>
-  /** Number of students mapped to each stop, keyed by stop id — shown as a badge on the marker. */
-  studentCountByStopId?: Record<string, number>
-  /** Called with a stop's id when its marker is clicked. */
+  /** Called with a stop's id when its marker is clicked — parent decides what to reveal (e.g. a student list modal). */
   onStopClick?: (stopId: string) => void
 }) {
   const [selectedBusIds, setSelectedBusIds] = useState<string[]>([])
@@ -477,7 +461,6 @@ export function FleetLiveMap({
               <StopPin
                 sequence={s.sequence}
                 name={s.name}
-                studentCount={studentCountByStopId[s.id]}
                 onClick={onStopClick ? () => onStopClick(s.id) : undefined}
               />
             </AdvancedMarker>
