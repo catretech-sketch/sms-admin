@@ -181,6 +181,21 @@ describe('FleetLiveMap route geometry', () => {
     expect(screen.queryByText(/BUS-02/)).not.toBeInTheDocument()
   })
 
+  it('shows a bus that matches both a route filter and a status filter at once', async () => {
+    const user = userEvent.setup()
+    const twoRouteFleet = [
+      { busId: 'b1', busNo: 'BUS-01', routeId: 'r1', routeName: 'Route A', lat: 12.1, lng: 77.1, speedKmh: 0, status: 'delayed' },
+      { busId: 'b2', busNo: 'BUS-02', routeId: 'r2', routeName: 'Route B', lat: 13.1, lng: 78.1, speedKmh: 10, status: 'on_route' },
+    ]
+    render(<FleetLiveMap fleet={twoRouteFleet} routeStopsByRouteId={routeStopsByRouteId} />)
+
+    await user.selectOptions(screen.getByLabelText(/route/i), 'r1')
+    await user.selectOptions(screen.getByLabelText(/status/i), 'delayed')
+
+    expect(screen.getByText(/BUS-01/)).toBeInTheDocument()
+    expect(screen.queryByText(/BUS-02/)).not.toBeInTheDocument()
+  })
+
   it('draws no route line before touching the route filter or picking a bus (default declutter)', () => {
     render(<FleetLiveMap fleet={fleet} routeStopsByRouteId={routeStopsByRouteId} />)
     expect(screen.queryByText('Stop 1')).not.toBeInTheDocument()
@@ -260,6 +275,17 @@ describe('FleetLiveMap route geometry', () => {
     await user.click(screen.getByRole('checkbox', { name: /bus-01/i }))
     await user.click(screen.getByText('BUS-01 · 20 km/h'))
     expect(onBusClick).toHaveBeenCalledWith('b1')
+  })
+
+  it('draws the route line for a bus matched by the status filter alone', async () => {
+    const user = userEvent.setup()
+    const delayedFleet = [{ busId: 'b1', busNo: 'BUS-01', routeId: 'r1', lat: 12.1, lng: 77.1, speedKmh: 0, status: 'delayed' }]
+    render(<FleetLiveMap fleet={delayedFleet} routeStopsByRouteId={routeStopsByRouteId} />)
+    expect(screen.queryByText('Stop 1')).not.toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText(/status/i), 'delayed')
+
+    expect(screen.getByText('Stop 1')).toBeInTheDocument()
   })
 
   it('does not show a student count badge on stop markers (count is revealed via click instead)', async () => {

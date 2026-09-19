@@ -467,7 +467,11 @@ export function FleetLiveMap({
   // No selection and no route filter -> no routes at all (just live locations). Selecting
   // buses, or picking a route in the filter, draws only the route(s) currently in view.
   const visibleRouteIds = new Set(visibleFleet.map((b) => b.routeId).filter((id): id is string => !!id))
-  const routePaths = (selectedBusIds.length === 0 && !routeFilter && !routeFilterTouched) ? [] : Object.entries(routeStopsByRouteId)
+  // Routes stay hidden only in the fully untouched default (no selection, no filter of any
+  // kind) — any deliberate narrowing (a bus pick, a route/status pick, or a search term)
+  // means the user wants to see what's in view, lines included.
+  const anyFilterActive = selectedBusIds.length > 0 || !!routeFilter || routeFilterTouched || !!statusFilter || !!search
+  const routePaths = !anyFilterActive ? [] : Object.entries(routeStopsByRouteId)
     .filter(([routeId]) => visibleRouteIds.has(routeId))
     .map(([routeId, stops]) => {
       const placed = placedStops(stops)
