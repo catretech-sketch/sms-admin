@@ -583,6 +583,7 @@ function BusEditModal({
       return
     }
     const capNum = capacity.trim() ? Number(capacity) : null
+    if (capNum != null && (!Number.isInteger(capNum) || capNum < 1)) { toast.danger('Capacity must be a whole number of 1 or more'); return }
     try {
       if (isEdit) {
         await update.mutateAsync({
