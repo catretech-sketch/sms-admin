@@ -184,7 +184,7 @@ export function useFleetWebSocket(enabled = true): { connected: boolean } {
     backoffRef.current = 1000
 
     const hubBase = config.apiBaseUrl.replace(/\/v1\/?$/, '')
-    const hubUrl = `${hubBase}/hubs/transport`
+    const hubUrl = `${hubBase}/hubs/transport-fleet`
 
     function scheduleReconnect() {
       if (!activeRef.current) return
