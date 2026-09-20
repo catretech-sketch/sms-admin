@@ -326,6 +326,8 @@ export interface StaffDocs {
 
 export interface Staff {
   id: string
+  /** Linked login Users.Id — required to assign a task to this person. Absent until they accept invite. */
+  userId?: string
   /** Human staff id, e.g. scc-STF-0001 (Guid stays in id for API). */
   code?: string
   name: string

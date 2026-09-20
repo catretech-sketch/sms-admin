@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { APIProvider, Map, AdvancedMarker, useMap, useMapsLibrary, MapControl, ControlPosition } from '@vis.gl/react-google-maps'
-import type { RouteStop } from '@/api/transport'
+import type { RouteStop, RouteGeometry } from '@/api/transport'
 import { Checkbox } from '@/components/ui'
+import { decodePolyline } from '@/lib/decodePolyline'
+import { useInterpolatedPosition } from '@/lib/useInterpolatedPosition'
 
 const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
 const MAP_ID = import.meta.env.VITE_GOOGLE_MAPS_MAP_ID
@@ -97,9 +99,47 @@ function RoutePolyline({ path, strokeColor = '#2563eb' }: { path: LatLng[]; stro
   return null
 }
 
-function StopPin({ sequence, name, selected }: { sequence: number; name: string; selected?: boolean }) {
+/** Renders the decoded road-following route geometry (from the Routes API) as a polyline.
+ *  Draws nothing when geometry is undefined or its status is 'unavailable' — no silent
+ *  fallback to the straight-line RoutePolyline above. */
+function RoadRoutePolyline({ geometry, strokeColor = '#2563eb' }: { geometry: RouteGeometry | undefined; strokeColor?: string }) {
+  const map = useMap()
+  const encoded = geometry?.status === 'available' ? geometry.geometry : null
+  useEffect(() => {
+    if (!map || !encoded || typeof google === 'undefined') return
+    const path = decodePolyline(encoded)
+    if (path.length < 2) return
+    const line = new google.maps.Polyline({ path, strokeColor, strokeOpacity: 0.85, strokeWeight: 4, geodesic: false, map })
+    return () => line.setMap(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, encoded, strokeColor])
+  return null
+}
+
+function RouteUnavailableBadge() {
   return (
-    <div style={{ transform: 'translate(-50%, -50%)', display: 'flex', alignItems: 'center', gap: 6 }}>
+    <div
+      className="t-xs muted3"
+      style={{ position: 'absolute', top: 10, right: 12, background: 'var(--surface)', padding: '4px 8px', borderRadius: 8, border: '1px solid var(--border)' }}
+    >
+      Route unavailable
+    </div>
+  )
+}
+
+function StopPin({
+  sequence, name, selected, onClick,
+}: {
+  sequence: number
+  name: string
+  selected?: boolean
+  onClick?: () => void
+}) {
+  return (
+    <div
+      style={{ transform: 'translate(-50%, -50%)', display: 'flex', alignItems: 'center', gap: 6, position: 'relative', cursor: onClick ? 'pointer' : undefined }}
+      onClick={onClick}
+    >
       <span
         style={{
           width: 28, height: 28, borderRadius: 999, flex: '0 0 auto',
@@ -124,12 +164,81 @@ function StopPin({ sequence, name, selected }: { sequence: number; name: string;
   )
 }
 
+/** Bus icon + label, rotated to the vehicle's GPS heading when available (points up/0deg otherwise). */
+function BusMarker({
+  busId, label, heading, color, onClick,
+}: {
+  busId: string
+  label: string
+  heading?: number | null
+  color: string
+  onClick?: () => void
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: onClick ? 'pointer' : undefined }} onClick={onClick}>
+      <div style={{ position: 'relative', width: 26, height: 26 }}>
+        <svg
+          data-testid={`bus-icon-${busId}`}
+          width={26} height={26} viewBox="0 0 24 24" fill="#FFC107"
+          style={{ transform: `rotate(${heading ?? 0}deg)`, filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.4))' }}
+        >
+          {/* School-bus body, viewed from above — front (windshield stripe) points toward heading 0deg (up). */}
+          <rect x={5} y={2} width={14} height={20} rx={4} stroke="#1f2937" strokeWidth={1} />
+          <rect x={7} y={4.5} width={10} height={2.5} rx={0.5} fill="#1f2937" />
+          <rect x={7} y={8.5} width={10} height={9} rx={1} fill="#fff9db" stroke="#1f2937" strokeWidth={0.6} />
+          <line x1={12} y1={8.5} x2={12} y2={17.5} stroke="#1f2937" strokeWidth={0.6} />
+          <rect x={3.5} y={6} width={1.6} height={3} rx={0.6} fill="#1f2937" />
+          <rect x={18.9} y={6} width={1.6} height={3} rx={0.6} fill="#1f2937" />
+          <rect x={3.5} y={15} width={1.6} height={3} rx={0.6} fill="#1f2937" />
+          <rect x={18.9} y={15} width={1.6} height={3} rx={0.6} fill="#1f2937" />
+        </svg>
+        <span
+          data-testid={`bus-status-dot-${busId}`}
+          style={{
+            position: 'absolute', bottom: -1, right: -1, width: 9, height: 9, borderRadius: 999,
+            background: color, border: '1.5px solid #fff', boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
+          }}
+        />
+      </div>
+      <span style={{
+        background: color, color: '#fff', padding: '4px 8px', borderRadius: 8, fontSize: 11, fontWeight: 700,
+        boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
+      }}>
+        {label}
+      </span>
+    </div>
+  )
+}
+
+/** Wraps a fleet bus marker with position interpolation — smooths movement between GPS pings
+ *  instead of the marker jump-cutting to each new ping. */
+function LiveBusMarker({
+  busId, lat, lng, heading, color, label, onClick,
+}: {
+  busId: string
+  lat: number
+  lng: number
+  heading?: number | null
+  color: string
+  label: string
+  onClick?: () => void
+}) {
+  const position = useInterpolatedPosition(lat, lng)
+  if (!position) return null
+  return (
+    <AdvancedMarker position={position}>
+      <BusMarker busId={busId} label={label} heading={heading} color={color} onClick={onClick} />
+    </AdvancedMarker>
+  )
+}
+
 export type RouteBuilderMapProps = {
   stops: RouteStop[]
   height?: number
   selectedStopId?: string | null
   onMapClick?: (lat: number, lng: number) => void
   onStopClick?: (stopId: string) => void
+  geometry?: RouteGeometry
 }
 
 /**
@@ -137,7 +246,7 @@ export type RouteBuilderMapProps = {
  * numbered markers. Parent handles persistence.
  */
 export function RouteBuilderMap({
-  stops, height = 420, selectedStopId, onMapClick, onStopClick,
+  stops, height = 420, selectedStopId, onMapClick, onStopClick, geometry,
 }: RouteBuilderMapProps) {
   const placed = useMemo(() => placedStops(stops), [stops])
   const path = useMemo(
@@ -175,7 +284,7 @@ export function RouteBuilderMap({
             onMapClick(e.detail.latLng.lat, e.detail.latLng.lng)
           }}
         >
-          {path.length >= 2 && <RoutePolyline path={path} />}
+          {geometry?.status === 'available' && <RoadRoutePolyline geometry={geometry} />}
           {placed.map((s) => (
             <AdvancedMarker
               key={s.id}
@@ -194,6 +303,7 @@ export function RouteBuilderMap({
           Click map to add a stop
         </div>
       )}
+      {geometry?.status === 'unavailable' && <RouteUnavailableBadge />}
     </div>
   )
 }
@@ -269,15 +379,55 @@ export function FleetLiveMap({
   fleet,
   routeStopsByRouteId,
   height = 360,
+  highlightStop,
+  routeGeometryByRouteId = {},
+  onStopClick,
+  onBusClick,
 }: {
-  fleet: { busId: string; busNo: string; routeId?: string | null; lat?: number | null; lng?: number | null; speedKmh?: number | null; status?: string }[]
+  fleet: { busId: string; busNo: string; routeId?: string | null; routeName?: string | null; driver?: string | null; lat?: number | null; lng?: number | null; speedKmh?: number | null; heading?: number | null; status?: string }[]
   routeStopsByRouteId: Record<string, RouteStop[]>
   height?: number
+  /** Optional ★ child/student stop overlay (from API assignment — not local SoT). */
+  highlightStop?: { name: string; lat: number; lng: number } | null
+  /** Road-following geometry per route, keyed by routeId. Additive — falls back to no line
+   *  (not a straight-line placeholder) when a selected route's geometry isn't available yet. */
+  routeGeometryByRouteId?: Record<string, RouteGeometry>
+  /** Called with a stop's id when its marker is clicked — parent decides what to reveal (e.g. a student list modal). */
+  onStopClick?: (stopId: string) => void
+  /** Called with a bus's id when its marker is clicked — parent decides what to reveal (e.g. a bus info panel). */
+  onBusClick?: (busId: string) => void
 }) {
   const [selectedBusIds, setSelectedBusIds] = useState<string[]>([])
   const toggleBus = (id: string) => setSelectedBusIds((prev) => (
     prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
   ))
+
+  const [routeFilter, setRouteFilter] = useState('')
+  // Distinguishes "the filter is untouched" (still hide routes by default, to avoid
+  // clutter on a large fleet) from "the user explicitly picked All routes" (show them).
+  const [routeFilterTouched, setRouteFilterTouched] = useState(false)
+  const [statusFilter, setStatusFilter] = useState('')
+  const [search, setSearch] = useState('')
+
+  const routeOptions: [string, string][] = []
+  const seenRouteIds = new Set<string>()
+  for (const b of fleet) {
+    if (!b.routeId || seenRouteIds.has(b.routeId)) continue
+    seenRouteIds.add(b.routeId)
+    routeOptions.push([b.routeId, b.routeName ?? b.routeId])
+  }
+  const statusOptions = Array.from(new Set(fleet.map((b) => b.status).filter((s): s is string => !!s)))
+
+  const filteredFleet = fleet.filter((b) => {
+    if (routeFilter && b.routeId !== routeFilter) return false
+    if (statusFilter && b.status !== statusFilter) return false
+    if (search) {
+      const q = search.toLowerCase()
+      const haystack = `${b.busNo} ${b.routeName ?? ''} ${b.driver ?? ''}`.toLowerCase()
+      if (!haystack.includes(q)) return false
+    }
+    return true
+  })
 
   const [pickerOpen, setPickerOpen] = useState(false)
   const pickerRef = useRef<HTMLDivElement>(null)
@@ -297,8 +447,8 @@ export function FleetLiveMap({
       : `${selectedBusIds.length} buses selected`
 
   const visibleFleet = selectedBusIds.length
-    ? fleet.filter((b) => selectedBusIds.includes(b.busId))
-    : fleet
+    ? filteredFleet.filter((b) => selectedBusIds.includes(b.busId))
+    : filteredFleet
 
   const busPoints = visibleFleet
     .filter((b) => b.lat != null && b.lng != null)
@@ -308,13 +458,20 @@ export function FleetLiveMap({
       lat: b.lat as number,
       lng: b.lng as number,
       speedKmh: b.speedKmh ?? null,
-      moving: b.status === 'on_route' || b.status === 'delayed',
+      heading: b.heading ?? null,
+      // Always surface speed when GPS reports it — not only when legacy status is "moving".
+      moving: b.speedKmh != null && b.speedKmh > 3,
+      showSpeed: b.speedKmh != null,
     }))
 
-  // No selection -> no routes at all (just live locations). Selecting buses draws only
-  // the route(s) assigned to those specific buses.
+  // No selection and no route filter -> no routes at all (just live locations). Selecting
+  // buses, or picking a route in the filter, draws only the route(s) currently in view.
   const visibleRouteIds = new Set(visibleFleet.map((b) => b.routeId).filter((id): id is string => !!id))
-  const routePaths = selectedBusIds.length === 0 ? [] : Object.entries(routeStopsByRouteId)
+  // Routes stay hidden only in the fully untouched default (no selection, no filter of any
+  // kind) — any deliberate narrowing (a bus pick, a route/status pick, or a search term)
+  // means the user wants to see what's in view, lines included.
+  const anyFilterActive = selectedBusIds.length > 0 || !!routeFilter || routeFilterTouched || !!statusFilter || !!search
+  const routePaths = !anyFilterActive ? [] : Object.entries(routeStopsByRouteId)
     .filter(([routeId]) => visibleRouteIds.has(routeId))
     .map(([routeId, stops]) => {
       const placed = placedStops(stops)
@@ -344,7 +501,7 @@ export function FleetLiveMap({
             borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.15)', padding: 8,
           }}
         >
-          {fleet.map((b) => (
+          {filteredFleet.map((b) => (
             <div key={b.busId} style={{ padding: '5px 4px' }}>
               <Checkbox
                 checked={selectedBusIds.includes(b.busId)}
@@ -385,7 +542,45 @@ export function FleetLiveMap({
 
   return (
     <div>
-      {busSelector}
+      <div className="row gap8 ai-center" style={{ marginBottom: 8, flexWrap: 'wrap' }}>
+        {busSelector}
+        {routeOptions.length > 0 && (
+          <label style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            Route
+            <select
+              aria-label="Route"
+              value={routeFilter}
+              onChange={(e) => { setRouteFilter(e.target.value); setRouteFilterTouched(true) }}
+              style={{ padding: '5px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 12 }}
+            >
+              <option value="">All routes</option>
+              {routeOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
+          </label>
+        )}
+        {statusOptions.length > 0 && (
+          <label style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            Status
+            <select
+              aria-label="Status"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              style={{ padding: '5px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 12 }}
+            >
+              <option value="">All statuses</option>
+              {statusOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>
+        )}
+        {fleet.length > 0 && (
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search bus, route or driver…"
+            style={{ padding: '5px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 12, minWidth: 180 }}
+          />
+        )}
+      </div>
       <div style={{ position: 'relative', height, borderRadius: 14, overflow: 'hidden', border: '1px solid var(--border)' }}>
       <APIProvider apiKey={API_KEY}>
         <Map
@@ -395,25 +590,51 @@ export function FleetLiveMap({
           gestureHandling="greedy"
           style={{ width: '100%', height: '100%' }}
         >
-          {routePaths.map((r, i) => (
-            <RoutePolyline key={r.routeId} path={r.path} strokeColor={ROUTE_COLORS[i % ROUTE_COLORS.length]} />
-          ))}
+          {routePaths.map((r, i) => {
+            const geom = routeGeometryByRouteId[r.routeId]
+            return geom?.status === 'available'
+              ? <RoadRoutePolyline key={r.routeId} geometry={geom} strokeColor={ROUTE_COLORS[i % ROUTE_COLORS.length]} />
+              : geom?.status === 'unavailable'
+                ? null // handled by the badge below, not a per-route line
+                : null // still loading — no line yet, not a straight-line placeholder
+          })}
           {routePaths.flatMap((r) => r.stops.map((s) => (
             <AdvancedMarker key={s.id} position={{ lat: s.lat as number, lng: s.lng as number }}>
-              <StopPin sequence={s.sequence} name={s.name} />
+              <StopPin
+                sequence={s.sequence}
+                name={s.name}
+                onClick={onStopClick ? () => onStopClick(s.id) : undefined}
+              />
             </AdvancedMarker>
           )))}
           {busPoints.map((b) => (
-            <AdvancedMarker key={b.id} position={{ lat: b.lat, lng: b.lng }}>
-              <span style={{ background: '#16a34a', color: '#fff', padding: '4px 8px', borderRadius: 8, fontSize: 11, fontWeight: 700, boxShadow: '0 2px 6px rgba(0,0,0,0.25)' }}>
-                {b.busNo}{b.moving && b.speedKmh != null ? ` · ${Math.round(b.speedKmh)}` : ''}
+            <LiveBusMarker
+              key={b.id}
+              busId={b.id}
+              lat={b.lat}
+              lng={b.lng}
+              heading={b.heading}
+              color={b.moving ? '#16a34a' : '#64748b'}
+              label={`${b.busNo}${b.showSpeed ? ` · ${Math.round(b.speedKmh!)} km/h` : ''}`}
+              onClick={onBusClick ? () => onBusClick(b.id) : undefined}
+            />
+          ))}
+          {highlightStop ? (
+            <AdvancedMarker position={{ lat: highlightStop.lat, lng: highlightStop.lng }}>
+              <span style={{
+                background: '#2563eb', color: '#fff', padding: '4px 8px', borderRadius: 8,
+                fontSize: 11, fontWeight: 700, boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
+              }}>
+                ★ {highlightStop.name}
               </span>
             </AdvancedMarker>
-          ))}
+          ) : null}
           <FitStops stops={
-            busPoints.length > 0
-              ? busPoints.map((b) => ({ lat: b.lat, lng: b.lng }))
-              : routePaths.flatMap((r) => r.path)
+            [
+              ...busPoints.map((b) => ({ lat: b.lat, lng: b.lng })),
+              ...routePaths.flatMap((r) => r.path),
+              ...(highlightStop ? [{ lat: highlightStop.lat, lng: highlightStop.lng }] : []),
+            ]
           } />
         </Map>
       </APIProvider>
@@ -422,6 +643,9 @@ export function FleetLiveMap({
           <div className="fw6">Waiting for live GPS</div>
           <div className="t-sm muted">Assign routes to buses and start a trip to see polylines and positions.</div>
         </div>
+      )}
+      {selectedBusIds.length > 0 && routePaths.some((r) => routeGeometryByRouteId[r.routeId]?.status === 'unavailable') && (
+        <RouteUnavailableBadge />
       )}
       </div>
     </div>

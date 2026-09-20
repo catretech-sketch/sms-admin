@@ -19,7 +19,9 @@ export interface FleetBus {
   lat?: number | null
   lng?: number | null
   speedKmh?: number | null
+  heading?: number | null
   nextStopName?: string | null
+  etaMinutes?: number | null
   lastPingAt?: string | null
   conductorStaffId?: string | null
   capacity?: number | null
@@ -397,6 +399,24 @@ export async function setStudentTransport(studentId: string, input: SetStudentTr
   return asObj<StudentTransportStatus>(
     await request<Record<string, unknown>>(`/students/${studentId}/transport`, { method: 'PUT', body }),
   )
+}
+
+export type RouteGeometryStatus = 'available' | 'unavailable'
+
+export interface RouteGeometry {
+  routeId: string
+  status: RouteGeometryStatus
+  format: string | null
+  geometry: string | null
+  distanceMeters: number | null
+  durationSeconds: number | null
+  stopSequenceHash: string
+  generatedAt: string | null
+}
+
+export async function getRouteGeometry(routeId: string): Promise<RouteGeometry> {
+  if (!routeId) throw new Error('Route ID required')
+  return asObj<RouteGeometry>(await request<Record<string, unknown>>(`/transport/routes/${routeId}/geometry`))
 }
 
 export async function listTransportStudents(filter: TransportStudentsFilter = {}): Promise<TransportMappedStudent[]> {

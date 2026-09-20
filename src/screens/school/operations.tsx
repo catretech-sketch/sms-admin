@@ -23,11 +23,8 @@ import { FleetLiveMap } from '@/components/maps/RouteBuilderMap'
 import { useComplaints, useCreateComplaint, useUpdateComplaint } from '@/api/hooks/useComplaints'
 import { useIssues, useIssue, useUpdateIssue } from '@/api/hooks/useIssues'
 import type { Issue, IssueCategory, IssuePriority, IssueStatus } from '@/api/issues'
-import { useTasks, useCreateTask } from '@/api/hooks/useTasks'
-import {
-  STAFF_DUTY_ROLES, STAFF_DUTY_ROLE_LABELS,
-  type StaffTask, type TaskPriority, type TaskStatus, type StaffDutyRole, type CreateTaskInput,
-} from '@/api/tasks'
+import { useTasks } from '@/api/hooks/useTasks'
+import { TaskManagementTab } from './taskManagement'
 import { useThreads, useThreadMessages, useCreateThread, useSendMessage } from '@/api/hooks/useThreads'
 import { useMergedClassNames } from '@/api/hooks/useClasses'
 import { useAnnouncements, useCreateAnnouncement } from '@/api/hooks/useAnnouncements'
@@ -39,6 +36,7 @@ import { fromApiRole, leadershipRoleLabel } from '@/api/users'
 import { collectAudienceContacts } from '@/lib/collectAudienceEmails'
 import { gradeRank } from '@/lib/defaultClasses'
 import { shouldPublishGps } from '@/lib/gpsThrottle'
+import { groupStudentsByStop } from '@/lib/transportStops'
 import {
   useTransportSummary, useTransportFleet,
   useBusStudents, useAssignStudentToBus, useUnassignStudentFromBus, useTransportStudentsList,
@@ -49,7 +47,7 @@ import {
   useCreateSportsTeam, useCreateSportsEvent, useCreateSportsMedal,
   useSendBusNotification,
   useStartBusTrip, usePingBusTrip, useEndBusTrip,
-  useFleetWebSocket, useFleetRouteStops,
+  useFleetWebSocket, useFleetRouteStops, useFleetRouteGeometries,
 } from '@/api/hooks/useOperations'
 import type { FleetBus, TransportRoute, RouteStop, SportsMedal } from '@/api/operations'
 import type { Bus, Complaint } from '@/types'
@@ -78,22 +76,6 @@ const ISSUE_STATUS_FILTER_OPTIONS: { value: IssueStatus | 'all'; label: string }
   { value: 'resolved', label: 'Resolved' },
   { value: 'closed', label: 'Closed' },
 ]
-const TASK_PRIORITY_TONE: Record<TaskPriority, BadgeTone> = { urgent: 'danger', normal: 'neutral' }
-const TASK_STATUS_TONE: Record<TaskStatus, BadgeTone> = { pending: 'info', in_progress: 'warning', completed: 'success' }
-const TASK_STATUS_LABEL: Record<TaskStatus, string> = { pending: 'Pending', in_progress: 'In progress', completed: 'Completed' }
-const TASK_STATUS_FILTER_OPTIONS: { value: TaskStatus | 'all'; label: string }[] = [
-  { value: 'all', label: 'All statuses' },
-  { value: 'pending', label: 'Pending' },
-  { value: 'in_progress', label: 'In progress' },
-  { value: 'completed', label: 'Completed' },
-]
-const TASK_ASSIGNEE_ROLE_OPTIONS = STAFF_DUTY_ROLES.map((r) => ({ value: r, label: STAFF_DUTY_ROLE_LABELS[r] }))
-
-/** "All Drivers", "All Cleaners" — the assignee column label for a role broadcast. */
-function taskAssigneeLabel(t: StaffTask): string {
-  if (t.assignedToRoleKey) return `All ${STAFF_DUTY_ROLE_LABELS[t.assignedToRoleKey]}s`
-  return t.assignedToUserName ?? (t.assignedToUserId ? t.assignedToUserId.slice(0, 8) : '—')
-}
 
 /* Strip the data-URL prefix so we can POST raw base64 for email attachments. */
 function fileToBase64(file: File): Promise<{ base64: string; contentType: string }> {
@@ -165,20 +147,20 @@ function CommunicationScreen() {
   const openTasks = (tasksData ?? []).filter((t) => t.status !== 'completed').length
   return (
     <div>
-      <PageHead title="Communication" sub="Messenger · Complaints · Issues · Staff tasks · Announcements" />
+      <PageHead title="Communication" sub="Messenger · Complaints · Issues · Task Management · Announcements" />
       <div style={{ marginBottom: 14 }}>
         <Tabs value={tab} onChange={setTab} tabs={[
           { value: 'messenger', label: 'Messenger', icon: 'message', count: unread },
           { value: 'complaints', label: 'Complaints', icon: 'inbox', count: openComplaints },
           { value: 'issues', label: 'Issues', icon: 'alert', count: openIssues },
-          { value: 'tasks', label: 'Staff tasks', icon: 'check', count: openTasks },
+          { value: 'tasks', label: 'Task Management', icon: 'check', count: openTasks },
           { value: 'announcements', label: 'Announcements', icon: 'bell' },
         ]} />
       </div>
       {tab === 'messenger' && <MessengerTab />}
       {tab === 'complaints' && <ComplaintsTab />}
       {tab === 'issues' && <IssuesTab />}
-      {tab === 'tasks' && <StaffTasksTab />}
+      {tab === 'tasks' && <TaskManagementTab />}
       {tab === 'announcements' && <AnnouncementsTab />}
     </div>
   )
@@ -927,184 +909,6 @@ function IssueDetailDrawer({ issue, onClose, canManage }: { issue: Issue | null;
   )
 }
 
-/* ---------- Staff tasks: admin-assigned checklist items for duty-role staff ---------- */
-function StaffTasksTab() {
-  const app = useApp()
-  const [statusFilter, setStatusFilter] = useState<TaskStatus | 'all'>('all')
-  const [q, setQ] = useState('')
-  const [openNew, setOpenNew] = useState(false)
-  const tasksQ = useTasks()
-  const rows: StaffTask[] = tasksQ.data ?? []
-  const canManage = can(app.role, 'staffTasks', 'E')
-
-  const filtered = useMemo(() => {
-    const term = q.trim().toLowerCase()
-    return rows.filter((r) => {
-      if (statusFilter !== 'all' && r.status !== statusFilter) return false
-      if (!term) return true
-      return r.title.toLowerCase().includes(term) || (r.detail ?? '').toLowerCase().includes(term)
-    })
-  }, [rows, q, statusFilter])
-
-  const cols: Column<StaffTask>[] = [
-    {
-      key: 'title', label: 'Task', sortValue: (r) => r.title,
-      render: (r) => (
-        <div>
-          <div className="fw6 t-md">{r.title}</div>
-          {r.detail && <div className="t-xs muted3">{r.detail}</div>}
-        </div>
-      ),
-    },
-    { key: 'category', label: 'Category', sortValue: (r) => r.category ?? '', render: (r) => r.category ? <Badge tone="neutral" soft>{r.category}</Badge> : <span className="t-sm muted">—</span> },
-    { key: 'priority', label: 'Priority', sortValue: (r) => r.priority, render: (r) => <Badge tone={TASK_PRIORITY_TONE[r.priority]} soft dot>{r.priority[0].toUpperCase() + r.priority.slice(1)}</Badge> },
-    { key: 'assignee', label: 'Assigned to', sortValue: (r) => taskAssigneeLabel(r), render: (r) => <span className="t-md">{taskAssigneeLabel(r)}</span> },
-    { key: 'due', label: 'Due', align: 'right', sortValue: (r) => r.dueDate ?? '', render: (r) => <span className="t-sm muted">{r.dueDate ? new Date(r.dueDate).toLocaleDateString() : '—'}</span> },
-    { key: 'status', label: 'Status', sortValue: (r) => r.status, render: (r) => <Badge tone={TASK_STATUS_TONE[r.status]} soft>{TASK_STATUS_LABEL[r.status]}</Badge> },
-  ]
-
-  return (
-    <div className="col gap16">
-      <div className="row ai-center jc-between gap12 wrap">
-        <div className="row ai-center gap12 wrap">
-          <Search value={q} onChange={setQ} placeholder="Search title or detail…" />
-          <Select
-            options={TASK_STATUS_FILTER_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as TaskStatus | 'all')}
-          />
-        </div>
-        {canManage && <Btn variant="primary" icon="plus" onClick={() => setOpenNew(true)}>New task</Btn>}
-      </div>
-      <Card pad={false}>
-        <div className="row ai-center jc-between" style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
-          <CardHead title="Staff tasks" sub="Checklist items assigned to duty staff — driver, conductor, cleaner, gardener, guard, peon" icon="check" />
-        </div>
-        {tasksQ.isError ? (
-          <div style={{ padding: 16 }}>
-            <div className="t-sm muted" style={{ marginBottom: 8 }}>Could not load tasks.</div>
-            <Btn variant="secondary" size="sm" onClick={() => tasksQ.refetch()}>Retry</Btn>
-          </div>
-        ) : tasksQ.isLoading ? (
-          <div style={{ padding: 16 }}><Spinner size={24} /></div>
-        ) : filtered.length === 0 ? (
-          <Empty icon="check" title="No staff tasks yet" body="Create a task and assign it to a staff member or a whole duty role." />
-        ) : (
-          <DataTable
-            columns={cols} rows={filtered} pageSize={8} rowKey={(r) => r.id}
-            initialSort={{ key: 'due', dir: 'desc' }}
-          />
-        )}
-      </Card>
-      <NewTaskModal open={openNew} onClose={() => setOpenNew(false)} />
-    </div>
-  )
-}
-
-function NewTaskModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const toast = useToast()
-  const createTaskMut = useCreateTask()
-  const staffQ = useStaff()
-  const staffRoster = staffQ.data ?? []
-
-  const [title, setTitle] = useState('')
-  const [detail, setDetail] = useState('')
-  const [category, setCategory] = useState('')
-  const [priority, setPriority] = useState<TaskPriority>('normal')
-  const [dueDate, setDueDate] = useState('')
-  const [assignMode, setAssignMode] = useState<'user' | 'role'>('role')
-  const [assignedUserId, setAssignedUserId] = useState('')
-  const [assignedRole, setAssignedRole] = useState<StaffDutyRole>('driver')
-
-  useEffect(() => {
-    if (!open) return
-    setTitle(''); setDetail(''); setCategory(''); setPriority('normal'); setDueDate('')
-    setAssignMode('role'); setAssignedUserId(''); setAssignedRole('driver')
-  }, [open])
-
-  const submit = () => {
-    if (!title.trim()) { toast.danger('Title required', 'Enter a short task title.'); return }
-    if (assignMode === 'user' && !assignedUserId) { toast.danger('Assignee required', 'Choose a staff member to assign the task to.'); return }
-    const input: CreateTaskInput = {
-      title,
-      priority,
-      ...(detail.trim() ? { detail } : {}),
-      ...(category.trim() ? { category } : {}),
-      ...(dueDate ? { dueDate } : {}),
-      ...(assignMode === 'user' ? { assignedToUserId: assignedUserId } : { assignedToRoleKey: assignedRole }),
-    }
-    createTaskMut.mutate(input, {
-      onSuccess: () => { toast.success('Task created', `${title} was assigned.`); onClose() },
-      onError: (err) => toast.danger('Could not create task', err instanceof Error ? err.message : 'Please try again.'),
-    })
-  }
-
-  return (
-    <Modal
-      open={open} onClose={onClose} icon="check"
-      title="New staff task" sub="Assign a checklist item to a staff member or a whole duty role"
-      footer={
-        <div className="row gap8 jc-end">
-          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn variant="primary" icon="check" disabled={createTaskMut.isPending} onClick={submit}>
-            {createTaskMut.isPending ? 'Creating…' : 'Create task'}
-          </Btn>
-        </div>
-      }
-    >
-      <div className="col gap16">
-        <Field label="Title" required>
-          <Input icon="check" value={title} placeholder="e.g. Sweep courtyard before assembly" onChange={(e) => setTitle(e.target.value)} />
-        </Field>
-        <Field label="Detail">
-          <Textarea value={detail} rows={3} placeholder="Optional instructions…" onChange={(e) => setDetail(e.target.value)} />
-        </Field>
-        <div className="sm-grid-2 gap16">
-          <Field label="Category" hint="Free text, e.g. cleaning, garden, security">
-            <Input value={category} placeholder="e.g. cleaning" onChange={(e) => setCategory(e.target.value)} />
-          </Field>
-          <Field label="Priority">
-            <Select
-              options={[{ value: 'normal', label: 'Normal' }, { value: 'urgent', label: 'Urgent' }]}
-              value={priority}
-              onChange={(e) => setPriority(e.target.value as TaskPriority)}
-            />
-          </Field>
-        </div>
-        <Field label="Due date">
-          <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
-        </Field>
-        <Field label="Assign to">
-          <Select
-            options={[{ value: 'role', label: 'A whole duty role (broadcast)' }, { value: 'user', label: 'A specific staff member' }]}
-            value={assignMode}
-            onChange={(e) => setAssignMode(e.target.value as 'user' | 'role')}
-          />
-        </Field>
-        {assignMode === 'role' ? (
-          <Field label="Duty role">
-            <Select
-              options={TASK_ASSIGNEE_ROLE_OPTIONS}
-              value={assignedRole}
-              onChange={(e) => setAssignedRole(e.target.value as StaffDutyRole)}
-            />
-          </Field>
-        ) : (
-          <Field label="Staff member" hint={staffQ.isLoading ? 'Loading staff…' : undefined}>
-            <Select
-              options={[
-                { value: '', label: 'Select a staff member…' },
-                ...staffRoster.map((s) => ({ value: s.id, label: `${s.name} — ${s.role}` })),
-              ]}
-              value={assignedUserId}
-              onChange={(e) => setAssignedUserId(e.target.value)}
-            />
-          </Field>
-        )}
-      </div>
-    </Modal>
-  )
-}
 
 function NewComplaintModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const toast = useToast()
@@ -1748,11 +1552,14 @@ function BusFleet({ fleet: fleetProp, loading: loadingProp, error: errorProp }: 
     },
     {
       key: 'speedKmh', label: 'Speed', align: 'right',
-      render: (r) => (r.status === 'on_route' || r.status === 'delayed') && r.speedKmh != null
-        ? <span className="row ai-center gap5 jc-end"><span className="sm-dot-live" style={{ width: 6, height: 6 }} /><span className="tnum fw6">{Math.round(r.speedKmh)} km/h</span></span>
+      render: (r) => r.speedKmh != null
+        ? <span className="row ai-center gap5 jc-end">
+            {(r.status === 'on_route' || r.status === 'delayed') ? <span className="sm-dot-live" style={{ width: 6, height: 6 }} /> : null}
+            <span className="tnum fw6">{Math.round(r.speedKmh)} km/h</span>
+          </span>
         : <span className="muted3">—</span>,
     },
-    { key: 'nextStopName', label: 'Next stop', render: (r) => r.nextStopName ? <Badge tone="neutral" icon="pin">{r.nextStopName}</Badge> : <span className="muted3">—</span> },
+    { key: 'nextStopName', label: 'Next stop', render: (r) => r.nextStopName ? <Badge tone="neutral" icon="pin">{r.nextStopName}{r.etaMinutes != null ? ` · ${r.etaMinutes} min` : ''}</Badge> : <span className="muted3">—</span> },
     { key: 'lastPingAt', label: 'Updated', align: 'right', sortValue: (r) => r.lastPingAt ?? '', render: (r) => <span className="t-xs muted3">{relTime(r.lastPingAt)}</span> },
     { key: 'status', label: 'Live status', sortValue: (r) => r.status, render: (r) => <Badge tone={BUS_META[r.status].tone} soft dot>{BUS_META[r.status].label}</Badge> },
     {
@@ -2630,11 +2437,30 @@ function GpsScreenBody() {
   const fleetQ = useTransportFleet(true, wsConnected ? 30_000 : 5_000)
   const fleet = fleetQ.data ?? []
   const routeStopsByRouteId = useFleetRouteStops(fleet)
+  const routeGeometryByRouteId = useFleetRouteGeometries(fleet)
+  const mappedQ = useTransportStudentsList({ status: 'mapped' })
+  const mapped = mappedQ.data ?? []
+  const [highlightStudentId, setHighlightStudentId] = useState('')
+  const studentsByStopId = useMemo(() => groupStudentsByStop(mapped), [mapped])
+  const [viewStopId, setViewStopId] = useState<string | null>(null)
+  const viewStopStudents = viewStopId ? studentsByStopId[viewStopId] ?? [] : []
+  const viewStopName = viewStopStudents[0]?.stopName ?? ''
+  const viewStopTitle = viewStopName ? `${viewStopName} · ${viewStopStudents.length} students` : 'Stop students'
+  const [viewBusId, setViewBusId] = useState<string | null>(null)
+  const viewBus = viewBusId ? fleet.find((b) => b.busId === viewBusId) ?? null : null
 
   const onRoute = fleet.filter((b) => b.status === 'on_route').length
   const delayed = fleet.filter((b) => b.status === 'delayed').length
   const riding = fleet.reduce((n, b) => n + b.studentsRiding, 0)
   const located = fleet.filter((b) => b.lat != null && b.lng != null)
+
+  const highlightStop = (() => {
+    const stu = mapped.find((s) => s.studentId === highlightStudentId)
+    if (!stu?.routeId || !stu.stopId) return null
+    const stop = (routeStopsByRouteId[stu.routeId] ?? []).find((s) => s.id === stu.stopId)
+    if (!stop || stop.lat == null || stop.lng == null) return null
+    return { name: stu.stopName || stop.name || 'Student stop', lat: stop.lat, lng: stop.lng }
+  })()
 
   return (
     <div>
@@ -2661,11 +2487,97 @@ function GpsScreenBody() {
         <DriverModePanel fleet={fleet} />
 
         <Card>
-          <CardHead title="Live map" sub="Real-time vehicle positions" icon="pin"
-            action={located.length > 0 ? <Badge tone="success" soft dot>{located.length} live</Badge> : <Badge tone="neutral" soft>No live GPS</Badge>} />
-          <FleetLiveMap fleet={fleet} routeStopsByRouteId={routeStopsByRouteId} />
+          <CardHead title="Live map" sub="Real-time vehicle positions · optional student stop ★"
+            action={
+              <div className="row gap8 ai-center">
+                <Select
+                  value={highlightStudentId}
+                  onChange={(e) => setHighlightStudentId(e.target.value)}
+                  options={[
+                    { value: '', label: 'No student stop' },
+                    ...mapped
+                      .filter((s) => s.stopId && s.routeId)
+                      .map((s) => ({
+                        value: s.studentId,
+                        label: `${s.studentName}${s.busNo ? ` · ${s.busNo}` : ''}`,
+                      })),
+                  ]}
+                  style={{ minWidth: 200 }}
+                />
+                {located.length > 0 ? <Badge tone="success" soft dot>{located.length} live</Badge> : <Badge tone="neutral" soft>No live GPS</Badge>}
+              </div>
+            } />
+          <FleetLiveMap
+            fleet={fleet}
+            routeStopsByRouteId={routeStopsByRouteId}
+            highlightStop={highlightStop}
+            routeGeometryByRouteId={routeGeometryByRouteId}
+            onStopClick={setViewStopId}
+            onBusClick={setViewBusId}
+          />
         </Card>
       </div>
+      <Modal open={!!viewStopId} onClose={() => setViewStopId(null)} size="sm" icon="users" title={viewStopTitle}>
+        {viewStopStudents.length === 0 ? (
+          <Empty title="No students mapped" body="No students are currently mapped to this stop." />
+        ) : (
+          <div className="col gap8">
+            {viewStopStudents.map((s) => (
+              <div key={s.studentId} className="row jc-between ai-center" style={{ padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                <div>
+                  <div className="fw6 t-sm">{s.studentName}</div>
+                  <div className="t-xs muted3">{s.admissionNo}{s.grade ? ` · Grade ${s.grade}${s.section ? `-${s.section}` : ''}` : ''}</div>
+                </div>
+                {s.busNo && <Badge tone="neutral" soft>{s.busNo}</Badge>}
+              </div>
+            ))}
+          </div>
+        )}
+      </Modal>
+      <Modal open={!!viewBusId} onClose={() => setViewBusId(null)} size="sm" icon="bus" title={viewBus?.busNo ?? 'Bus'}>
+        {viewBus && (
+          <div className="col gap8">
+            <div className="row jc-between ai-center">
+              <span className="t-sm muted">Status</span>
+              <Badge tone={BUS_META[viewBus.status].tone} soft dot>{BUS_META[viewBus.status].label}</Badge>
+            </div>
+            {viewBus.routeName && (
+              <div className="row jc-between ai-center">
+                <span className="t-sm muted">Route</span>
+                <span className="t-sm fw6">{viewBus.routeName}</span>
+              </div>
+            )}
+            {viewBus.driver && (
+              <div className="row jc-between ai-center">
+                <span className="t-sm muted">Driver</span>
+                <span className="t-sm fw6">{viewBus.driver}{viewBus.driverPhone ? ` · ${viewBus.driverPhone}` : ''}</span>
+              </div>
+            )}
+            {viewBus.speedKmh != null && (
+              <div className="row jc-between ai-center">
+                <span className="t-sm muted">Speed</span>
+                <span className="t-sm fw6">{Math.round(viewBus.speedKmh)} km/h</span>
+              </div>
+            )}
+            {viewBus.nextStopName && (
+              <div className="row jc-between ai-center">
+                <span className="t-sm muted">Next stop</span>
+                <span className="t-sm fw6">{viewBus.nextStopName}{viewBus.etaMinutes != null ? ` · ETA ${viewBus.etaMinutes} min` : ''}</span>
+              </div>
+            )}
+            <div className="row jc-between ai-center">
+              <span className="t-sm muted">Students riding</span>
+              <span className="t-sm fw6">{viewBus.studentsRiding}{viewBus.capacity != null ? ` / ${viewBus.capacity}` : ''}</span>
+            </div>
+            {viewBus.lastPingAt && (
+              <div className="row jc-between ai-center">
+                <span className="t-sm muted">Last update</span>
+                <span className="t-sm fw6">{new Date(viewBus.lastPingAt).toLocaleTimeString()}</span>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }

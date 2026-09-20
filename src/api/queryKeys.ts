@@ -100,7 +100,10 @@ export const queryKeys = {
   },
   tasks: {
     all: ['tasks'] as const,
-    list: () => ['tasks', 'list', tenantScope()] as const,
+    list: (filter: object = {}) => ['tasks', 'list', tenantScope(), filter] as const,
+    pages: (filter: object = {}) => ['tasks', 'pages', tenantScope(), filter] as const,
+    people: () => ['tasks', 'people', tenantScope()] as const,
+    roles: () => ['tasks', 'roles', tenantScope()] as const,
   },
   threads: {
     all: ['threads'] as const,
@@ -147,6 +150,7 @@ export const queryKeys = {
     busStudents: (busId: string) => ['operations', 'transport', 'busStudents', busId] as const,
     travelingTeachers: (busId: string) => ['operations', 'transport', 'travelingTeachers', busId] as const,
     transportRouteStops: (routeId: string) => ['operations', 'transport', 'routeStops', routeId] as const,
+    transportRouteGeometry: (routeId: string) => ['operations', 'transport', 'routeGeometry', routeId] as const,
     studentTransport: (studentId: string) => ['operations', 'transport', 'studentTransport', studentId] as const,
     transportStudentsList: (filters: import('./transport').TransportStudentsFilter = {}) =>
       ['operations', 'transport', 'studentsList', filters] as const,

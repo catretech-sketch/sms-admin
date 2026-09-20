@@ -35,6 +35,7 @@ import {
   type CreateHostelBlockInput, type CreateHostelRoomInput, type CreateHostelResidentInput,
   type CreateSportsTeamInput, type CreateSportsEventInput, type CreateSportsMedalInput,
 } from '../operations'
+import { getRouteGeometry, type RouteGeometry } from '../transport'
 
 function useOperationsTier(): boolean {
   const app = useApp()
@@ -183,7 +184,7 @@ export function useFleetWebSocket(enabled = true): { connected: boolean } {
     backoffRef.current = 1000
 
     const hubBase = config.apiBaseUrl.replace(/\/v1\/?$/, '')
-    const hubUrl = `${hubBase}/hubs/transport`
+    const hubUrl = `${hubBase}/hubs/transport-fleet`
 
     function scheduleReconnect() {
       if (!activeRef.current) return
@@ -358,6 +359,61 @@ export function useFleetRouteStops(fleet: FleetBus[]): Record<string, RouteStop[
   return useRouteStopsByRoute(routeIds).stopsByRoute
 }
 
+/** A failed/errored geometry lookup is surfaced as an explicit "unavailable" shaped object
+ *  (never left as `undefined`) so callers can't confuse "query failed" with "still loading" —
+ *  see spec §7: network failure must render the same "Route unavailable" state as an
+ *  explicit `status: 'unavailable'` response. */
+function unavailableGeometry(routeId: string): RouteGeometry {
+  return {
+    routeId, status: 'unavailable', format: null, geometry: null,
+    distanceMeters: null, durationSeconds: null, stopSequenceHash: '', generatedAt: null,
+  }
+}
+
+export function useRouteGeometry(routeId: string | null | undefined) {
+  const ops = useOperationsTier()
+  const query = useQuery({
+    queryKey: queryKeys.operations.transportRouteGeometry(routeId ?? ''),
+    queryFn: () => getRouteGeometry(routeId as string),
+    enabled: ops && !!routeId,
+    staleTime: 60_000,
+  })
+  // Pending (not yet resolved) stays `undefined` — no badge, no line, matches loading behavior.
+  // A resolved error is mapped to an explicit unavailable object so it can never be mistaken
+  // for "still loading" at the render layer.
+  const data = query.data ?? (query.isError && routeId ? unavailableGeometry(routeId) : undefined)
+  return { ...query, data }
+}
+
+/** Route geometry for every distinct routeId present in the live fleet board. */
+export function useFleetRouteGeometries(fleet: FleetBus[]): Record<string, RouteGeometry> {
+  const ops = useOperationsTier()
+  const routeIds = useMemo(
+    () => [...new Set(fleet.map((b) => b.routeId).filter(Boolean))] as string[],
+    [fleet],
+  )
+  const queries = useQueries({
+    queries: routeIds.map((id) => ({
+      queryKey: queryKeys.operations.transportRouteGeometry(id),
+      queryFn: () => getRouteGeometry(id),
+      enabled: ops && !!id,
+      staleTime: 60_000,
+    })),
+  })
+  const snapshots = queries.map((q) => ({ data: q.data, isError: q.isError }))
+  return useMemo(() => {
+    const out: Record<string, RouteGeometry> = {}
+    routeIds.forEach((id, i) => {
+      const snap = snapshots[i]
+      if (snap.data) out[id] = snap.data
+      else if (snap.isError) out[id] = unavailableGeometry(id)
+      // else: still pending — leave absent, matching existing "loading = no line, no badge" behavior.
+    })
+    return out
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeIds, snapshots])
+}
+
 export function useCreateBus(): UseMutationResult<FleetBus, Error, CreateBusInput> {
   const qc = useQueryClient()
   return useMutation({
@@ -440,6 +496,7 @@ export function useCreateRouteStop(): UseMutationResult<RouteStop, Error, { rout
     mutationFn: ({ routeId, input }) => createRouteStop(routeId, input),
     onSuccess: (_r, { routeId }) => {
       void qc.invalidateQueries({ queryKey: queryKeys.operations.transportRouteStops(routeId) })
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportRouteGeometry(routeId) })
       void qc.invalidateQueries({ queryKey: queryKeys.operations.transportRoutes })
       void qc.invalidateQueries({ queryKey: queryKeys.operations.transportSummary })
     },
@@ -452,6 +509,7 @@ export function useUpdateRouteStop(): UseMutationResult<RouteStop, Error, { rout
     mutationFn: ({ routeId, stopId, input }) => updateRouteStop(routeId, stopId, input),
     onSuccess: (_r, { routeId }) => {
       void qc.invalidateQueries({ queryKey: queryKeys.operations.transportRouteStops(routeId) })
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportRouteGeometry(routeId) })
     },
   })
 }
@@ -462,6 +520,7 @@ export function useDeleteRouteStop(): UseMutationResult<void, Error, { routeId: 
     mutationFn: ({ routeId, stopId }) => deleteRouteStop(routeId, stopId),
     onSuccess: (_r, { routeId }) => {
       void qc.invalidateQueries({ queryKey: queryKeys.operations.transportRouteStops(routeId) })
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportRouteGeometry(routeId) })
       void qc.invalidateQueries({ queryKey: queryKeys.operations.transportRoutes })
       void qc.invalidateQueries({ queryKey: queryKeys.operations.transportSummary })
     },
@@ -474,6 +533,7 @@ export function useReorderRouteStops(): UseMutationResult<void, Error, { routeId
     mutationFn: ({ routeId, stopIds }) => reorderRouteStops(routeId, stopIds),
     onSuccess: (_r, { routeId }) => {
       void qc.invalidateQueries({ queryKey: queryKeys.operations.transportRouteStops(routeId) })
+      void qc.invalidateQueries({ queryKey: queryKeys.operations.transportRouteGeometry(routeId) })
     },
   })
 }

@@ -13,6 +13,7 @@ import {
   useRouteStops, useCreateRouteStop, useUpdateRouteStop, useDeleteRouteStop, useReorderRouteStops,
   useTransportBuses, useCreateBus, useUpdateBus, useAssignBusTeacher, useUnassignBusTeacher,
   useDeleteRoute, useTravelingTeachers, useAddTravelingTeacher, useRemoveTravelingTeacher,
+  useRouteGeometry,
 } from '@/api/hooks/useOperations'
 import { useStaff } from '@/api/hooks/useStaff'
 import { useTeachers } from '@/api/hooks/useTeachers'
@@ -236,6 +237,7 @@ function RouteBuilder({ route, onBack }: { route: TransportRoute; onBack: () => 
   const updateStop = useUpdateRouteStop()
   const deleteStop = useDeleteRouteStop()
   const reorder = useReorderRouteStops()
+  const geometryQ = useRouteGeometry(route.id)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
 
@@ -371,6 +373,7 @@ function RouteBuilder({ route, onBack }: { route: TransportRoute; onBack: () => 
         <RouteBuilderMap
           stops={stops}
           height={420}
+          geometry={geometryQ.data}
           selectedStopId={selectedId}
           onMapClick={canEdit ? handleMapClick : undefined}
           onStopClick={(stopId) => {
