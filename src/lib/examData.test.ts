@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { markKey, attKey, marksProgress, endTime, findClashes } from './examData'
+import { markKey, attKey, marksProgress, endTime, findClashes, examWindowDays, examWindowFit } from './examData'
 import type { PaperSlot } from '@/types'
 import { reportFor, classRank } from './format'
 import { students } from '@/data/mockDb'
@@ -20,6 +20,51 @@ describe('examData', () => {
     expect(marksProgress(marks, 'EX1', 6)).toBe(Math.round((100 * 2) / 6))
     expect(marksProgress(marks, 'EX1', 2)).toBe(100)
     expect(marksProgress({}, 'EX1', 6)).toBe(0)
+  })
+})
+
+describe('examWindowDays', () => {
+  it('counts inclusive calendar days', () => {
+    expect(examWindowDays('2026-08-12', '2026-08-12')).toBe(1)
+    expect(examWindowDays('2026-08-12', '2026-08-19')).toBe(8)
+  })
+  it('spans a month boundary', () => {
+    expect(examWindowDays('2026-08-30', '2026-09-02')).toBe(4)
+  })
+  it('is 0 when To precedes From or dates are invalid', () => {
+    expect(examWindowDays('2026-08-19', '2026-08-12')).toBe(0)
+    expect(examWindowDays('', '2026-08-12')).toBe(0)
+    expect(examWindowDays('not-a-date', 'x')).toBe(0)
+  })
+})
+
+describe('examWindowFit', () => {
+  it('flags a 1-day window as too short for 8 subjects (1/day)', () => {
+    const fit = examWindowFit('2026-08-12', '2026-08-12', 8, 1)
+    expect(fit.fits).toBe(false)
+    expect(fit.windowDays).toBe(1)
+    expect(fit.needDays).toBe(8)
+    expect(fit.suggestedTo).toBe('2026-08-19')
+  })
+  it('fits when the window is long enough', () => {
+    const fit = examWindowFit('2026-08-12', '2026-08-19', 8, 1)
+    expect(fit.fits).toBe(true)
+    expect(fit.needDays).toBe(8)
+  })
+  it('halves the days needed at 2 exams/day', () => {
+    const fit = examWindowFit('2026-08-12', '2026-08-12', 8, 2)
+    expect(fit.needDays).toBe(4)
+    expect(fit.suggestedTo).toBe('2026-08-15')
+    expect(fit.fits).toBe(false)
+  })
+  it('2 subjects fit a 1-day window at 2/day', () => {
+    expect(examWindowFit('2026-08-12', '2026-08-12', 2, 2).fits).toBe(true)
+  })
+  it('always fits (and suggests nothing) when there are no subjects', () => {
+    const fit = examWindowFit('2026-08-12', '2026-08-12', 0, 1)
+    expect(fit.fits).toBe(true)
+    expect(fit.needDays).toBe(0)
+    expect(fit.suggestedTo).toBe('')
   })
 })
 

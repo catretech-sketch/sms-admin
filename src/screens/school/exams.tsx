@@ -23,7 +23,7 @@ import { useClassSubjectsMap } from '@/api/hooks/useClassSubjects'
 import { notifyExamAudience } from '@/lib/examNotify'
 import { groupExamTimetable, printExamTimetable, autoBuildExamSlots, buildExamPeriodGrid, examSubjectStyle, orderSubjectsBy, shuffleWithSeed, clampExamMaxMarks } from '@/lib/examTimetable'
 import { can } from '@/lib/gating'
-import { endTime, findClashes, markKey } from '@/lib/examData'
+import { endTime, findClashes, markKey, examWindowFit } from '@/lib/examData'
 import { countRealExamPapers, isDummyExamPaper, isOrphanExamPaper, isPaperInExamScope } from '@/lib/examPaperScope'
 import { reportFor, classRank, gradeFor } from '@/lib/format'
 import {
@@ -490,6 +490,13 @@ function ExamAutoModal({
   const sameSubjectCount = minSubjects === maxSubjects
   const papersPerClassLabel = sameSubjectCount ? `${maxSubjects}` : `${minSubjects}–${maxSubjects}`
   const lastDate = preview.length ? preview.reduce((mx, s) => (s.date > mx ? s.date : mx), preview[0].date) : ''
+  /* Live: do the generated papers overrun the exam window? Shown as a banner + reused by the Generate guard. */
+  const windowOverflow = useMemo(() => {
+    if (!windowTo || !preview.length || lastDate <= windowTo) return null
+    return oneDay
+      ? `This is a 1-day test on ${fmtDate(windowFrom!)}. Too many subjects for ${sessionMode === 'two' ? '2' : '1'} exam(s)/day — reduce subjects or extend the To date.`
+      : `Papers run until ${fmtDate(lastDate)} but the exam ends ${fmtDate(windowTo)}. Use 2 exams/day, reduce subjects, or extend To.`
+  }, [windowTo, windowFrom, preview.length, lastDate, oneDay, sessionMode])
   const maxMarksSubjects = subjectPickRequired
     ? [...subjectPick]
     : unionSubjects
@@ -562,13 +569,8 @@ function ExamAutoModal({
       }
     }
     if (!preview.length) { toast.danger('Nothing generated', 'Check the start date and sessions.'); return }
-    if (windowTo && lastDate > windowTo) {
-      toast.danger(
-        'Outside exam window',
-        oneDay
-          ? `This is a 1-day test on ${fmtDate(windowFrom!)}. Too many subjects for ${sessionMode === 'two' ? '2' : '1'} exam(s)/day — reduce subjects or extend the To date.`
-          : `Papers run until ${fmtDate(lastDate)} but the exam ends ${fmtDate(windowTo)}. Use 2 exams/day, reduce subjects, or extend To.`,
-      )
+    if (windowOverflow) {
+      toast.danger('Outside exam window', windowOverflow)
       return
     }
     /* Replace deletes the current timetable — confirm in 2 steps before generating. */
@@ -766,6 +768,16 @@ function ExamAutoModal({
             ]}
           />
         </Field>
+
+        {windowOverflow && (
+          <div
+            className="row ai-start gap8"
+            style={{ padding: '10px 12px', borderRadius: 10, background: 'var(--warning-soft, #fffbeb)', border: '1px solid var(--warning, #f59e0b)' }}
+          >
+            <Icon name="alert" size={15} />
+            <span className="t-sm">{windowOverflow}</span>
+          </div>
+        )}
 
         {classes.length > 0 && selected.size > 0 && unionSubjects.length === 0 && (
           <Field label="Subjects">
@@ -1074,6 +1086,20 @@ function CreateExamModal({
 
   const oneDay = from === to
 
+  /* Largest mapped-subject count among selected sections — that class needs the most exam days. */
+  const classSubjectsMap = useClassSubjectsMap()
+  const maxSubjects = useMemo(() => {
+    let mx = 0
+    for (const c of classOpts) {
+      if (!selectedClassIds.has(c.value)) continue
+      const subs = classSubjectsMap[c.value]?.length ? classSubjectsMap[c.value] : (classSubjectsMap[c.label] ?? [])
+      if (subs.length > mx) mx = subs.length
+    }
+    return mx
+  }, [classOpts, selectedClassIds, classSubjectsMap])
+  /* Approximate (assumes 1 exam/day, weekends not skipped) — the exact check lives in Build datesheet. */
+  const windowFit = useMemo(() => examWindowFit(from, to, maxSubjects, 1), [from, to, maxSubjects])
+
   const changeFrom = (v: string) => {
     setFrom(v)
     setTo((prevTo) => (prevTo === from || !prevTo || prevTo < v ? v : prevTo))
@@ -1314,6 +1340,21 @@ function CreateExamModal({
             <Input type="date" value={to} min={from} onChange={(e) => changeTo(e.target.value)} />
           </Field>
         </div>
+        {maxSubjects > 0 && !windowFit.fits && (
+          <div
+            className="row ai-start gap8"
+            style={{ padding: '10px 12px', borderRadius: 10, background: 'var(--warning-soft, #fffbeb)', border: '1px solid var(--warning, #f59e0b)' }}
+          >
+            <Icon name="alert" size={15} />
+            <span className="t-sm">
+              Selected classes have up to <span className="fw6">{maxSubjects} subjects</span>.{' '}
+              {oneDay ? fmtDate(from) : `${fmtDate(from)} – ${fmtDate(to)}`} ({windowFit.windowDays} day{windowFit.windowDays === 1 ? '' : 's'})
+              {' '}fits ~{windowFit.windowDays} exam{windowFit.windowDays === 1 ? '' : 's'} at 1/day — extend{' '}
+              <span className="fw6">To</span> to about <span className="fw6">{fmtDate(windowFit.suggestedTo)}</span>,
+              or plan 2 exams/day when building the datesheet.
+            </span>
+          </div>
+        )}
         {oneDay && (
           <div className="row ai-center gap8" style={{ padding: '8px 12px', borderRadius: 10, background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
             <Badge tone="brand" soft>1-day test</Badge>

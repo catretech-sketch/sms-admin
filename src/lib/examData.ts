@@ -22,6 +22,58 @@ export function marksProgress(
   return Math.min(100, Math.round((100 * subs.size) / Math.max(1, paperCount)))
 }
 
+function isoToDate(iso: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null
+  const d = new Date(iso + 'T00:00:00')
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+function addDaysIso(iso: string, n: number): string {
+  const d = isoToDate(iso)
+  if (!d) return ''
+  d.setDate(d.getDate() + n)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/** Inclusive calendar-day count in [from, to]; 0 if invalid or To precedes From. */
+export function examWindowDays(from: string, to: string): number {
+  const a = isoToDate(from)
+  const b = isoToDate(to)
+  if (!a || !b) return 0
+  const diff = Math.round((b.getTime() - a.getTime()) / 86_400_000)
+  return diff >= 0 ? diff + 1 : 0
+}
+
+export interface ExamWindowFit {
+  /** True when the subjects fit the window at `perDay` exams/day (always true for 0 subjects). */
+  fits: boolean
+  /** Inclusive calendar days available in the window. */
+  windowDays: number
+  /** Exam days required = ceil(subjectCount / perDay). */
+  needDays: number
+  /** The earliest To date that would just fit (calendar days, weekends ignored); '' when not computable. */
+  suggestedTo: string
+}
+
+/**
+ * Does a date window hold `subjectCount` exams at `perDay` per day?
+ * Approximate: counts calendar days (does not skip weekends). Pure + deterministic.
+ */
+export function examWindowFit(
+  from: string,
+  to: string,
+  subjectCount: number,
+  perDay = 1,
+): ExamWindowFit {
+  const per = Math.max(1, Math.floor(perDay))
+  const count = Math.max(0, Math.floor(subjectCount))
+  const windowDays = examWindowDays(from, to)
+  const needDays = count > 0 ? Math.ceil(count / per) : 0
+  const fits = count === 0 || (windowDays > 0 && windowDays >= needDays)
+  const suggestedTo = needDays > 0 ? addDaysIso(from, needDays - 1) : ''
+  return { fits, windowDays, needDays, suggestedTo }
+}
+
 function toMinutes(t: string): number | null {
   const m = /^(\d{1,2}):(\d{2})$/.exec(t.trim())
   if (!m) return null
