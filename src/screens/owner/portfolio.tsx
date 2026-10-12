@@ -969,6 +969,8 @@ function CreateSchoolWizard() {
       }
       const fullAddress = formatSchoolAddress(data)
       const locationLabel = [data.city.trim(), data.state.trim()].filter(Boolean).join(', ')
+      // Only per-student plans bill on the entered strength; flat plans ignore it.
+      const studentsCount = selectedPlan?.pricing === 'per_student' ? data.strength : undefined
       const client = app.isPlatform
         ? await createMut.mutateAsync({
           name: data.name.trim(),
@@ -982,6 +984,7 @@ function CreateSchoolWizard() {
           admin_phone: data.adminPhone.trim() || undefined,
           plan_id: planId,
           trial_days: 0,
+          students_count: studentsCount,
         })
         : await createMut.mutateAsync({
           name: data.name.trim(),
@@ -994,6 +997,7 @@ function CreateSchoolWizard() {
           admin_name: data.adminName.trim() || app.user?.name,
           admin_phone: data.adminPhone.trim() || undefined,
           trial_days: 0,
+          students_count: studentsCount,
         })
 
       const planLabel = selectedPlan?.name ?? TIER_META[data.tier].label

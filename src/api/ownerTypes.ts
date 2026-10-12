@@ -39,6 +39,8 @@ export interface CreateClientBody {
   logo_url?: string
   image_url?: string
   csm?: string | null
+  /** Exact student count for per-student plans; drives billing. Omit for flat plans. */
+  students_count?: number
 }
 
 export interface CreateMySchoolBody {
@@ -52,6 +54,8 @@ export interface CreateMySchoolBody {
   logo_url?: string
   image_url?: string
   trial_days?: number
+  /** Expected student strength for per-student plans; drives billing. Omit for flat plans. */
+  students_count?: number
 }
 
 export interface Plan {
